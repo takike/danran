@@ -145,6 +145,7 @@ test.describe('PWA Capabilities and Regression Tests', () => {
       return (
         /^\/api(?:\/|$)/.test(pathname) ||
         pathname.includes('/danran/') ||
+        pathname.includes('/danran_local/') ||
         pathname.includes('wrangler.json') ||
         pathname.includes('/.vite/')
       );
@@ -230,6 +231,7 @@ test.describe('PWA Capabilities and Regression Tests', () => {
       return (
         /^\/api(?:\/|$)/.test(pathname) ||
         pathname.includes('/danran/') ||
+        pathname.includes('/danran_local/') ||
         pathname.includes('wrangler.json') ||
         pathname.includes('/.vite/')
       );
