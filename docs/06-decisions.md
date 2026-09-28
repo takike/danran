@@ -25,6 +25,8 @@
 | 2026-09-28 | D1 初期スキーマは認証・認可の起点となる `users` テーブルのみでスキャフォールドし、他テーブルは所有タスクで漸進追加。マイグレーションは drizzle-kit 生成のみとし手書きを禁止。wrangler ルートはセンチネル UUID の `danran-local` をデフォルトとし、リモートマイグレーションは `--env`、Vite の環境選択は `CLOUDFLARE_ENV`（staging/production）で明示指定する | 責務の局所化、マイグレーション再現性の担保、各ツールの環境解決仕様への適合 |
 | 2026-09-29 | デプロイ対象設定の選択：`@cloudflare/vite-plugin` の環境解決仕様に基づき、ビルド時（`CLOUDFLARE_ENV=staging/production vite build`）に設定をフラット化し、デプロイは生成成果物 `dist/danran_local/wrangler.json` を明示指定（`wrangler deploy --config ...`）する。デプロイ直前に `scripts/verify-deployment-config.mjs` で Worker 名・D1・R2 を機械的ガード | Vite プラグインのビルド時環境解決仕様に適合させ、ルートのローカルセンチネル設定の誤デプロイを防止するため |
 | 2026-09-29 | CI/CD 構成とデプロイゲーティング：再利用可能ワークフロー `verify.yml` で型・静的解析・テスト・マイグレーションドリフト・E2E を統合。PR 検証には Secret を渡さず、main への push で staging へ自動デプロイ。production デプロイは main ブランチ限定の手動 `workflow_dispatch` とし、すべてのデプロイで D1 マイグレーション先行適用を徹底 | 外部 PR からの Secret 保護、スキーマ不整合の防止、および安全な運用サイクルの確立のため |
+| 2026-09-29 | Tailwind CSS v4（`@tailwindcss/vite`）とデザイントークン連携、および開発用部品一覧（`/dev/ui`）の条件付き除外：`tokens.css` を単一の真実源として `@theme inline` で Tailwind ユーティリティにマッピングし、将来のテーマ・ポップ配色差し替えを CSS 変数更新のみで完結させる。`/dev/ui` は `import.meta.env.DEV` の動的インポート境界とし、本番ビルドから完全にコードを除外する | トークン変更による配色動的変更の担保、および本番バンドルの軽量化・開発専用ページの混入防止のため |
+
 
 
 ## 未決事項
