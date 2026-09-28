@@ -6,7 +6,7 @@
 
 - 1セッションで扱うのは1フェーズまで。着手前に、このファイルと [AGENTS.md](../AGENTS.md)、関係する docs を読む。
 - ブランチ名：`phase{N}/{task-id}-{短い説明}`（例：`phase1/1-3-google-client`）
-- PR の説明には「対応タスク ID」「やったこと」「AC の確認結果」「スクリーンショット（UI の場合、390px 幅）」「docs の更新箇所」「未解決の点」を書く。
+- PR の説明には「対応タスク ID」「やったこと」「AC の確認結果」「スクリーンショット（UI の場合、390px 幅。置き場所とファイル名のルールは AGENTS.md の「PR のルール」）」「docs の更新箇所」「未解決の点」を書く。
 - 実装中に設計を変えた場合や、未決事項を決めた場合は、同じ PR で [06-decisions.md](06-decisions.md) と該当 docs を更新する。
 - 全タスク共通の完了条件（Definition of Done）
   - `pnpm typecheck`、`pnpm lint`、`pnpm test` が通る
@@ -40,7 +40,7 @@
 | 1-4 | **家族の作成・参加**：オンボーディング（家族名 → 家族カレンダー作成 → 子どもの追加［名前・色］→ 招待リンク発行）、招待リンクから参加（ACL で writer 追加 → 参加者の `calendarList` に追加）、`families` `members` `invites` | 2つの Google アカウントで同じ家族に入れる。両者の Google Calendar に家族カレンダーが表示される |
 | 1-5 | **時間・祝日・レイアウトのドメインロジック**：`shared/time`（Asia/Tokyo 固定の日付ユーティリティ、週の範囲、連休で週末を延長）、`@holiday-jp/holiday_jp` による祝日、`closure_days`、`shared/domain/dayLayout` | テストケース：2026-10-05〜10-12（10/12 スポーツの日で3連休、週が月曜まで伸びる）、年末年始、振替休日、平日の単発予定で `expanded` になる |
 | 1-6 | **`GET /api/families/:id/week`**：家族カレンダーの予定、`event_meta`、祝日・休園日、`dayLayout` を返す | レスポンスが zod スキーマ（shared）に合致する |
-| 1-7 | **S1 週ビュー（家族予定版）**：平日 compact／expanded、週末カード（予定リストのみ。空きタイムラインは Phase 2）、前週・次週、メンバー凡例、タブバー（未実装のタブは「準備中」） | [02 の S1](02-screens.md#s1-週ビュー) の構造どおりに表示される。390px の Playwright スクリーンショットを PR に添付する |
+| 1-7 | **S1 週ビュー（家族予定版）**：平日 compact／expanded、週末カード（予定リストのみ。空きタイムラインは Phase 2）、前週・次週、メンバー凡例、タブバー（未実装のタブは「準備中」） | [02 の S1](02-screens.md#s1-週ビュー) の構造どおりに表示される。390px の Playwright スクリーンショット（`docs/screenshots/s1-week-view.png`）を更新する |
 | 1-8 | **予定の作成・編集・削除**：タイトル、日時・終日、対象メンバー（子どもを含む）、担当、持ち物、候補／確定。`extendedProperties.private` と `event_meta` の両方に保存する | 作成した予定が Google Calendar に出る。Google Calendar 側で時間を変えても、アプリの表示が追従する（付加情報は保持される） |
 | 1-9 | **設定（最小）**：メンバーの名前・色、休園日の登録 | 休園日が週ビューで「休園」として週末カード扱いになる |
 
