@@ -33,6 +33,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | フェーズ別の実装計画と受け入れ基準 |
 | [docs/06-decisions.md](docs/06-decisions.md) | 決定事項ログと未決事項 |
 | [docs/07-pwa-verification.md](docs/07-pwa-verification.md) | PWA 検証手順書（自動テスト・Lighthouse基準・iOS Safari手順） |
+| [docs/08-deployment.md](docs/08-deployment.md) | CI/CD・デプロイ運用手順書（GitHub Actions、環境構成、マイグレーション、復旧） |
 
 ## 前提条件
 
@@ -69,6 +70,7 @@ pnpm db:migrate:local
 > **環境とマイグレーションのコマンド体系**:
 > - `wrangler.jsonc` のルート設定はデフォルトのローカル環境（`danran-local`、センチネル UUID `00000000-0000-0000-0000-000000000000`、`remote: false`）です。
 > - staging 環境へのマイグレーション適用は明示的に環境フラグを指定する `pnpm db:migrate:staging`（`--env staging --remote`）で行います。
+> - production 環境へのマイグレーション適用は明示的に環境フラグを指定する `pnpm db:migrate:production`（`--env production --remote`）で行います。
 > - シークレット情報の雛形は `.dev.vars.example` に記載されています（ローカル DB やヘルスチェックテストには `.dev.vars` の作成は不要です）。
 
 ### 3. 開発サーバーと各種検証コマンド
@@ -87,8 +89,12 @@ pnpm lint
 # ※ Miniflare 上でマイグレーションが自動適用され、合成データで D1 / R2 バインディングがテストされます
 pnpm test
 
-# 本番ビルド（フロントエンド dist/client ＋ Worker）
+# 本番ビルド（フロントエンド dist/client ＋ Worker、ローカルプレビュー用）
 pnpm build
+
+# 環境別ビルド（Vite の CLOUDFLARE_ENV 指定）
+pnpm build:staging
+pnpm build:production
 
 # 本番成果物のローカルプレビュー
 pnpm preview
@@ -99,10 +105,11 @@ pnpm e2e
 
 ## ステータス
 
-Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対応、タスク 0-3 D1 ＋ Drizzle）：実装およびローカル検証（型チェック・静的解析・テスト・E2E）進行中。
+Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対応、タスク 0-3 D1 ＋ Drizzle、タスク 0-4 CI/CD）：実装およびローカル検証（型チェック・静的解析・テスト・E2E）進行中。
 - この雛形のローカル動作確認および E2E テストには Cloudflare / Google アカウントや Secret は不要です。
 - PWA の自動検証（Chromium CDP インストール性・SW制御・オフライン動作）はローカル環境で確認済みです。
 - iOS 実機でのホーム画面追加（AC）は、開発環境に物理実機が未接続のためステージング環境（Phase 0-4）での実機検証待ちです（詳細は [docs/07-pwa-verification.md](docs/07-pwa-verification.md) を参照）。
 - D1 スキーマ（初期 `users` テーブル）、Drizzle 設定（`drizzle.config.ts`）、マイグレーションコマンド、R2 バインディング（`PHOTOS`）、`.dev.vars.example` を配備しました。
 - `@cloudflare/vitest-pool-workers` による Worker 統合テストで D1 マイグレーション適用、CRUD 操作、制約検証、R2 疎通を確認しています。
-- 後続タスク（未着手）：CI/CD（0-4）、Tailwind/デザインシステム（0-5）
+- CI/CD パイプライン（PR 自動検証 `verify.yml`、main push 自動 staging デプロイ `ci.yml`、手動 production デプロイ `deploy-production.yml`）を配備。デプロイ先行マイグレーション、生成設定ガード、ドリフト検出を組み込みました。
+- 後続タスク（未着手）：Tailwind/デザインシステム（0-5）

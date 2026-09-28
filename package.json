@@ -11,6 +11,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:staging": "CLOUDFLARE_ENV=staging vite build",
+    "build:production": "CLOUDFLARE_ENV=production vite build",
     "preview": "vite preview",
     "pwa:icons": "node scripts/generate-icons.mjs",
     "typecheck": "tsc --noEmit",
@@ -21,7 +23,8 @@
     "e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "db:migrate:staging": "wrangler d1 migrations apply DB --env staging --remote"
+    "db:migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "db:migrate:production": "wrangler d1 migrations apply DB --env production --remote"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
