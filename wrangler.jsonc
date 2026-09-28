@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "danran",
+  "main": "src/worker/index.ts",
+  // 2026-08-15 is supported by both @cloudflare/vitest-pool-workers bundled runtime (1.20260815.1) and Wrangler runtime (1.20260926.1)
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  }
+}

@@ -14,20 +14,25 @@ Danran は家族の予定共有 PWA。「ルーティンは背景に、週末は
 4. UI を触るときは [docs/02-screens.md](docs/02-screens.md)
 5. 迷ったら [docs/06-decisions.md](docs/06-decisions.md)
 
-## コマンド（Phase 0 で整備する。変えたらここを更新すること）
+## コマンド（Phase 0 で整備中。変えたらここを更新すること）
 
-```
-pnpm install
-pnpm dev                 # Vite ＋ Worker（ローカル D1/R2）
-pnpm typecheck
-pnpm lint                # Biome
-pnpm test                # Vitest（shared と worker）
-pnpm e2e                 # Playwright
-pnpm db:generate         # drizzle-kit でマイグレーション生成
-pnpm db:migrate:local
+### 実装済みコマンド（Task 0-1）
+
+```bash
+pnpm install             # 依存関係のインストール
+pnpm dev                 # Vite ＋ Worker 開発サーバー（@cloudflare/vite-plugin）
+pnpm build               # クライアント・Worker のビルド
+pnpm preview             # ビルド成果物のローカルプレビュー
+pnpm typecheck           # TypeScript 型チェック（tsc --noEmit）
+pnpm lint                # Biome による静的解析（lint:fix / format も利用可）
+pnpm test                # Vitest によるテスト実行（非監視モード）
 ```
 
-ローカルの Secret は `.dev.vars`（コミットしない）。雛形は `.dev.vars.example`。
+### 後続タスクで整備予定のコマンド・設定
+
+- `pnpm e2e`：Playwright による E2E テスト（主要動線の実装時に整備予定）
+- `pnpm db:generate` / `pnpm db:migrate:local`：drizzle-kit による D1 マイグレーション（Phase 0-3 で整備予定）
+- ローカル Secret（`.dev.vars` は Git 管理外のローカル秘密情報、雛形 `.dev.vars.example` は Phase 0-3 で Git 管理対象として整備予定）
 
 ## 絶対に守ること
 
