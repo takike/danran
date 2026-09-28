@@ -366,4 +366,13 @@ test.describe('PWA Capabilities and Regression Tests', () => {
       await persistentContext.close();
     }
   });
+
+  test('Production build does not render /dev/ui showcase and serves Home screen', async ({
+    page,
+  }) => {
+    await page.goto('/dev/ui');
+    await expect(page.locator('[data-testid="home-screen"]')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Danran' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '部品一覧' })).toHaveCount(0);
+  });
 });

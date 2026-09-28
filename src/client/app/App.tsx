@@ -1,5 +1,6 @@
 import { OfflineFallback } from '@client/components/OfflineFallback';
 import { useIsOnline } from '@client/hooks/useIsOnline';
+import React from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
 function Home() {
@@ -76,6 +77,8 @@ function Home() {
   );
 }
 
+const DevUiPage = import.meta.env.DEV ? React.lazy(() => import('@client/pages/DevUiPage')) : null;
+
 export function App() {
   const isOnline = useIsOnline();
 
@@ -86,6 +89,20 @@ export function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {import.meta.env.DEV && DevUiPage ? (
+          <Route
+            path="/dev/ui"
+            element={
+              <React.Suspense
+                fallback={
+                  <div className="p-[var(--spacing-md)] text-xs text-muted">読み込み中...</div>
+                }
+              >
+                <DevUiPage />
+              </React.Suspense>
+            }
+          />
+        ) : null}
         <Route path="*" element={<Home />} />
       </Routes>
     </BrowserRouter>

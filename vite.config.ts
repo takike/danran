@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { cloudflare } from '@cloudflare/vite-plugin';
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { type Plugin, defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -66,7 +67,7 @@ const pwaPlugins: Plugin[] = VitePWA({
 );
 
 export default defineConfig({
-  plugins: [react(), cloudflare(), ...pwaPlugins],
+  plugins: [tailwindcss(), react(), cloudflare(), ...pwaPlugins],
   resolve: {
     alias: {
       '@client': fileURLToPath(new URL('./src/client', import.meta.url)),

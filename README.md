@@ -34,6 +34,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/06-decisions.md](docs/06-decisions.md) | 決定事項ログと未決事項 |
 | [docs/07-pwa-verification.md](docs/07-pwa-verification.md) | PWA 検証手順書（自動テスト・Lighthouse基準・iOS Safari手順） |
 | [docs/08-deployment.md](docs/08-deployment.md) | CI/CD・デプロイ運用手順書（GitHub Actions、環境構成、マイグレーション、復旧） |
+| [docs/09-ui-foundation.md](docs/09-ui-foundation.md) | デザイントークンと汎用 UI 部品（UI Foundation）の仕様・利用例 |
 
 ## 前提条件
 
@@ -77,6 +78,7 @@ pnpm db:migrate:local
 
 ```bash
 # 開発サーバー起動（Vite ＋ Worker 統合環境、ローカル永続 D1 を参照）
+# ※ 起動中、ローカル環境限定で http://localhost:5173/dev/ui にて部品一覧（ショーケース）を確認できます
 pnpm dev
 
 # 型チェック（TypeScript strict）
@@ -105,11 +107,12 @@ pnpm e2e
 
 ## ステータス
 
-Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対応、タスク 0-3 D1 ＋ Drizzle、タスク 0-4 CI/CD）：実装およびローカル検証（型チェック・静的解析・テスト・E2E）進行中。
+Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対応、タスク 0-3 D1 ＋ Drizzle、タスク 0-4 CI/CD、タスク 0-5 デザイントークンと基本部品）：
 - この雛形のローカル動作確認および E2E テストには Cloudflare / Google アカウントや Secret は不要です。
 - PWA の自動検証（Chromium CDP インストール性・SW制御・オフライン動作）はローカル環境で確認済みです。
-- iOS 実機でのホーム画面追加（AC）は、開発環境に物理実機が未接続のためステージング環境（Phase 0-4）での実機検証待ちです（詳細は [docs/07-pwa-verification.md](docs/07-pwa-verification.md) を参照）。
-- D1 スキーマ（初期 `users` テーブル）、Drizzle 設定（`drizzle.config.ts`）、マイグレーションコマンド、R2 バインディング（`PHOTOS`）、`.dev.vars.example` を配備しました。
-- `@cloudflare/vitest-pool-workers` による Worker 統合テストで D1 マイグレーション適用、CRUD 操作、制約検証、R2 疎通を確認しています。
-- CI/CD パイプライン（PR 自動検証 `verify.yml`、main push 自動 staging デプロイ `ci.yml`、手動 production デプロイ `deploy-production.yml`）を配備。デプロイ先行マイグレーション、生成設定ガード、ドリフト検出を組み込みました。
-- 後続タスク（未着手）：Tailwind/デザインシステム（0-5）
+- タスク 0-4（PR #4、コミット `b2137cda`）は main にマージされ、GitHub Actions CI/CD による staging デプロイ（公開 URL: `https://danran-staging.tak-ikemachi.workers.dev`）が成功しました。
+- staging 環境における HTTPS SPA・ディープリンク、ヘルスチェックおよび API 404 JSON 応答、390px レンダリング、コンソールエラー皆無、CDP インストール性、SW による公開アセット限定キャッシュ（API 非キャッシュ）、オフライン再読み込み・回復、および Lighthouse 11.7.1 PWA 100 点（6つの自動チェック）の通過を確認済みです（iOS 実機確認待ち、production 未デプロイ）。
+- D1 スキーマ（初期 `users` テーブル）、Drizzle 設定（`drizzle.config.ts`）、マイグレーションコマンド、R2 バインディング（`PHOTOS`）、`.dev.vars.example` を配備。
+- `@cloudflare/vitest-pool-workers` による Worker 統合テスト（7件）で D1 マイグレーション適用、CRUD 操作、制約検証、R2 疎通を確認しています。
+- デザイントークン（`tokens.css`）と Tailwind CSS v4 連携、汎用 UI 部品（`Card`, `Chip`, `MemberDot`, `Segmented`, `IconButton`, `TabBar`）、開発専用カタログ（`/dev/ui`、本番ビルドから完全除外）を実装（[docs/09-ui-foundation.md](docs/09-ui-foundation.md)）。
+- 後続フェーズ：Phase 1 ログイン・家族・週ビュー（タスク 1-1 Google OAuth）

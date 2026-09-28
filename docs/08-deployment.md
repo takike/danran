@@ -16,7 +16,7 @@ GitHub Actions にて 3 つのワークフローで構成されています。
 ├─ pnpm lint (Biome)
 ├─ pnpm test (Vitest / Miniflare D1・R2統合)
 ├─ pnpm db:generate ＋ マイグレーション差分検出
-└─ Playwright E2E (ビルド ＋ Chromium 9テスト)
+└─ Playwright E2E (開発 UI ＋ 本番 PWA / Chromium)
 
 [main ブランチへの push]
       │
