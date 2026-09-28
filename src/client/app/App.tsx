@@ -1,8 +1,11 @@
+import { OfflineFallback } from '@client/components/OfflineFallback';
+import { useIsOnline } from '@client/hooks/useIsOnline';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
 function Home() {
   return (
     <main
+      data-testid="home-screen"
       style={{
         maxWidth: '390px',
         margin: '0 auto',
@@ -74,6 +77,12 @@ function Home() {
 }
 
 export function App() {
+  const isOnline = useIsOnline();
+
+  if (!isOnline) {
+    return <OfflineFallback />;
+  }
+
   return (
     <BrowserRouter>
       <Routes>

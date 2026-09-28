@@ -32,6 +32,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/04-hosting.md](docs/04-hosting.md) | ホスティング候補の比較と推奨 |
 | [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | フェーズ別の実装計画と受け入れ基準 |
 | [docs/06-decisions.md](docs/06-decisions.md) | 決定事項ログと未決事項 |
+| [docs/07-pwa-verification.md](docs/07-pwa-verification.md) | PWA 検証手順書（自動テスト・Lighthouse基準・iOS Safari手順） |
 
 ## 前提条件
 
@@ -44,6 +45,12 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 # 依存関係のインストール
 pnpm install
 
+# Playwright ブラウザ（Chromium）のインストール（E2E初回時）
+pnpm exec playwright install chromium
+
+# PWA 仮アイコンの生成（lucide-react ＋ sharp）
+pnpm pwa:icons
+
 # 開発サーバー起動（Vite ＋ Worker 統合環境）
 pnpm dev
 
@@ -53,15 +60,23 @@ pnpm typecheck
 # 静的解析・フォーマットチェック（Biome）
 pnpm lint
 
-# テスト実行（Vitest / @cloudflare/vitest-pool-workers）
+# ユニット・Worker テスト実行（Vitest / @cloudflare/vitest-pool-workers）
 pnpm test
 
-# 本番ビルド（フロントエンド ＋ Worker）
+# 本番ビルド（フロントエンド dist/client ＋ Worker）
 pnpm build
+
+# 本番成果物のローカルプレビュー
+pnpm preview
+
+# E2E ブラウザテスト実行（Playwright / Chromium）
+pnpm e2e
 ```
 
 ## ステータス
 
-Phase 0 基盤雛形（タスク 0-1）実装完了。
-- この雛形のローカル動作確認には Cloudflare / Google アカウントや Secret は不要です。
-- 後続タスク（未着手）：PWA（0-2）、D1/R2（0-3）、CI/CD（0-4）、Tailwind/デザインシステム（0-5）
+Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対応）：実装およびローカル検証（型チェック・静的解析・テスト・E2E）完了。
+- この雛形のローカル動作確認および E2E テストには Cloudflare / Google アカウントや Secret は不要です。
+- PWA の自動検証（Chromium CDP インストール性・SW制御・オフライン動作）はローカル環境で確認済みです。
+- iOS 実機でのホーム画面追加（AC）は、開発環境に物理実機が未接続のためステージング環境（Phase 0-4）での実機検証待ちです（詳細は [docs/07-pwa-verification.md](docs/07-pwa-verification.md) を参照）。
+- 後続タスク（未着手）：D1/R2（0-3）、CI/CD（0-4）、Tailwind/デザインシステム（0-5）
