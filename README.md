@@ -13,6 +13,14 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 - **やること**：予定に紐づく TODO（締切・準備・持ち物）を担当者つきで管理する
 - **週1の公開まとめ**：家族の時間と重なる個人予定を、日曜夜にまとめて「家族に公開するか」提案する
 
+## 画面イメージ
+
+| 週ビュー | 週末の1日 | プリント取り込み |
+|---|---|---|
+| <img src="docs/mocks/01-week-view.png" width="240"> | <img src="docs/mocks/02-weekend-day.png" width="240"> | <img src="docs/mocks/03-print-import.png" width="240"> |
+
+繰り返し予定・やること・週1まとめを含む全画面は [docs/mocks/](docs/mocks/) と [docs/02-screens.md](docs/02-screens.md) を参照。配色は暫定（もっとポップにする予定）。
+
 ## ドキュメント
 
 | ファイル | 内容 |
