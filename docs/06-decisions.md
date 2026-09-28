@@ -18,6 +18,11 @@
 | 2026-09-27 | ビジュアルはモックよりポップな方向にする。トークン化して後で差し替える | オーナーの意向 |
 | 2026-09-28 | ホスティングは Cloudflare Workers で確定。D1（`danran-staging` / `danran-prod`）と R2（`danran-photos-staging` / `danran-photos-prod`）は作成済み。GitHub Secrets に `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` を登録済み | — |
 | 2026-09-28 | ドメインは当面 `workers.dev` のサブドメイン（`danran` / `danran-staging` Worker）を使う。独自ドメインは一般公開の前に決める。URL の直書きを避け、オリジンは環境変数（`APP_ORIGIN`）で持つ | 家族利用の段階では URL 変更の手間が小さい。名前が仮のため |
+| 2026-09-28 | PWA は `vite-plugin-pwa`（Workbox `generateSW`）を採用し、`outDir: 'dist/client'` でクライアント公開アセットのみを事前キャッシュする | Cloudflare のクライアント出力分離に適合させ、Worker バンドルを事前キャッシュから除外するため |
+| 2026-09-28 | CacheStorage に `/api/*` を保存しない（静的アセット限定）。また `navigateFallbackDenylist: [/^\/api(?:\/|$)/]` で API ナビゲーションの SPA HTML 誤インターセプトを防止 | プライバシー不変条件の厳守および API 404 / 正常レスポンスの保護 |
+| 2026-09-28 | 更新戦略は `registerType: 'autoUpdate'`（`skipWaiting` / `clientsClaim`）を採用 | 初期スキャフォールドで過剰なプロンプト UI や強制リロードによる中断を避けるため |
+| 2026-09-28 | PWA インストール性検証は Chromium CDP（`Page.getInstallabilityErrors`）および Playwright E2E で自動化し、レガシー Lighthouse 11.7.1（スコア100）を参考値として記録。iOS Safari 実機確認手順は文書化して分離 | 現代 Lighthouse での PWA カテゴリ削除に追従し、客観的ブラウザ API で検証するため（[07-pwa-verification.md](07-pwa-verification.md)） |
+
 
 ## 未決事項
 
