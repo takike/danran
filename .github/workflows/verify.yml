@@ -1,0 +1,54 @@
+name: Verify
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (typecheck, lint, test, drift, e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 24.21.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: pnpm typecheck
+
+      - name: Biome lint
+        run: pnpm lint
+
+      - name: Vitest tests
+        run: pnpm test
+
+      - name: Check database migration drift
+        run: |
+          pnpm db:generate
+          if [ -n "$(git status --porcelain -- migrations)" ]; then
+            echo "::error::Schema drift detected! Run 'pnpm db:generate' locally and commit the generated migrations."
+            git status --porcelain -- migrations
+            exit 1
+          fi
+
+      - name: Install Playwright Chromium browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright E2E tests
+        run: pnpm e2e

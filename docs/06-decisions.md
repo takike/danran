@@ -23,6 +23,8 @@
 | 2026-09-28 | 更新戦略は `registerType: 'autoUpdate'`（`skipWaiting` / `clientsClaim`）を採用 | 初期スキャフォールドで過剰なプロンプト UI や強制リロードによる中断を避けるため |
 | 2026-09-28 | PWA インストール性検証は Chromium CDP（`Page.getInstallabilityErrors`）および Playwright E2E で自動化し、レガシー Lighthouse 11.7.1（スコア100）を参考値として記録。iOS Safari 実機確認手順は文書化して分離 | 現代 Lighthouse での PWA カテゴリ削除に追従し、客観的ブラウザ API で検証するため（[07-pwa-verification.md](07-pwa-verification.md)） |
 | 2026-09-28 | D1 初期スキーマは認証・認可の起点となる `users` テーブルのみでスキャフォールドし、他テーブルは所有タスクで漸進追加。マイグレーションは drizzle-kit 生成のみとし手書きを禁止。wrangler ルートはセンチネル UUID の `danran-local` をデフォルトとし、リモートマイグレーションは `--env`、Vite の環境選択は `CLOUDFLARE_ENV`（staging/production）で明示指定する | 責務の局所化、マイグレーション再現性の担保、各ツールの環境解決仕様への適合 |
+| 2026-09-29 | デプロイ対象設定の選択：`@cloudflare/vite-plugin` の環境解決仕様に基づき、ビルド時（`CLOUDFLARE_ENV=staging/production vite build`）に設定をフラット化し、デプロイは生成成果物 `dist/danran_local/wrangler.json` を明示指定（`wrangler deploy --config ...`）する。デプロイ直前に `scripts/verify-deployment-config.mjs` で Worker 名・D1・R2 を機械的ガード | Vite プラグインのビルド時環境解決仕様に適合させ、ルートのローカルセンチネル設定の誤デプロイを防止するため |
+| 2026-09-29 | CI/CD 構成とデプロイゲーティング：再利用可能ワークフロー `verify.yml` で型・静的解析・テスト・マイグレーションドリフト・E2E を統合。PR 検証には Secret を渡さず、main への push で staging へ自動デプロイ。production デプロイは main ブランチ限定の手動 `workflow_dispatch` とし、すべてのデプロイで D1 マイグレーション先行適用を徹底 | 外部 PR からの Secret 保護、スキーマ不整合の防止、および安全な運用サイクルの確立のため |
 
 
 ## 未決事項
