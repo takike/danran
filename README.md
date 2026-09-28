@@ -33,6 +33,35 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/05-implementation-plan.md](docs/05-implementation-plan.md) | フェーズ別の実装計画と受け入れ基準 |
 | [docs/06-decisions.md](docs/06-decisions.md) | 決定事項ログと未決事項 |
 
+## 前提条件
+
+- **Node.js**: `^22.12.0 || >=24.0.0`（Node 22.12+ または Node 24+、開発検証環境: `v24.21.0`）
+- **pnpm**: `12.6.0`（Corepack 経由での利用を推奨: `corepack enable`）
+
+## 開発と動作確認
+
+```bash
+# 依存関係のインストール
+pnpm install
+
+# 開発サーバー起動（Vite ＋ Worker 統合環境）
+pnpm dev
+
+# 型チェック（TypeScript strict）
+pnpm typecheck
+
+# 静的解析・フォーマットチェック（Biome）
+pnpm lint
+
+# テスト実行（Vitest / @cloudflare/vitest-pool-workers）
+pnpm test
+
+# 本番ビルド（フロントエンド ＋ Worker）
+pnpm build
+```
+
 ## ステータス
 
-コンセプト確定、実装前。まずは自分の家族で使うことを目標に作り、良ければプロダクトとして公開する。PWA で始め、必要になればネイティブへ移行する。
+Phase 0 基盤雛形（タスク 0-1）実装完了。
+- この雛形のローカル動作確認には Cloudflare / Google アカウントや Secret は不要です。
+- 後続タスク（未着手）：PWA（0-2）、D1/R2（0-3）、CI/CD（0-4）、Tailwind/デザインシステム（0-5）
