@@ -1,0 +1,30 @@
+# Danran Local Environment Variables Example (.dev.vars.example)
+#
+# Copy this file to .dev.vars for local development when working on OAuth, encryption,
+# or LLM features in subsequent phases.
+#
+# NOTE: .dev.vars is NOT needed for local D1 database, health check (/api/health),
+# or running unit/worker integration tests.
+# Never commit real secrets, private keys, or production credentials.
+
+# Local application origin (used for OAuth redirect URLs and same-origin configuration)
+APP_ORIGIN=http://localhost:5173
+
+# Google OAuth Credentials (Phase 1-1: Google OAuth login & calendar sync)
+GOOGLE_CLIENT_ID=your-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+
+# Session & Token Encryption Keys (Phase 1-1)
+# SESSION_SECRET: Secret string used to sign session cookies
+SESSION_SECRET=replace-with-a-random-secret-string-at-least-32-chars
+# TOKEN_ENC_KEY: Encryption key used to encrypt refresh tokens at rest (format specified in Phase 1-1 auth task)
+TOKEN_ENC_KEY=placeholder-encryption-key
+
+# Anthropic Claude API (Phase 4-2: Print extraction)
+ANTHROPIC_API_KEY=your-anthropic-api-key
+# LLM_MODEL=choose-a-supported-model
+
+# Web Push VAPID Keys (Phase 6-5: Web push notifications)
+VAPID_PUBLIC_KEY=your-vapid-public-key
+VAPID_PRIVATE_KEY=your-vapid-private-key
+VAPID_SUBJECT=mailto:admin@example.com

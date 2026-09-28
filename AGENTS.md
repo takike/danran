@@ -16,26 +16,25 @@ Danran は家族の予定共有 PWA。「ルーティンは背景に、週末は
 
 ## コマンド（Phase 0 で整備中。変えたらここを更新すること）
 
-### 実装済みコマンド（Task 0-1, 0-2）
+### 実装済みコマンド（Task 0-1, 0-2, 0-3）
 
 ```bash
 pnpm install             # 依存関係のインストール
+pnpm db:generate         # Drizzle スキーマからマイグレーション SQL を生成（migrations/）
+pnpm db:migrate:local    # ローカル D1 にマイグレーションを適用（wrangler d1 migrations apply DB --local）
+pnpm db:migrate:staging  # 【リモート操作】staging D1 にマイグレーションを適用（wrangler d1 migrations apply DB --env staging --remote）
 pnpm dev                 # Vite ＋ Worker 開発サーバー（@cloudflare/vite-plugin）
 pnpm build               # クライアント・Worker のビルド
 pnpm preview             # ビルド成果物のローカルプレビュー
 pnpm pwa:icons           # PWA アイコンの生成（lucide-react ＋ sharp）
 pnpm typecheck           # TypeScript 型チェック（tsc --noEmit）
 pnpm lint                # Biome による静的解析（lint:fix / format も利用可）
-pnpm test                # Vitest によるテスト実行（非監視モード）
+pnpm test                # Vitest によるテスト実行（D1・R2統合テスト含む）
 pnpm e2e                 # Playwright による E2E テスト（Chromium / 本番プレビュー）
 ```
 
 ※ 初回または CI 環境で Playwright ブラウザ未導入の場合は `pnpm exec playwright install chromium` を実行する。
-
-### 後続タスクで整備予定のコマンド・設定
-
-- `pnpm db:generate` / `pnpm db:migrate:local`：drizzle-kit による D1 マイグレーション（Phase 0-3 で整備予定）
-- ローカル Secret（`.dev.vars` は Git 管理外のローカル秘密情報、雛形 `.dev.vars.example` は Phase 0-3 で Git 管理対象として整備予定）
+※ ローカル開発環境の環境変数雛形として `.dev.vars.example` を配置（実 Secret を含む `.dev.vars` は Git 管理外）。ローカル D1 や `/api/health` の動作確認には `.dev.vars` は不要。
 
 ## 絶対に守ること
 

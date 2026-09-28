@@ -22,6 +22,7 @@
 | 2026-09-28 | CacheStorage に `/api/*` を保存しない（静的アセット限定）。また `navigateFallbackDenylist: [/^\/api(?:\/|$)/]` で API ナビゲーションの SPA HTML 誤インターセプトを防止 | プライバシー不変条件の厳守および API 404 / 正常レスポンスの保護 |
 | 2026-09-28 | 更新戦略は `registerType: 'autoUpdate'`（`skipWaiting` / `clientsClaim`）を採用 | 初期スキャフォールドで過剰なプロンプト UI や強制リロードによる中断を避けるため |
 | 2026-09-28 | PWA インストール性検証は Chromium CDP（`Page.getInstallabilityErrors`）および Playwright E2E で自動化し、レガシー Lighthouse 11.7.1（スコア100）を参考値として記録。iOS Safari 実機確認手順は文書化して分離 | 現代 Lighthouse での PWA カテゴリ削除に追従し、客観的ブラウザ API で検証するため（[07-pwa-verification.md](07-pwa-verification.md)） |
+| 2026-09-28 | D1 初期スキーマは認証・認可の起点となる `users` テーブルのみでスキャフォールドし、他テーブルは所有タスクで漸進追加。マイグレーションは drizzle-kit 生成のみとし手書きを禁止。wrangler ルートはセンチネル UUID の `danran-local` をデフォルトとし、リモートマイグレーションは `--env`、Vite の環境選択は `CLOUDFLARE_ENV`（staging/production）で明示指定する | 責務の局所化、マイグレーション再現性の担保、各ツールの環境解決仕様への適合 |
 
 
 ## 未決事項

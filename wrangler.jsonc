@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "danran",
+  "name": "danran-local",
   "main": "src/worker/index.ts",
   // 2026-08-15 is supported by both @cloudflare/vitest-pool-workers bundled runtime (1.20260815.1) and Wrangler runtime (1.20260926.1)
   "compatibility_date": "2026-08-15",
@@ -8,5 +8,58 @@
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "danran-local",
+      // Sentinel UUID for local development and local tests. Never used as a remote target.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+      "remote": false
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "danran-photos-local",
+      "remote": false
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "danran-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "danran-staging",
+          "database_id": "6cfc0f40-0017-4f4a-8cd7-45744044c4db",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PHOTOS",
+          "bucket_name": "danran-photos-staging"
+        }
+      ]
+    },
+    "production": {
+      "name": "danran",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "danran-prod",
+          "database_id": "f2ce6e9c-d6e6-48e3-81f0-22189593e962",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PHOTOS",
+          "bucket_name": "danran-photos-prod"
+        }
+      ]
+    }
   }
 }

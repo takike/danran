@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["dist/**", ".wrangler/**", "node_modules/**"]
+    "ignore": ["dist/**", ".wrangler/**", "node_modules/**", "migrations/meta/**"]
   },
   "formatter": {
     "enabled": true,

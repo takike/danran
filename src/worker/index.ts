@@ -1,8 +1,9 @@
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
+import type { WorkerEnv } from '@worker/env';
 import { healthRoute } from '@worker/routes/health';
 import { Hono } from 'hono';
 
-export const app = new Hono();
+export const app = new Hono<{ Bindings: WorkerEnv }>();
 
 // Mount API routes under /api
 app.route('/api', healthRoute);
