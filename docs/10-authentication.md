@@ -105,7 +105,12 @@ Danran では最小権限の原則（Least Privilege）を遵守し、Phase 1 �
   （行間置換や用途外復号攻撃を暗号学的に防止）。
 
 ### 2. `SESSION_SECRET`（Cookie HMAC 署名鍵）
-- 32 文字以上の高エントロピーなランダム文字列（Hono `getSignedCookie` / `setSignedCookie` に使用）。
+- **アルゴリズム / 用途**: HMAC-SHA256（Hono `getSignedCookie` / `setSignedCookie` に使用）。
+- **推奨生成コマンド**:
+  ```bash
+  openssl rand -hex 32
+  ```
+  （64文字の小文字16進文字列、256ビットエントロピー。互換性のため32文字以上の文字列も許容。詳細は [docs/08-deployment.md](08-deployment.md) 参照）。
 
 ---
 
@@ -143,11 +148,22 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 ## 8. 環境設定と人間による手順（Cloudflare / Google Cloud）
 
 > [!IMPORTANT]
-> **未検証ステータスおよび Secret 登録について**:
-> 本タスク（Task 1-1）の時点では、実際の Google アカウントを用いた同意・認可画面遷移や実トークン発行の疎通確認は**未完了（UNVERIFIED）**です。
-> Cloudflare staging 環境の Secret 登録状況は確認済み（`staging = []` verified 2026-09-29）、production 環境の Secret は未確認（not checked）です。
-> ローカル環境では、合成フィクスチャによる Vite ＋ Worker 開発サーバーおよび永続 Chrome プロファイルの再起動検証（再起動前後の `/api/auth/me` 200 OK、ログアウト後の 200 OK および失効後 401 Unauthorized、`HttpOnly`/`Secure`/`no-store` の付与）が正常に確認されています。ただし、Cloudflare デプロイ環境での結合検証は未実施です。
-> このタスクでは、外部サービスのアカウント設定や Secret 登録を人間（管理者）の担当作業として残しており、エージェントによる自動設定・登録は実施していません（権限管理上の制約による）。
+> **2026-09-30 人間による確認済みステータス**:
+> - **Google Cloud Console**: Web OAuth クライアント作成済み。
+> - **登録済みリダイレクト URI**:
+>   - `http://localhost:5173/api/auth/callback`
+>   - `https://danran-staging.tak-ikemachi.workers.dev/api/auth/callback`
+> - **登録済みスコープ**:
+>   `openid`, `email`, `profile`, `https://www.googleapis.com/auth/calendar.app.created`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+> - **Secret 登録状況**:
+>   - local: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が `.dev.vars` に設定済み。
+>   - staging: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が Cloudflare Secrets に登録済み。
+>   - `SESSION_SECRET` および `TOKEN_ENC_KEY` の登録状況は**未確認（UNCONFIRMED）**です。
+>   - production 環境の OAuth 設定および Secret は**未確認（UNCONFIRMED）**です。
+> - **同意画面のプライバシーポリシー URL**:
+>   staging 環境デプロイ後、Google Cloud Console の OAuth 同意画面に `https://danran-staging.tak-ikemachi.workers.dev/privacy` を設定できます（production は本番公開時に設定）。
+>
+> このタスクでは、外部サービスのアカウント設定や Secret 登録を人間（管理者）の担当作業として残しており、エージェントによる自動設定・登録は実施していません。
 
 ### 1. Google Cloud Console 設定手順
 1. Google Cloud Console でプロジェクトを作成（または既存プロジェクトを選択）。
@@ -156,6 +172,7 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
    - ユーザータイプ: 外部（External）
    - アプリ名: `Danran`
    - スコープ: `openid`, `email`, `profile`, `.../auth/calendar.app.created`, `.../auth/calendar.calendarlist.readonly` を追加。
+   - プライバシーポリシー URL（staging）: `https://danran-staging.tak-ikemachi.workers.dev/privacy`
    - 公開ステータス: 家族利用時は「本番（未確認）」を選択（※「テスト」のままだとトークンが 7 日で失効します）。
 4. **OAuth 2.0 クライアント ID** を作成：
    - アプリケーションの種類: ウェブ アプリケーション
@@ -165,32 +182,30 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
      - 本番: `https://danran.tak-ikemachi.workers.dev/api/auth/callback`
 
 ### 2. Cloudflare Secrets の登録手順
-ステージングおよび本番環境の Worker に、以下の 4 つの Secret を登録します：
+オペレーターは、未登録の Secret のみを以下のコマンドで登録します（Google 認証情報は staging 登録済み）：
 
 ```bash
-# staging
-pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env staging
-pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env staging
+# staging の未登録 Secret（SESSION_SECRET, TOKEN_ENC_KEY）
 pnpm exec wrangler secret put SESSION_SECRET --env staging
 pnpm exec wrangler secret put TOKEN_ENC_KEY --env staging
 
-# production
+# production の Secret 登録（本番稼働準備時）
 pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env production
 pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env production
 pnpm exec wrangler secret put SESSION_SECRET --env production
 pnpm exec wrangler secret put TOKEN_ENC_KEY --env production
 ```
 
-※ ローカル開発環境では `.dev.vars.example` をコピーして `.dev.vars` を作成し、上記値を設定します。
+※ **ローカル開発環境（`.dev.vars`）**: `.dev.vars` は**存在しない場合のみ** `.dev.vars.example` を参考に作成し、既存の `.dev.vars` を `cp` 等で上書きしてはいけません。
 
 ---
 
-## 9. 手動動作確認手順（UI 実装前の手動確認）
+## 9. 手動動作確認手順（UI を用いた手動動作確認）
 
-フロントエンド UI が未実装の段階で、ローカル環境（`pnpm dev`）およびブラウザ／curl による動作確認を行う手順：
+フロントエンド UI（Task 1-1）を用いたローカル環境（`pnpm dev`）およびステージング環境での動作確認手順：
 
 1. **環境準備とマイグレーション**:
-   - `.dev.vars.example` をコピーして `.dev.vars` を作成し、Google Cloud Console で発行した Client ID / Secret、生成した `SESSION_SECRET`、`TOKEN_ENC_KEY`、および `APP_ORIGIN=http://localhost:5173` を設定。
+   - `.dev.vars` が未作成の場合のみ作成し、Google Client ID / Secret、生成した `SESSION_SECRET`、`TOKEN_ENC_KEY`、および `APP_ORIGIN=http://localhost:5173` を設定。
    - ローカル D1 マイグレーションを適用：
      ```bash
      pnpm db:migrate:local
@@ -199,32 +214,40 @@ pnpm exec wrangler secret put TOKEN_ENC_KEY --env production
      ```bash
      pnpm dev
      ```
-2. **ログイン開始**:
-   ブラウザで `http://localhost:5173/api/auth/login` にアクセス。
-   → Google のアカウント選択・同意画面が表示されることを確認。
-3. **同意とコールバック**:
-   Google アカウントで同意を完了。
-   → `http://localhost:5173/` へ 302 リダイレクトされ、開発者ツールの Application > Cookies に `__Host-danran_session` が発行されていることを確認。
-4. **現在のセッション確認**:
-   ブラウザで `http://localhost:5173/api/auth/me` にアクセス。
-   → `{"user":{"id":"usr_...","email":"...","displayName":"..."}}` が 200 で返却されることを確認。
-5. **永続性とサーバー再起動検証（Worker / ブラウザ再起動）**:
-   - ※ **必ずログアウトの前に実施してください**（ログアウト後はセッションが消去されるため 401 となり、再起動永続性の検証ができなくなります）。
-   - ターミナルで `pnpm dev` を停止（Ctrl+C）し、再度 `pnpm dev` を起動する。
-   - ブラウザをリロード（F5）または一度閉じて再起動後、再度 `http://localhost:5173/api/auth/me` にアクセス。
-   - セッションが D1 に正しく永続化され、再起動後も引き続き 200 OK でログイン状態が維持されることを確認。
-6. **ログアウト確認（冪等性・セッション無効化）**:
-   コンソールまたは Fetch API で POST リクエストを実行：
-   ```js
-   fetch('/api/auth/logout', {
-     method: 'POST',
-     headers: {
-       'X-Requested-With': 'XMLHttpRequest',
-     },
-   }).then((r) => r.json()).then(console.log);
-   ```
-   → `{"ok":true}` が返り、Cookie が消去され、`/api/auth/me` が 401 Unauthorized になることを確認。
-   → 続けてもう一度同じ logout リクエストを実行し、未認証状態でもエラーにならず 200 OK（`{"ok":true}`）が返却される（冪等）ことを確認。
+2. **ログイン画面とプライバシーポリシーの確認**:
+   - ブラウザで `http://localhost:5173/` にアクセス。
+   - 「Danran」見出し、コンセプト説明、および「Google でログイン」ボタンが表示されることを確認。
+   - 画面内の「プライバシーポリシー」リンクをクリックし、`/privacy` 画面に遷移して Google アカウント情報の利用方針、暗号化、および 3層モデルの説明が正しく表示され、ホームへ戻れることを確認。
+3. **同意拒否（キャンセル）フローの確認**:
+   - ホームの「Google でログイン」をクリック（同一オリジンの `/api/auth/login` 経由で Google 同意画面へ遷移）。
+   - Google の同意画面で「キャンセル」（または拒否）を選択。
+   - `http://localhost:5173/?error=access_denied` へ安全にリダイレクトされ、UI 上に日本語のキャンセル通知（「Google ログインがキャンセルされました。」）が表示されることを確認（任意のクエリパラメータやエラー文字列が DOM に露出しないことを確認）。
+4. **ログイン完了とユーザー情報の確認**:
+   - 再度「Google でログイン」をクリックし、Google アカウントで同意を完了。
+   - `http://localhost:5173/` へ 302 リダイレクトされ、UI にユーザーの表示名（`displayName`）および「ログアウト」ボタンが表示されることを確認（メールアドレスや内部トークン値が不必要に表示されないことを確認）。
+5. **Cookie 属性の確認**:
+   - ブラウザの開発者ツール（Application > Cookies）を開き、`__Host-danran_session` が以下の安全な属性で発行されていることを確認：
+     `HttpOnly: true`, `Secure: true`, `SameSite: Lax`, `Path: /`
+   - クライアント JavaScript からセッション値やトークンが読み取れないことを確認。
+6. **リロード耐性の確認**:
+   - 画面をリロード（F5）し、セッションが維持され、再読み込み後もユーザーの表示名が表示されたままであることを確認。
+7. **サーバー再起動およびブラウザ再起動による永続性検証**:
+   - ※ **必ずログアウト前に実施してください**（ログアウト後はセッションが消去されるため、永続性の検証ができなくなります）。
+   - ターミナルで `pnpm dev` を停止（Ctrl+C）し、再度 `pnpm dev` を起動。
+   - ブラウザを閉じて再起動後、再度 `http://localhost:5173/` にアクセス。
+   - D1 にセッションが正しく永続化されているため、再起動後もログイン状態（表示名）が維持されることを確認。
+8. **ログアウトの確認（多重クリック防止・セッション無効化・再ログイン）**:
+   - 「ログアウト」ボタンをクリック。
+   - 処理中にボタンが無効化・ローディング表示（「ログアウト中...」）となり、多重クリックが防止されることを確認。
+   - `POST /api/auth/logout`（`X-Requested-With: XMLHttpRequest` 付与）が実行され、D1 のセッションレコードおよび Cookie が破棄され、未ログイン画面（「Google でログイン」）に安全に戻ることを確認。
+   - ブラウザで直接 `http://localhost:5173/api/auth/me` にアクセスし、401 Unauthorized になることを確認。
+   - 再度「Google でログイン」から再ログインが正常に行えることを確認。
+9. **アクセストークン自動更新（`getGoogleAccessToken`）について**:
+   - オンデマンドでのアクセストークン取得、リフレッシュトークンによる自動更新、トークン失効（`invalid_grant`）時の安全なレコードクリーンアップ、およびエラーハンドリングは、Vitest 自動テスト（`test/auth.spec.ts`）において Google トークンエンドポイントのモックを用いてテストされています。
+   - 実際の Google Calendar API との連携疎通は後続の Task 1-3（スパイク）にて実施するため、専用の検証用 API エンドポイント等は新設しません。
+10. **テスト実行時のシークレット隔離（Vitest Pool）**:
+   - Vitest（`@cloudflare/vitest-pool-workers`）による自動テストは、`vitest.config.ts` で `wrangler.configPath` を省略し、Miniflare オプション（`d1Databases: ['DB']`, `r2Buckets: ['PHOTOS']`, `APP_ORIGIN: 'http://localhost:5173'`）を明示指定して実行されます。
+   - これによりローカル `.dev.vars` の自動読み込みを防止し、テスト用合成シークレットと厳格なネットワークモックの下で隔離実行されます。
 
 ---
 

@@ -8,11 +8,14 @@ const migrations = await readD1Migrations(migrationsPath);
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      wrangler: {
-        configPath: './wrangler.jsonc',
-      },
+      main: './src/worker/index.ts',
       miniflare: {
+        compatibilityDate: '2026-08-15',
+        compatibilityFlags: ['nodejs_compat'],
+        d1Databases: ['DB'],
+        r2Buckets: ['PHOTOS'],
         bindings: {
+          APP_ORIGIN: 'http://localhost:5173',
           TEST_MIGRATIONS: migrations,
         },
       },
