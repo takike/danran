@@ -26,6 +26,12 @@
 | 2026-09-29 | デプロイ対象設定の選択：`@cloudflare/vite-plugin` の環境解決仕様に基づき、ビルド時（`CLOUDFLARE_ENV=staging/production vite build`）に設定をフラット化し、デプロイは生成成果物 `dist/danran_local/wrangler.json` を明示指定（`wrangler deploy --config ...`）する。デプロイ直前に `scripts/verify-deployment-config.mjs` で Worker 名・D1・R2 を機械的ガード | Vite プラグインのビルド時環境解決仕様に適合させ、ルートのローカルセンチネル設定の誤デプロイを防止するため |
 | 2026-09-29 | CI/CD 構成とデプロイゲーティング：再利用可能ワークフロー `verify.yml` で型・静的解析・テスト・マイグレーションドリフト・E2E を統合。PR 検証には Secret を渡さず、main への push で staging へ自動デプロイ。production デプロイは main ブランチ限定の手動 `workflow_dispatch` とし、すべてのデプロイで D1 マイグレーション先行適用を徹底 | 外部 PR からの Secret 保護、スキーマ不整合の防止、および安全な運用サイクルの確立のため |
 | 2026-09-29 | Tailwind CSS v4（`@tailwindcss/vite`）とデザイントークン連携、および開発用部品一覧（`/dev/ui`）の条件付き除外：`tokens.css` を単一の真実源として `@theme inline` で Tailwind ユーティリティにマッピングし、将来のテーマ・ポップ配色差し替えを CSS 変数更新のみで完結させる。`/dev/ui` は `import.meta.env.DEV` の動的インポート境界とし、本番ビルドから完全にコードを除外する | トークン変更による配色動的変更の担保、および本番バンドルの軽量化・開発専用ページの混入防止のため |
+| 2026-09-29 | Google OAuth の一時フロー管理に `oauth_states` テーブルを採用し、コールバック時に `DELETE ... RETURNING` によるアトミック単一消費を徹底。ブラウザバインド（署名付き Cookie `__Host-danran_oauth` のハッシュ）と紐づけて PKCE verifier / nonce を AES-256-GCM で暗号化保持。認可コード横取り・リプレイ攻撃・多重送信を防止し、フロー完了時は即座に破棄 | 認可コード横取り・リプレイ攻撃・多重送信の根本防止、およびステートレス Cookie の容量制限・ブラウザ改ざんの排除 |
+| 2026-09-29 | セッション管理：生の 256bit 乱数トークンを HMAC 署名（`SESSION_SECRET`）して `__Host-danran_session` Cookie（`HttpOnly; Secure; SameSite=Lax; Path=/`、TTL 30日）に格納し、D1 `sessions` テーブルの PK にはトークンの SHA-256 ハッシュのみを保存。セッション漏洩時も DB から平文 Cookie 値が流出しない設計 | セッションハイジャックおよび DB リーク時の被害局所化 |
+| 2026-09-29 | Google リフレッシュトークン暗号化：`TOKEN_ENC_KEY`（厳格な base64 32バイト AES-256 キー）による AES-256-GCM 暗号化。AAD（`google-refresh:${userId}`）を付与して行間・目的外置換攻撃を防止。初回ログイン時はリフレッシュトークン必須とし、以降の同意省略時は既存トークンを保持 | トークン流出防止、暗号学的改ざん検知、およびマルチデバイス再ログイン耐性 |
+| 2026-09-29 | オンデマンドアクセストークン取得：アクセストークン・ID トークンは D1 に永続化・キャッシュせず、`getGoogleAccessToken` により要求時オンデマンドで Google REST から取得。`invalid_grant` 検出時は旧暗号文の一致を条件とする条件付き DELETE で安全に失効させ、ネットワーク/5xx の一時障害時はトークンを保持 | トークン管理の簡素化、漏洩リスク最小化、および競合ログイン時の意図しないトークン消去防止 |
+| 2026-09-29 | 認証ヘッダと CSRF 防御：全認証エンドポイントに `Cache-Control: no-store; Pragma: no-cache; Referrer-Policy: no-referrer` を強制。`POST /api/auth/logout` は `X-Requested-With: XMLHttpRequest` かつ `Origin === APP_ORIGIN` の双方を要求して CSRF を遮断。未設定時は 503 で fail-closed | ブラウザキャッシュ混入・CSRF攻撃の防止、および環境変数未設定時の安全なフォールバック |
+| 2026-09-29 | Google OAuth トークンエンドポイント呼び出し時のリダイレクト制御：workerd 実行環境（`redirect: 'error'` 未サポート）に適合させるため、`redirect: 'manual'` を指定し、3xx リダイレクトを含む非 2xx レスポンスを即座に拒否する。これにより資格情報の意図しない送信先漏洩を防止する | workerd 実行環境の制約への適合および認可コード・クライアントシークレットの安全保護 |
 
 
 

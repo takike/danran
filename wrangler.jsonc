@@ -9,6 +9,9 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
+  "vars": {
+    "APP_ORIGIN": "http://localhost:5173"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -29,6 +32,9 @@
   "env": {
     "staging": {
       "name": "danran-staging",
+      "vars": {
+        "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev"
+      },
       "d1_databases": [
         {
           "binding": "DB",
@@ -46,6 +52,9 @@
     },
     "production": {
       "name": "danran",
+      "vars": {
+        "APP_ORIGIN": "https://danran.tak-ikemachi.workers.dev"
+      },
       "d1_databases": [
         {
           "binding": "DB",
