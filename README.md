@@ -36,6 +36,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/08-deployment.md](docs/08-deployment.md) | CI/CD・デプロイ運用手順書（GitHub Actions、環境構成、マイグレーション、復旧） |
 | [docs/09-ui-foundation.md](docs/09-ui-foundation.md) | デザイントークンと汎用 UI 部品（UI Foundation）の仕様・利用例 |
 | [docs/10-authentication.md](docs/10-authentication.md) | 認証・Google OAuth 連携仕様（エンドポイント、Cookie、暗号化、手動確認） |
+| [docs/11-google-calendar-client.md](docs/11-google-calendar-client.md) | Google Calendar REST クライアント仕様（10メソッド、リトライ、サニタイズ、プライバシー） |
 
 ## 前提条件
 
@@ -118,4 +119,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
 - デザイントークン（`tokens.css`）と Tailwind CSS v4 連携、汎用 UI 部品（`Card`, `Chip`, `MemberDot`, `Segmented`, `IconButton`, `TabBar`）、開発専用カタログ（`/dev/ui`、本番ビルドから完全除外）を実装（[docs/09-ui-foundation.md](docs/09-ui-foundation.md)）。
 - Phase 1 ログイン・家族・週ビュー：
   - **タスク 1-1（Google OAuth 2.0 連携）**: 実装完了。合成モック・暗号化・D1 トランザクション・CSRF 防御の自動テスト、およびローカル永続化（ブラウザ・サーバー再起動）検証済み。実 Google 同意画面連携・Secrets 登録は人間待ち（UNVERIFIED）。
-  - **次のタスク**: タスク 1-2（Google カレンダー REST クライアント実装）。
+  - **タスク 1-2（Google カレンダー REST クライアント実装）**: 実装完了（[docs/11-google-calendar-client.md](docs/11-google-calendar-client.md)）。10 メソッド（`calendars.insert`, `acl.insert`, `events.list/get/insert/patch/delete/instances`, `calendarList.list`, `freeBusy.query`）、Zod 入出力境界検証、429/5xx 指数バックオフ、単一 401 トークン更新、非冪等作成の 5xx 即時フェイルクローズ、workerd redirect: manual 制御、エラーサニタイズ、および D1 暗号化トークン復号を含む Worker 統合テストを配備。
+  - **次のタスク**: タスク 1-3（スパイク：家族カレンダーの共有方法検証）。
