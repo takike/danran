@@ -27,6 +27,9 @@
     "db:migrate:production": "wrangler d1 migrations apply DB --env production --remote"
   },
   "dependencies": {
+    "@date-fns/tz": "^1.5.0",
+    "@holiday-jp/holiday_jp": "^2.5.2",
+    "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.7.2",
     "jose": "^6.2.12",

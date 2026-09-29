@@ -73,3 +73,25 @@ export const googleTokens = sqliteTable('google_tokens', {
 
 export type GoogleToken = typeof googleTokens.$inferSelect;
 export type NewGoogleToken = typeof googleTokens.$inferInsert;
+
+/**
+ * Nursery/school closure days and custom family holidays.
+ * Note: family_id is stored as a logical reference without a foreign key constraint
+ * because the families table is owned and created by Task 1-4. When Task 1-4 introduces
+ * the families table, a foreign key constraint will be added in a new migration.
+ * An empty memberIds array signifies a family-wide closure; a non-empty array targets specific members.
+ */
+export const closureDays = sqliteTable(
+  'closure_days',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id').notNull(),
+    date: text('date').notNull(),
+    label: text('label').notNull(),
+    memberIds: text('member_ids', { mode: 'json' }).$type<string[]>().notNull(),
+  },
+  (table) => [index('closure_days_family_id_date_idx').on(table.familyId, table.date)],
+);
+
+export type ClosureDayRecord = typeof closureDays.$inferSelect;
+export type NewClosureDayRecord = typeof closureDays.$inferInsert;
