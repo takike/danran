@@ -37,6 +37,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/09-ui-foundation.md](docs/09-ui-foundation.md) | デザイントークンと汎用 UI 部品（UI Foundation）の仕様・利用例 |
 | [docs/10-authentication.md](docs/10-authentication.md) | 認証・Google OAuth 連携仕様（エンドポイント、Cookie、暗号化、手動確認） |
 | [docs/11-google-calendar-client.md](docs/11-google-calendar-client.md) | Google Calendar REST クライアント仕様（10メソッド、リトライ、サニタイズ、プライバシー） |
+| [docs/12-time-and-layout.md](docs/12-time-and-layout.md) | 日時・祝日・週レイアウト仕様（Asia/Tokyo 日付計算、連休延長、dayLayout、休園日） |
 
 ## 前提条件
 
@@ -120,4 +121,7 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
 - Phase 1 ログイン・家族・週ビュー：
   - **タスク 1-1（Google OAuth 2.0 連携）**: 実装完了。合成モック・暗号化・D1 トランザクション・CSRF 防御の自動テスト、およびローカル永続化（ブラウザ・サーバー再起動）検証済み。実 Google 同意画面連携・Secrets 登録は人間待ち（UNVERIFIED）。
   - **タスク 1-2（Google カレンダー REST クライアント実装）**: 実装完了（[docs/11-google-calendar-client.md](docs/11-google-calendar-client.md)）。10 メソッド（`calendars.insert`, `acl.insert`, `events.list/get/insert/patch/delete/instances`, `calendarList.list`, `freeBusy.query`）、Zod 入出力境界検証、429/5xx 指数バックオフ、単一 401 トークン更新、非冪等作成の 5xx 即時フェイルクローズ、workerd redirect: manual 制御、エラーサニタイズ、および D1 暗号化トークン復号を含む Worker 統合テストを配備。
-  - **次のタスク**: タスク 1-3（スパイク：家族カレンダーの共有方法検証）。
+  - **タスク 1-3（スパイク：家族カレンダー共有方法）**: Google 認証情報・実アカウント設定待ち（BLOCKED）。
+  - **タスク 1-4（家族の作成・参加）**: タスク 1-3 の検証結果待ち（BLOCKED）。
+  - **タスク 1-5（時間・祝日・レイアウトのドメインロジック）**: 実装完了（[docs/12-time-and-layout.md](docs/12-time-and-layout.md)）。Asia/Tokyo 固定の日付計算、@holiday-jp/holiday_jp による祝日判定（1970–2050）、月曜起点・祝日連続延長週範囲、dayLayout（週末カード/展開平日/畳み込み平日）、および休園日（`closure_days`、Task 1-4 前のため FK なし論理参照）Drizzle スキーマ・Zod バリデーション・テストを配備。ローカルマイグレーション適用および 4 つのホストタイムゾーン（UTC, Asia/Tokyo, America/New_York, Pacific/Auckland）検証を通過。
+  - **次のタスク**: タスク 1-3（実 Google 認証情報設定後の共有検証）→ タスク 1-4（家族の作成・参加）→ タスク 1-6（週表示 API。タスク 1-4 の家族モデル・所有権に依存）。
