@@ -33,7 +33,7 @@ pnpm pwa:icons           # PWA アイコンの生成（lucide-react ＋ sharp）
 pnpm typecheck           # TypeScript 型チェック（tsc --noEmit）
 pnpm lint                # Biome による静的解析（lint:fix / format も利用可）
 pnpm test                # Vitest によるテスト実行（D1・R2統合テスト含む）
-pnpm e2e                 # Playwright による E2E テスト（開発 UI ＋ 本番 PWA / Chromium）
+pnpm e2e                 # Playwright による E2E テスト（認証 UI ＋ 開発 UI ＋ 本番 PWA / Chromium）
 ```
 
 ※ 初回または CI 環境で Playwright ブラウザ未導入の場合は `pnpm exec playwright install chromium` を実行する。

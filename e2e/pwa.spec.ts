@@ -243,6 +243,14 @@ test.describe('PWA Capabilities and Regression Tests', () => {
     page,
     context,
   }) => {
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      });
+    });
+
     await page.goto('/');
 
     await page.waitForFunction(
@@ -287,7 +295,7 @@ test.describe('PWA Capabilities and Regression Tests', () => {
 
     await expect(page.locator('[data-testid="home-screen"]')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Danran' })).toBeVisible();
-    await expect(page.getByText('準備中')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
   });
 
   test('Offline API fetch fails instead of returning cached data or SPA HTML', async ({

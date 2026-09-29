@@ -1,7 +1,12 @@
 import { env } from 'cloudflare:test';
 import { authLogoutResponseSchema, authMeResponseSchema } from '@shared/schemas/auth';
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
-import { OAUTH_COOKIE_NAME, PHASE1_SCOPES, SESSION_COOKIE_NAME } from '@worker/auth/config';
+import {
+  OAUTH_COOKIE_NAME,
+  PHASE1_SCOPES,
+  SESSION_COOKIE_NAME,
+  getTrustedAppOrigin,
+} from '@worker/auth/config';
 import {
   decryptAesGcm,
   encryptAesGcm,
@@ -389,6 +394,23 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       });
     });
 
+    it('enforces HTTPS for remote APP_ORIGIN (rejecting non-localhost HTTP) and fails closed with 503', async () => {
+      const nonHttpsEnv: WorkerEnv = {
+        ...TEST_AUTH_ENV,
+        APP_ORIGIN: 'http://danran.example.com',
+      };
+
+      const res = await app.request('http://danran.example.com/api/auth/login', {}, nonHttpsEnv);
+      expect(res.status).toBe(503);
+      expect(apiErrorResponseSchema.parse(await res.json())).toEqual({
+        error: 'Auth service unconfigured',
+      });
+
+      expect(() => getTrustedAppOrigin(nonHttpsEnv)).toThrow(
+        'APP_ORIGIN must use HTTPS (HTTP is allowed only for localhost)',
+      );
+    });
+
     it('returns safe 503 when TOKEN_ENC_KEY is not canonical base64 or wrong length', async () => {
       const nonCanonicalEnv: WorkerEnv = {
         ...TEST_AUTH_ENV,
@@ -499,6 +521,45 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       const stateRow = required(stateRows[0]);
       expect(stateRow.payloadEnc).not.toContain(nonce);
       expect(stateRow.payloadEnc.startsWith('v1.')).toBe(true);
+    });
+
+    it('derives redirect_uri from non-default valid HTTPS APP_ORIGIN for both login authorization and callback token exchange', async () => {
+      const customOrigin = 'https://danran-staging.tak-ikemachi.workers.dev';
+      const customEnv: WorkerEnv = {
+        ...TEST_AUTH_ENV,
+        APP_ORIGIN: customOrigin,
+      };
+
+      // 1. GET /api/auth/login with custom HTTPS APP_ORIGIN
+      const loginRes = await app.request(`${customOrigin}/api/auth/login`, {}, customEnv);
+      expect(loginRes.status).toBe(302);
+      const jar = extractCookies(loginRes);
+      const location = new URL(
+        required(loginRes.headers.get('Location'), 'Missing Location on login redirect'),
+      );
+      expect(location.searchParams.get('redirect_uri')).toBe(`${customOrigin}/api/auth/callback`);
+      const state = required(location.searchParams.get('state'), 'Missing state');
+      const nonce = required(location.searchParams.get('nonce'), 'Missing nonce');
+
+      // 2. GET /api/auth/callback token exchange verifies redirect_uri sent to Google matches configured APP_ORIGIN
+      const signedIdToken = await signTestIdToken({ nonce });
+      let tokenExchangeRedirectUri: string | null = null;
+      setupGoogleFetchMock({
+        idToken: signedIdToken,
+        onTokenRequest: async (_req, params) => {
+          tokenExchangeRedirectUri = params.get('redirect_uri');
+        },
+      });
+
+      const cbRes = await app.request(
+        `${customOrigin}/api/auth/callback?code=synthetic-code&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        customEnv,
+      );
+
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/');
+      expect(tokenExchangeRedirectUri).toBe(`${customOrigin}/api/auth/callback`);
     });
   });
 

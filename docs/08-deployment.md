@@ -62,13 +62,63 @@ GitHub Actions にて 3 つのワークフローで構成されています。
 
 ## 認証情報と Secrets
 
+### CI/CD デプロイ用認証情報 (GitHub Secrets)
+
 GitHub リポジトリの Secrets に登録されている既存の認証情報を使用します：
 - `CLOUDFLARE_API_TOKEN`: Cloudflare デプロイおよび D1 リモート操作用 API トークン
 - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare アカウント ID
 
-**セキュリティ原則**:
-- シークレットはデプロイ・リモートマイグレーション実行ステップのみに環境変数として注入されます。
-- PR の自動検証ジョブ（`verify.yml`）にはシークレットを渡しません（外部 PR からの安全性を確保）。
+### アプリケーション設定値（APP_ORIGIN）
+
+各環境の `APP_ORIGIN` は `wrangler.jsonc` の `vars`（local: `http://localhost:5173`）および各環境の `env.<name>.vars` で定義されています。OAuth コールバック URI は常に `${APP_ORIGIN}/api/auth/callback` として構築されます。
+
+| 環境 | APP_ORIGIN | コールバック URI |
+|---|---|---|
+| **local** | `http://localhost:5173` | `http://localhost:5173/api/auth/callback` |
+| **staging** | `https://danran-staging.tak-ikemachi.workers.dev` | `https://danran-staging.tak-ikemachi.workers.dev/api/auth/callback` |
+| **production** | `https://danran.tak-ikemachi.workers.dev` | `https://danran.tak-ikemachi.workers.dev/api/auth/callback` |
+
+### アプリケーション Secrets（Task 1-1: 認証・トークン暗号化）
+
+| Secret 名 | 用途 | 推奨生成コマンド / 形式 | ローテーションの影響 |
+|---|---|---|---|
+| `SESSION_SECRET` | セッション Cookie の HMAC 署名鍵 | `openssl rand -hex 32`<br>（64文字の小文字 16進文字列、256bit エントロピー。互換性のため 32文字以上の文字列も許容） | 既存の全セッション Cookie が無効化され、全ユーザーが再ログインを要求されます。 |
+| `TOKEN_ENC_KEY` | Google リフレッシュトークンの AES-256-GCM 暗号化鍵 | `openssl rand -base64 32`<br>（厳格な標準 Base64 エンコードされた 32バイト / 44文字、末尾 `=`） | 既存の保存済みトークンが復号不可となり、ユーザーの再同意・再認証が必要となります。 |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 Web クライアント ID | Google Cloud Console 発行値 | 認可フローが停止します。 |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 クライアントシークレット | Google Cloud Console 発行値 | トークン交換・更新が停止します。 |
+
+※ 鍵の値は環境（local / staging / production）ごとに独立させ、Worker やサーバーの再起動をまたいで永続・固定化する必要があります。
+
+### オペレーター作業手順（未登録 Secret の登録）
+
+人間による確認済み（2026-09-30）：Google Cloud Console で Web OAuth クライアントが作成され、staging 環境の `GOOGLE_CLIENT_ID` および `GOOGLE_CLIENT_SECRET` は既に Cloudflare Secrets に登録済み、ローカル開発環境の `.dev.vars` にも設定済みであることが人間により報告・確認されています。
+一方、`SESSION_SECRET` および `TOKEN_ENC_KEY` の登録状況は**未確認（UNCONFIRMED）**です（未登録と断定するものではありません）。
+
+オペレーターは、未登録の Secret のみ（未登録の場合のみ）を以下のコマンドで登録します（※ 生成コマンドのみを実行し、実際のシークレット値をリポジトリやログに出力しないでください）：
+
+```bash
+# 1. staging 環境の Secret 登録（未登録の場合のみ）
+pnpm exec wrangler secret put SESSION_SECRET --env staging
+pnpm exec wrangler secret put TOKEN_ENC_KEY --env staging
+
+# 2. production 環境の Secret 登録（本番稼働準備時、未登録の場合のみ）
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env production
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env production
+pnpm exec wrangler secret put SESSION_SECRET --env production
+pnpm exec wrangler secret put TOKEN_ENC_KEY --env production
+```
+
+※ **ローカル開発環境（`.dev.vars`）**: `.dev.vars` は**存在しない場合のみ** `.dev.vars.example` を参考に新規作成し、既存の `.dev.vars` を `cp` 等で上書きしてはいけません。
+
+### Google OAuth 同意画面のプライバシーポリシー URL
+
+ステージング環境のデプロイ完了後、Google Cloud Console の OAuth 同意画面に以下のプライバシーポリシー URL を設定できます：
+- **staging**: `https://danran-staging.tak-ikemachi.workers.dev/privacy`
+（※ production は後日の本番公開・独自ドメイン確定時に設定します）。
+
+**CI/CD デプロイ認証情報のセキュリティ原則**:
+- デプロイ用認証情報（`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`）は、デプロイおよびリモートマイグレーション実行ステップのみに GitHub Secrets から環境変数として注入されます（実行時の OAuth / アプリケーション Secret は Cloudflare Secrets で Worker 側に保持され、CI/CD ランナーには注入されません）。
+- PR の自動検証ジョブ（`verify.yml`）にはデプロイ用シークレットを渡しません（外部 PR からの安全性を確保）。
 - シークレットの値はログやコミットに出力されません。
 
 ---
@@ -125,6 +175,10 @@ node scripts/verify-deployment-config.mjs production
 # 7. production デプロイのドライラン（実際の変更なし）
 pnpm exec wrangler deploy --config dist/danran_local/wrangler.json --dry-run
 ```
+
+### テスト環境の独立性とシークレット隔離（Vitest Pool）
+
+Vitest（`@cloudflare/vitest-pool-workers`）による統合テスト（`pnpm test`）は、`vitest.config.ts` で `wrangler.configPath` を省略し、Miniflare オプション（`d1Databases: ['DB']`, `r2Buckets: ['PHOTOS']`, `APP_ORIGIN: 'http://localhost:5173'`）を明示指定して実行されます。これにより、Wrangler 設定読み込みに伴うローカル `.dev.vars` の自動ロードを完全に遮断し、テスト用合成鍵と厳格なモックの下でテストを実行することで、ローカル秘密情報への依存や漏洩を防止しています。
 
 ---
 
