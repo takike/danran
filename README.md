@@ -35,6 +35,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/07-pwa-verification.md](docs/07-pwa-verification.md) | PWA 検証手順書（自動テスト・Lighthouse基準・iOS Safari手順） |
 | [docs/08-deployment.md](docs/08-deployment.md) | CI/CD・デプロイ運用手順書（GitHub Actions、環境構成、マイグレーション、復旧） |
 | [docs/09-ui-foundation.md](docs/09-ui-foundation.md) | デザイントークンと汎用 UI 部品（UI Foundation）の仕様・利用例 |
+| [docs/10-authentication.md](docs/10-authentication.md) | 認証・Google OAuth 連携仕様（エンドポイント、Cookie、暗号化、手動確認） |
 
 ## 前提条件
 
@@ -115,4 +116,6 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
 - D1 スキーマ（初期 `users` テーブル）、Drizzle 設定（`drizzle.config.ts`）、マイグレーションコマンド、R2 バインディング（`PHOTOS`）、`.dev.vars.example` を配備。
 - `@cloudflare/vitest-pool-workers` による Worker 統合テスト（7件）で D1 マイグレーション適用、CRUD 操作、制約検証、R2 疎通を確認しています。
 - デザイントークン（`tokens.css`）と Tailwind CSS v4 連携、汎用 UI 部品（`Card`, `Chip`, `MemberDot`, `Segmented`, `IconButton`, `TabBar`）、開発専用カタログ（`/dev/ui`、本番ビルドから完全除外）を実装（[docs/09-ui-foundation.md](docs/09-ui-foundation.md)）。
-- 後続フェーズ：Phase 1 ログイン・家族・週ビュー（タスク 1-1 Google OAuth）
+- Phase 1 ログイン・家族・週ビュー：
+  - **タスク 1-1（Google OAuth 2.0 連携）**: 実装完了。合成モック・暗号化・D1 トランザクション・CSRF 防御の自動テスト、およびローカル永続化（ブラウザ・サーバー再起動）検証済み。実 Google 同意画面連携・Secrets 登録は人間待ち（UNVERIFIED）。
+  - **次のタスク**: タスク 1-2（Google カレンダー REST クライアント実装）。

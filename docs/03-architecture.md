@@ -112,8 +112,9 @@ danran/
 
 ```
 users            id, google_sub, email, display_name, created_at
-google_tokens    user_id, refresh_token_enc, scopes, updated_at        -- AES-GCM で暗号化
-sessions         id, user_id, expires_at, created_at
+oauth_states     state_hash, browser_binding_hash, payload_enc, expires_at, created_at -- PKCE/nonce/ブラウザバインド暗号化一時保管（単一消費・TTL10分）
+google_tokens    user_id, refresh_token_enc, scopes, updated_at        -- AES-GCM で暗号化（AAD: google-refresh:userId）
+sessions         id, user_id, expires_at, created_at                   -- id は生の256bit乱数トークンの SHA-256。Cookie には HMAC 署名値を格納
 families         id, name, family_calendar_id, owner_user_id, day_start_hour(8), day_end_hour(20), created_at
 members          id, family_id, user_id NULL, kind(adult|child), name, color, sort_order
 member_calendars member_id, calendar_id, include_in_busy(bool)          -- free/busy 対象の個人カレンダー
@@ -145,13 +146,13 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
 
 ### OAuth
 
-- サーバーサイドの Authorization Code フロー（`access_type=offline`, `prompt=consent`）。リフレッシュトークンを暗号化して D1 に保存する。
-- スコープ（最小限）：
+- サーバーサイドの Authorization Code フロー（`access_type=offline`, `prompt=consent`、S256 PKCE）。リフレッシュトークンを AES-256-GCM で暗号化して D1（`google_tokens`）に保存する。
+- 一時テーブル `oauth_states` を用いたコールバック時のアトミック単一消費（`DELETE ... RETURNING`）により、認可コード横取り・リプレイ攻撃・多重送信を確実に防止する。ブラウザ識別には署名付き一時 Cookie（`__Host-danran_oauth`）のハッシュバインドを用いる。
+- スコープ（Phase 1 最小限）：
   - `openid email profile`
   - `https://www.googleapis.com/auth/calendar.app.created`：家族カレンダーの作成と、その上の予定の読み書き
-  - `https://www.googleapis.com/auth/calendar.freebusy`：本人の空き状況の取得
-  - `https://www.googleapis.com/auth/calendar.events`：本人の予定を本人の画面に表示する、送迎ブロックの書き出し、公開判断のための読み取り（**Phase 1 では不要。Phase 2 以降で追加の同意を求める incremental authorization にする**）
   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：free/busy 対象カレンダーの選択
+  - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events`（個人予定の取得・書き出し）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。
   - ACL が `app.created` で足りなければ `calendar.acls`（要検証）
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。
 

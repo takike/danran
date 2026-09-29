@@ -15,10 +15,11 @@ GOOGLE_CLIENT_ID=your-google-oauth-client-id
 GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
 
 # Session & Token Encryption Keys (Phase 1-1)
-# SESSION_SECRET: Secret string used to sign session cookies
+# SESSION_SECRET: Secret string used to sign session cookies (at least 32 characters high-entropy string)
 SESSION_SECRET=replace-with-a-random-secret-string-at-least-32-chars
-# TOKEN_ENC_KEY: Encryption key used to encrypt refresh tokens at rest (format specified in Phase 1-1 auth task)
-TOKEN_ENC_KEY=placeholder-encryption-key
+# TOKEN_ENC_KEY: Encryption key used to encrypt refresh tokens at rest.
+# Must be strict standard base64-encoded string of exactly 32 bytes (AES-256 key, e.g. openssl rand -base64 32)
+TOKEN_ENC_KEY=replace-with-base64-32-bytes-aes-key
 
 # Anthropic Claude API (Phase 4-2: Print extraction)
 ANTHROPIC_API_KEY=your-anthropic-api-key
