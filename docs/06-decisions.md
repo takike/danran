@@ -32,8 +32,12 @@
 | 2026-09-29 | オンデマンドアクセストークン取得：アクセストークン・ID トークンは D1 に永続化・キャッシュせず、`getGoogleAccessToken` により要求時オンデマンドで Google REST から取得。`invalid_grant` 検出時は旧暗号文の一致を条件とする条件付き DELETE で安全に失効させ、ネットワーク/5xx の一時障害時はトークンを保持 | トークン管理の簡素化、漏洩リスク最小化、および競合ログイン時の意図しないトークン消去防止 |
 | 2026-09-29 | 認証ヘッダと CSRF 防御：全認証エンドポイントに `Cache-Control: no-store; Pragma: no-cache; Referrer-Policy: no-referrer` を強制。`POST /api/auth/logout` は `X-Requested-With: XMLHttpRequest` かつ `Origin === APP_ORIGIN` の双方を要求して CSRF を遮断。未設定時は 503 で fail-closed | ブラウザキャッシュ混入・CSRF攻撃の防止、および環境変数未設定時の安全なフォールバック |
 | 2026-09-29 | Google OAuth トークンエンドポイント呼び出し時のリダイレクト制御：workerd 実行環境（`redirect: 'error'` 未サポート）に適合させるため、`redirect: 'manual'` を指定し、3xx リダイレクトを含む非 2xx レスポンスを即座に拒否する。これにより資格情報の意図しない送信先漏洩を防止する | workerd 実行環境の制約への適合および認可コード・クライアントシークレットの安全保護 |
-
-
+| 2026-09-29 | Google Calendar REST クライアント（Task 1-2）の非冪等作成リトライ例外：`calendars.insert` および `acl.insert` は Google 側に一意な冪等性キーが存在しないため、明示的なレート制限（429 / 403 rateLimitExceeded）のみを再試行し、5xx サーバーエラーおよび曖昧なネットワーク切断時は自動再試行せず即座に `UNCERTAIN_MUTATION`（`outcome: 'uncertain'`）として fail-closed とする。呼び出し側が既存カレンダーの照合後に手動復旧する方針 | 重複した家族カレンダーや重複 ACL の多重作成防止 |
+| 2026-09-29 | イベント作成（`events.insert`）における安定クライアント生成 ID：ID 未指定時は初回試行前に `crypto.randomUUID().replaceAll('-', '')`（Google base32hex 形式）を生成し、全再試行（429/5xx）で同一 ID を再利用する。409 Conflict は暗黙の成功とせず型付きエラーとして返却 | ネットワーク不達時の重複イベント登録防止および安全な後続照合の担保 |
+| 2026-09-29 | Google Calendar エラーの完全サニタイズ：upstream のエラーメッセージや詳細・URL・ヘッダをレスポンスやログに出力せず、固定メッセージと許可リスト化された安全な reason（`rateLimitExceeded`, `notFound` 等）のみに制限した `GoogleCalendarError` を発行 | ユーザー名・メールアドレス・カレンダー ID・イベント詳細等の機密情報漏洩防止 |
+| 2026-09-29 | `freeBusy.query` のプライバシー境界：返却オブジェクトからタイトル・場所・説明・参加者等を Zod で完全にストリップし、`start`/`end` のみを出力。またエラー状態のカレンダーを空の `busy: []` として扱うことを禁止し、エラーを正確に保持する | プライバシー不変条件の厳守および誤った空き時間判定の防止 |
+| 2026-09-29 | workerd 実行環境における Google Calendar REST リクエスト：OAuth トークンエンドポイントと同様に全 API 呼び出しで `redirect: 'manual'` を指定し、3xx 応答を即座に拒否する | 資格情報の外部漏洩防止および workerd ランタイム制約への適合 |
+| 2026-09-29 | Google Calendar REST 入出力における明示的 RFC3339 オフセットの必須化：時間指定日時（`dateTime`）およびクエリ境界（`timeMin`/`timeMax` 等）について、`timeZone` の有無に関わらず明示的なオフセット（`Z` または `±HH:MM`）を持つ RFC3339 形式のみを受け付けるサブセットとして運用。ホスト依存のローカルタイムパースを排除し、`Date.parse` による順序判定（`end > start`）の安全性を担保。任意の IANA `timeZone` は `Intl.DateTimeFormat` で実在性を検証 | タイムゾーン解釈の曖昧さ・環境差異の排除、およびライブラリ非依存での安全な順序比較の担保 |
 
 ## 未決事項
 
