@@ -8,6 +8,7 @@ import type {
   GoogleEvent,
   GoogleEventsPage,
   InsertAclRuleInput,
+  InsertCalendarListEntryInput,
   InsertEventInput,
   PatchEventInput,
 } from '@shared/schemas/google-calendar';
@@ -521,6 +522,186 @@ describe('Task 1-2: Google Calendar REST Client', () => {
       });
 
       expect(result).toEqual(expectedFreeBusy);
+    });
+
+    it('11. calendars.delete: deletes calendar and returns void on 204 No Content', async () => {
+      const calendarId = 'cal_to_delete_123';
+
+      setupMockFetch((_req, record) => {
+        expect(record.method).toBe('DELETE');
+        expect(record.url).toBe(`${GOOGLE_CALENDAR_API_BASE}/calendars/${calendarId}`);
+        return new Response(null, { status: 204 });
+      });
+
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+      const res = await client.calendars.delete(calendarId);
+      expect(res).toBeUndefined();
+    });
+
+    it('12. calendarList.insert: inserts calendar into calendarList and validates ID', async () => {
+      const targetCalId = 'shared_calendar_456@group.calendar.google.com';
+      const expectedEntry = {
+        id: targetCalId,
+        summary: 'Shared Calendar',
+      };
+
+      setupMockFetch((_req, record) => {
+        expect(record.method).toBe('POST');
+        expect(record.url).toBe(`${GOOGLE_CALENDAR_API_BASE}/users/me/calendarList`);
+        expect(record.bodyJson).toEqual({ id: targetCalId });
+        return new Response(JSON.stringify(expectedEntry), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+      const res = await client.calendarList.insert({ id: targetCalId });
+      expect(res.id).toBe(targetCalId);
+    });
+
+    it('13. sets googleStatus and allowlisted reason on Google error responses', async () => {
+      setupMockFetch(() => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 403,
+              message: 'Forbidden call',
+              errors: [{ reason: 'forbidden' }],
+            },
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } },
+        );
+      });
+
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+      try {
+        await client.calendars.delete('some_cal');
+        expect.fail('Expected GoogleCalendarError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GoogleCalendarError);
+        const gErr = err as GoogleCalendarError;
+        expect(gErr.status).toBe(403);
+        expect(gErr.googleStatus).toBe(403);
+        expect(gErr.reason).toBe('forbidden');
+      }
+    });
+
+    it('14. calendarList.insert: rejects invalid id and extra keys before token fetch', async () => {
+      setupMockFetch();
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+
+      // Whitespace ID
+      await expect(client.calendarList.insert({ id: '  padded_id  ' })).rejects.toThrow(
+        GoogleCalendarError,
+      );
+      expect(tokenCounter).toBe(0);
+
+      // Relative path segments
+      await expect(client.calendarList.insert({ id: '..' })).rejects.toThrow(GoogleCalendarError);
+      await expect(client.calendarList.insert({ id: '.' })).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+
+      // Empty ID
+      await expect(client.calendarList.insert({ id: '' })).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+
+      // Extra unrecognized key rejected by strict schema
+      await expect(
+        client.calendarList.insert({
+          id: 'valid_id@group.calendar.google.com',
+          extraKey: 'forbidden',
+        } as unknown as InsertCalendarListEntryInput),
+      ).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+    });
+
+    it('15. calendars.delete: rejects invalid calendarId before token fetch', async () => {
+      setupMockFetch();
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+
+      // Empty string
+      await expect(client.calendars.delete('')).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+
+      // Whitespace
+      await expect(client.calendars.delete('   ')).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+
+      // Relative path segments
+      await expect(client.calendars.delete('..')).rejects.toThrow(GoogleCalendarError);
+      await expect(client.calendars.delete('.')).rejects.toThrow(GoogleCalendarError);
+      expect(tokenCounter).toBe(0);
+
+      // Non-string
+      await expect(client.calendars.delete(null as unknown as string)).rejects.toThrow(
+        GoogleCalendarError,
+      );
+      expect(tokenCounter).toBe(0);
+    });
+
+    it('16. distinguishes upstream 403 googleStatus from network/local auth null googleStatus', async () => {
+      // 1. Upstream 403 from Google REST API
+      setupMockFetch(() => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 403,
+              message: 'Forbidden upstream',
+              errors: [{ reason: 'forbidden' }],
+            },
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } },
+        );
+      });
+
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+      try {
+        await client.calendarList.insert({ id: 'shared_cal_123' });
+        expect.fail('Expected GoogleCalendarError for upstream 403');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GoogleCalendarError);
+        const gErr = err as GoogleCalendarError;
+        expect(gErr.googleStatus).toBe(403);
+        expect(gErr.status).toBe(403);
+        expect(gErr.reason).toBe('forbidden');
+      }
+
+      // 2. Network failure on non-idempotent mutation (fetch throws TypeError)
+      let googleAttemptCount = 0;
+      setupMockFetch((req) => {
+        if (req.url.startsWith(GOOGLE_CALENDAR_API_BASE)) {
+          googleAttemptCount += 1;
+          throw new TypeError('Network connection reset');
+        }
+        return undefined;
+      });
+
+      try {
+        await client.calendarList.insert({ id: 'shared_cal_123' });
+        expect.fail('Expected GoogleCalendarError for network failure');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GoogleCalendarError);
+        const gErr = err as GoogleCalendarError;
+        expect(gErr.code).toBe('UNCERTAIN_MUTATION');
+        expect(gErr.outcome).toBe('uncertain');
+        expect(gErr.googleStatus).toBeUndefined();
+        expect(gErr.reason).toBeUndefined();
+        expect(googleAttemptCount).toBe(1); // non-idempotent creation is not retried
+      }
+
+      // 3. Local auth failure (user not in DB)
+      const unauthedClient = createGoogleCalendarClient(TEST_ENV, 'nonexistent_user_id');
+      try {
+        await unauthedClient.calendarList.insert({ id: 'shared_cal_123' });
+        expect.fail('Expected GoogleCalendarError for unauthed user');
+      } catch (err) {
+        expect(err).toBeInstanceOf(GoogleCalendarError);
+        const gErr = err as GoogleCalendarError;
+        expect(gErr.code).toBe('AUTH_ERROR');
+        expect(gErr.reason).toBe('authError');
+        expect(gErr.googleStatus).toBeUndefined();
+      }
     });
   });
 

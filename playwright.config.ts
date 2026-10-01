@@ -14,7 +14,7 @@ export default defineConfig({
   projects: [
     {
       name: 'production',
-      testMatch: ['**/pwa.spec.ts', '**/auth.spec.ts'],
+      testMatch: ['**/pwa.spec.ts', '**/auth.spec.ts', '**/spike.spec.ts'],
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 390, height: 844 },
@@ -39,6 +39,9 @@ export default defineConfig({
       reuseExistingServer: false,
       stdout: 'ignore',
       stderr: 'pipe',
+      env: {
+        DANRAN_PERSIST_PATH: '.wrangler/e2e/preview',
+      },
     },
     {
       command: 'node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174 --strictPort',
@@ -46,6 +49,9 @@ export default defineConfig({
       reuseExistingServer: false,
       stdout: 'ignore',
       stderr: 'pipe',
+      env: {
+        DANRAN_PERSIST_PATH: '.wrangler/e2e/dev',
+      },
     },
   ],
 });

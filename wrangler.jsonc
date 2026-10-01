@@ -6,8 +6,9 @@
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/spike", "/spike/*"]
   },
   "vars": {
     "APP_ORIGIN": "http://localhost:5173"
@@ -33,7 +34,8 @@
     "staging": {
       "name": "danran-staging",
       "vars": {
-        "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev"
+        "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev",
+        "ENABLE_SPIKES": "true"
       },
       "d1_databases": [
         {
