@@ -9,7 +9,7 @@ export interface MemberDotProps extends React.HTMLAttributes<HTMLSpanElement> {
 export function MemberDot({ name, color, className = '', ...props }: MemberDotProps) {
   return (
     <span
-      className={`inline-flex items-center gap-[var(--spacing-xs)] text-xs font-medium text-ink ${className}`.trim()}
+      className={`inline-flex items-center gap-[var(--spacing-xs)] text-xs font-medium text-ink min-w-0 ${className}`.trim()}
       {...props}
     >
       <span
@@ -17,7 +17,7 @@ export function MemberDot({ name, color, className = '', ...props }: MemberDotPr
         style={{ backgroundColor: color }}
         aria-hidden="true"
       />
-      <span>{name}</span>
+      <span className="break-words break-all [overflow-wrap:anywhere] min-w-0">{name}</span>
     </span>
   );
 }

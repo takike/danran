@@ -12,7 +12,7 @@ export default defineConfig({
       miniflare: {
         compatibilityDate: '2026-08-15',
         compatibilityFlags: ['nodejs_compat'],
-        d1Databases: ['DB'],
+        d1Databases: ['DB', 'MIGRATION_DB'],
         r2Buckets: ['PHOTOS'],
         bindings: {
           APP_ORIGIN: 'http://localhost:5173',

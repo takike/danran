@@ -32,7 +32,7 @@ Workers 環境では `googleapis` npm パッケージが動作しないため、
 | 8 | `events.delete` | `DELETE` | `/calendars/{calId}/events/{eventId}` | 予定の削除 | `calendarId`, `eventId` → `void`（204 No Content） |
 | 9 | `events.instances` | `GET` | `/calendars/{calId}/events/{eventId}/instances` | 繰り返し予定の個別回一覧取得 | `EventsInstancesOptions` → `GoogleEventsPage` |
 | 10 | `calendarList.list` | `GET` | `/users/me/calendarList` | カレンダー一覧（free/busy 対象選択用） | `CalendarListListOptions` → `GoogleCalendarListPage`（最大 250 件） |
-| 11 | `calendarList.insert` | `POST` | `/users/me/calendarList` | カレンダー一覧への登録（スパイク・参加用） | `InsertCalendarListEntryInput` → `GoogleCalendarListEntry` |
+| 11 | `calendarList.insert` | `POST` | `/users/me/calendarList` | カレンダー一覧への登録（歴史的経緯により保持、本番未使用） | `InsertCalendarListEntryInput` → `GoogleCalendarListEntry` |
 | 12 | `freeBusy.query` | `POST` | `/freeBusy` | 個人カレンダーの空き時間問い合わせ | `FreeBusyQueryInput` → `FreeBusyQueryResponse`（プライバシー保護済み） |
 
 ### ページネーション契約
@@ -103,12 +103,11 @@ export class GoogleCalendarError extends Error {
 
 ---
 
-## 6. 要求スコープと未決事項（Spike 待ち）
+## 6. 要求スコープと設計メモ
 
-1. **ACL 共有スコープの留意点**:
-   - Google 公式リファレンスでは `acl.insert` に必要なスコープとして `calendar` または `calendar.acls` が挙げられており、`calendar.app.created` は明記されていません。
-   - 本タスクではスコープの拡張は行わず、Phase 1 認可のままとしています。実際の動作可否は続く**タスク 1-3 スパイク（2 アカウントによる検証、[docs/13-calendar-sharing-spike.md](13-calendar-sharing-spike.md)）**で判定します。
+1. **ACL 共有スコープ**:
+   - Google 公式リファレンスでは `acl.insert` に必要なスコープとして `calendar` または `calendar.acls` が挙げられています。Task 1-3 スパイク実機検証において、基本の `calendar.app.created` のみでは権限不足（403 insufficientPermissions）となることを確認済みです（Q1(a)）。API 仕様上は広範な `calendar` スコープも選択肢として存在しますが、本プロジェクトでは最小権限の原則に基づき `calendar.acls` を選択し、Task 1-4 にてオーナーの招待リンク発行時に段階的認可（incremental authorization）で要求する設計を採用しています。
 2. **`freeBusy.query` のスコープ**:
-   - 本タスクでは将来の Phase 2（空き状況取得）に向けたクライアントメソッドとして実装していますが、Phase 1 の OAuth 認可スコープには `calendar.freebusy` は含まれていません（Phase 2 で段階的認可を実施予定）。
-3. **`calendarList.insert`**:
-   - タスク 1-3 スパイク（およびタスク 1-4 家族への参加・カレンダー追加）向けにクライアントメソッドとして実装。招待された大人が自身の `calendarList` に共有カレンダーを登録できるかを実機検証します（公式ドキュメントでは `calendar` または `calendar.calendarlist` が記載）。
+   - 将来の Phase 2（空き状況取得）に向けたクライアントメソッドとして実装していますが、Phase 1 の OAuth 認可スコープには `calendar.freebusy` は含まれていません（Phase 2 で段階的認可を実施予定）。
+3. **`calendarList.insert` メソッド（歴史的経緯により保持、本番未使用）**:
+   - Task 1-3 スパイク検証用にクライアントメソッドとして実装されましたが、スパイクによりこのメソッドの実行には `calendar.calendarlist` または `calendar` スコープが必要（403 拒否）であることが判明しました。Task 1-4 ではスコープを拡大せず、Google カレンダー共有通知メール（「カレンダーを追加」リンク）経由で参加者が自身のカレンダーに追加する方式を採用したため、本番アプリケーションコードからは呼び出されない歴史的メソッドとして保持されています。

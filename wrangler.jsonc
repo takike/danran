@@ -34,8 +34,7 @@
     "staging": {
       "name": "danran-staging",
       "vars": {
-        "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev",
-        "ENABLE_SPIKES": "true"
+        "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev"
       },
       "d1_databases": [
         {
