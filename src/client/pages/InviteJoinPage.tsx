@@ -3,6 +3,7 @@ import { Card } from '@client/components/Card';
 import { MemberDot } from '@client/components/MemberDot';
 import { SESSION_QUERY_KEY, useSessionQuery } from '@client/features/auth/useSession';
 import {
+  FAMILIES_QUERY_KEY,
   INVITE_INSPECT_QUERY_KEY,
   getColorCssVar,
   useInspectInviteQuery,
@@ -192,6 +193,16 @@ export default function InviteJoinPage(): React.ReactElement {
         token: currentToken,
         family,
       });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [...FAMILIES_QUERY_KEY, currentUserId],
+          exact: true,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [...INVITE_INSPECT_QUERY_KEY, currentToken, currentUserId],
+          exact: true,
+        }),
+      ]);
     } catch (err: unknown) {
       if (
         generationRef.current !== currentGen ||
@@ -204,6 +215,11 @@ export default function InviteJoinPage(): React.ReactElement {
       const errorObj = err as { status?: number; code?: string };
       if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
         await handleAuthRevocation();
+      } else if (errorObj?.code === 'UNCERTAIN_MUTATION') {
+        await queryClient.invalidateQueries({
+          queryKey: [...INVITE_INSPECT_QUERY_KEY, currentToken, currentUserId],
+          exact: true,
+        });
       }
     }
   };
@@ -350,7 +366,7 @@ export default function InviteJoinPage(): React.ReactElement {
                 <div className="flex items-center gap-[var(--spacing-sm)]">
                   <CheckCircle2
                     size={24}
-                    className="text-[var(--member-mama)] shrink-0"
+                    className="text-[var(--member-green)] shrink-0"
                     aria-hidden="true"
                   />
                   <div>
@@ -515,6 +531,18 @@ export default function InviteJoinPage(): React.ReactElement {
                           <Users size={18} aria-hidden="true" />
                           <span>
                             {joinFamilyMutation.isPending ? '参加処理中...' : 'この家族に参加する'}
+                          </span>
+                        </button>
+                      ) : inspectQuery.data.status === 'uncertain' ? (
+                        <button
+                          type="button"
+                          data-testid="join-family-button"
+                          disabled={joinFamilyMutation.isPending}
+                          onClick={handleJoin}
+                          className="w-full min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-sm)] bg-accent text-surface rounded-[var(--radius-md)] text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center justify-center gap-[var(--spacing-sm)] text-center box-border cursor-pointer"
+                        >
+                          <span>
+                            {joinFamilyMutation.isPending ? '確認中...' : '参加状態を確認する'}
                           </span>
                         </button>
                       ) : (

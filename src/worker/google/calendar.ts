@@ -1,5 +1,6 @@
 import {
   type AclInsertOptions,
+  type AclListOptions,
   type CalendarListListOptions,
   type EventsDeleteOptions,
   type EventsGetOptions,
@@ -9,6 +10,7 @@ import {
   type EventsPatchOptions,
   type FreeBusyQueryInput,
   type FreeBusyQueryResponse,
+  type GoogleAclListPage,
   type GoogleAclRule,
   type GoogleCalendar,
   type GoogleCalendarListEntry,
@@ -21,6 +23,7 @@ import {
   type InsertEventInput,
   type PatchEventInput,
   aclInsertOptionsSchema,
+  aclListOptionsSchema,
   calendarListListOptionsSchema,
   eventsDeleteOptionsSchema,
   eventsGetOptionsSchema,
@@ -30,6 +33,7 @@ import {
   eventsPatchOptionsSchema,
   freeBusyQueryInputSchema,
   freeBusyQueryResponseSchema,
+  googleAclListPageResponseSchema,
   googleAclRuleResponseSchema,
   googleApiErrorBodySchema,
   googleCalendarListEntrySchema,
@@ -529,7 +533,7 @@ async function executeVoidRequest(options: VoidRequestOptions): Promise<void> {
 }
 
 /**
- * Public Google Calendar Client interface exposing twelve scoped methods.
+ * Public Google Calendar Client interface exposing thirteen scoped methods.
  */
 export interface GoogleCalendarClient {
   calendars: {
@@ -542,6 +546,7 @@ export interface GoogleCalendarClient {
       rule: InsertAclRuleInput,
       options?: AclInsertOptions,
     ): Promise<GoogleAclRule>;
+    list(calendarId: string, options?: AclListOptions): Promise<GoogleAclListPage>;
   };
   events: {
     list(calendarId: string, options?: EventsListOptions): Promise<GoogleEventsPage>;
@@ -650,6 +655,35 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
           bodyText: JSON.stringify(validatedRule.data),
           isNonIdempotentCreation: true,
           responseSchema: googleAclRuleResponseSchema,
+        });
+      },
+
+      async list(calendarId: string, options?: AclListOptions): Promise<GoogleAclListPage> {
+        const encodedCalendarId = validatePathSegment('calendarId', calendarId);
+        const validatedOptions = aclListOptionsSchema.safeParse(options ?? {});
+        if (!validatedOptions.success) {
+          throw new GoogleCalendarError({
+            message: 'Invalid request arguments for Google Calendar API',
+            code: 'INVALID_INPUT',
+            status: 400,
+          });
+        }
+
+        const queryParams: Record<string, unknown> = {};
+        if (validatedOptions.data.maxResults !== undefined) {
+          queryParams.maxResults = validatedOptions.data.maxResults;
+        }
+        if (validatedOptions.data.pageToken !== undefined) {
+          queryParams.pageToken = validatedOptions.data.pageToken;
+        }
+
+        return await executeJsonRequest<GoogleAclListPage>({
+          env,
+          userId,
+          method: 'GET',
+          path: `/calendars/${encodedCalendarId}/acl`,
+          queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+          responseSchema: googleAclListPageResponseSchema,
         });
       },
     },

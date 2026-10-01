@@ -88,10 +88,14 @@ export default function DevUiPage() {
           メンバー色ドット (MemberDot)
         </h2>
         <div className="flex flex-wrap gap-[var(--spacing-md)] items-center">
-          <MemberDot name="メンバーA" color="var(--member-papa)" />
-          <MemberDot name="メンバーB" color="var(--member-mama)" />
-          <MemberDot name="メンバーC" color="var(--member-daughter)" />
-          <MemberDot name="メンバーD" color="var(--member-son)" />
+          <MemberDot name="藍" color="var(--member-indigo)" />
+          <MemberDot name="深緑" color="var(--member-green)" />
+          <MemberDot name="黄土" color="var(--member-ochre)" />
+          <MemberDot name="紫" color="var(--member-purple)" />
+          <MemberDot name="珊瑚" color="var(--member-coral)" />
+          <MemberDot name="青緑" color="var(--member-teal)" />
+          <MemberDot name="薔薇" color="var(--member-rose)" />
+          <MemberDot name="石板" color="var(--member-slate)" />
         </div>
       </section>
 

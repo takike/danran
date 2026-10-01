@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5797130f-256c-4175-bbc7-450fd6158704",
+  "id": "6a699856-5e9f-4400-a0dc-309004446616",
   "prevId": "bcb1899a-8d13-454c-9f47-55fb89a6a05c",
   "tables": {
     "closure_days": {
@@ -126,6 +126,14 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'creating'"
+        },
+        "calendar_creation_id": {
+          "name": "calendar_creation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(lower(hex(randomblob(16))))"
         },
         "created_at": {
           "name": "created_at",
@@ -475,6 +483,10 @@
         "members_user_id_kind_check": {
           "name": "members_user_id_kind_check",
           "value": "(kind = 'adult' AND user_id IS NOT NULL) OR (kind = 'child' AND user_id IS NULL)"
+        },
+        "members_color_check": {
+          "name": "members_color_check",
+          "value": "color IN ('indigo', 'green', 'ochre', 'purple', 'coral', 'teal', 'rose', 'slate')"
         }
       }
     },

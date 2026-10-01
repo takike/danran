@@ -6,6 +6,7 @@ CREATE TABLE `families` (
 	`day_start_hour` integer DEFAULT 8 NOT NULL,
 	`day_end_hour` integer DEFAULT 20 NOT NULL,
 	`creation_status` text DEFAULT 'creating' NOT NULL,
+	`calendar_creation_id` text DEFAULT (lower(hex(randomblob(16)))) NOT NULL,
 	`created_at` integer DEFAULT (unixepoch()) NOT NULL,
 	FOREIGN KEY (`owner_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict
 );
@@ -40,7 +41,8 @@ CREATE TABLE `members` (
 	`status` text DEFAULT 'active' NOT NULL,
 	FOREIGN KEY (`family_id`) REFERENCES `families`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE restrict,
-	CONSTRAINT "members_user_id_kind_check" CHECK((kind = 'adult' AND user_id IS NOT NULL) OR (kind = 'child' AND user_id IS NULL))
+	CONSTRAINT "members_user_id_kind_check" CHECK((kind = 'adult' AND user_id IS NOT NULL) OR (kind = 'child' AND user_id IS NULL)),
+	CONSTRAINT "members_color_check" CHECK(color IN ('indigo', 'green', 'ochre', 'purple', 'coral', 'teal', 'rose', 'slate'))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `members_user_id_unique` ON `members` (`user_id`);--> statement-breakpoint

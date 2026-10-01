@@ -16,9 +16,9 @@ Workers 環境では `googleapis` npm パッケージが動作しないため、
 
 ---
 
-## 2. 実装済み 12 メソッド一覧
+## 2. 実装済みメソッド一覧
 
-本クライアントで実装されたメソッドは以下の 12 件です：
+本クライアントで実装されたメソッドは以下の 13 件です：
 
 | # | メソッド | HTTP | パス | 概要 | 主な引数・戻り値 |
 |---|---|---|---|---|---|
@@ -34,10 +34,13 @@ Workers 環境では `googleapis` npm パッケージが動作しないため、
 | 10 | `calendarList.list` | `GET` | `/users/me/calendarList` | カレンダー一覧（free/busy 対象選択用） | `CalendarListListOptions` → `GoogleCalendarListPage`（最大 250 件） |
 | 11 | `calendarList.insert` | `POST` | `/users/me/calendarList` | カレンダー一覧への登録（歴史的経緯により保持、本番未使用） | `InsertCalendarListEntryInput` → `GoogleCalendarListEntry` |
 | 12 | `freeBusy.query` | `POST` | `/freeBusy` | 個人カレンダーの空き時間問い合わせ | `FreeBusyQueryInput` → `FreeBusyQueryResponse`（プライバシー保護済み） |
+| 13 | [`acl.list`](https://developers.google.com/workspace/calendar/api/v3/reference/acl/list) | `GET` | `/calendars/{calId}/acl` | 既存共有ルールの照合（409 後の writer 検証） | `calendarId`, `AclListOptions`（`maxResults` 1〜250、`pageToken`）→ `GoogleAclListPage` |
 
 ### ページネーション契約
 
-一覧取得メソッド（`events.list`、`events.instances`、`calendarList.list`）は**単一ページ**を返却します。クライアントまたは呼び出し側サービスが `nextPageToken` を評価して反復処理を行う契約としており、クライアント内部で暗黙の自動切り捨てや無限フェッチを行いません。
+一覧取得メソッド（`events.list`、`events.instances`、`calendarList.list`、`acl.list`）は**単一ページ**を返却します。クライアントまたは呼び出し側サービスが `nextPageToken` を評価して反復処理を行う契約としており、クライアント内部で暗黙の自動切り捨てや無限フェッチを行いません。
+
+`acl.list` は、ACL 挿入で Google が 409 Conflict を返した場合の安全な照合に使います。呼び出し側はページを上限付きで走査し、対象ユーザーの `writer` ルールを確認できた場合だけ既存成功として扱います。確認できない、または走査が不完全な場合は結果を未確定のまま保持します。
 
 ---
 

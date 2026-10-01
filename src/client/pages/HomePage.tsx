@@ -170,7 +170,7 @@ export default function HomePage(): React.ReactElement {
 
             <Card className="bg-surface border border-line rounded-[var(--radius-md)] p-[var(--spacing-md)]">
               <div className="flex items-center gap-[var(--spacing-xs)] text-ink mb-[var(--spacing-xs)]">
-                <Shield size={16} className="text-[var(--member-mama)]" aria-hidden="true" />
+                <Shield size={16} className="text-[var(--member-green)]" aria-hidden="true" />
                 <h3 className="text-xs font-semibold m-0">プライバシーを保護</h3>
               </div>
               <p className="text-xs text-muted m-0 leading-relaxed">

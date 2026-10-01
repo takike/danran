@@ -5,15 +5,18 @@ import {
   issueInvite,
   joinFamily,
   loginWithInviteToken,
+  reconcileFamily,
   updateChildren,
 } from '@client/api/family';
-import type {
-  ChildInput,
-  CreateFamilyInput,
-  FamilyPublic,
-  InviteIssueResponse,
-  JoinInfoResponse,
-  MemberColor,
+import {
+  type ChildInput,
+  type CreateFamilyInput,
+  type FamilyPublic,
+  type InviteIssueResponse,
+  type JoinInfoResponse,
+  MEMBER_COLORS,
+  MEMBER_COLOR_LABELS,
+  type MemberColor,
 } from '@shared/schemas/family';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -26,41 +29,21 @@ export interface ColorOption {
   cssVar: string;
 }
 
-export const MEMBER_COLOR_OPTIONS: ColorOption[] = [
-  { value: 'papa', label: '藍（パパ）', cssVar: 'var(--member-papa)' },
-  { value: 'mama', label: '緑（ママ）', cssVar: 'var(--member-mama)' },
-  { value: 'daughter', label: '黄土（長女）', cssVar: 'var(--member-daughter)' },
-  { value: 'son', label: '紫（長男）', cssVar: 'var(--member-son)' },
-];
+export const MEMBER_COLOR_OPTIONS: ColorOption[] = MEMBER_COLORS.map((color) => ({
+  value: color,
+  label: MEMBER_COLOR_LABELS[color],
+  cssVar: `var(--member-${color})`,
+}));
 
 export function getColorCssVar(color: MemberColor): string {
-  switch (color) {
-    case 'papa':
-      return 'var(--member-papa)';
-    case 'mama':
-      return 'var(--member-mama)';
-    case 'daughter':
-      return 'var(--member-daughter)';
-    case 'son':
-      return 'var(--member-son)';
-    default:
-      return 'var(--muted)';
+  if (MEMBER_COLORS.includes(color)) {
+    return `var(--member-${color})`;
   }
+  return 'var(--muted)';
 }
 
 export function getColorLabel(color: MemberColor): string {
-  switch (color) {
-    case 'papa':
-      return '藍';
-    case 'mama':
-      return '緑';
-    case 'daughter':
-      return '黄土';
-    case 'son':
-      return '紫';
-    default:
-      return color;
-  }
+  return MEMBER_COLOR_LABELS[color] ?? color;
 }
 
 /**
@@ -144,14 +127,8 @@ export function useInspectInviteQuery(
  * Mutation to join a family using an invite token.
  */
 export function useJoinFamilyMutation() {
-  const queryClient = useQueryClient();
-
   return useMutation<FamilyPublic, Error, { token: string; signal?: AbortSignal }>({
     mutationFn: ({ token, signal }) => joinFamily(token, signal),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: FAMILIES_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: INVITE_INSPECT_QUERY_KEY });
-    },
   });
 }
 
@@ -161,5 +138,14 @@ export function useJoinFamilyMutation() {
 export function useLoginWithInviteMutation() {
   return useMutation<string, Error, { inviteToken: string; signal?: AbortSignal }>({
     mutationFn: ({ inviteToken, signal }) => loginWithInviteToken(inviteToken, signal),
+  });
+}
+
+/**
+ * Mutation to reconcile uncertain family creation state with Google Calendar.
+ */
+export function useReconcileFamilyMutation() {
+  return useMutation<FamilyPublic, Error, { familyId: string; signal?: AbortSignal }>({
+    mutationFn: ({ familyId, signal }) => reconcileFamily(familyId, signal),
   });
 }

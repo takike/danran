@@ -23,6 +23,9 @@ Task 1-3 の実機検証結果に基づき、以下の共有方式を採用し�
    - 参加時にサーバーが `acl.insert`（writer 権限、`sendNotifications=true`）を実行。
 5. **普段の Google カレンダーへの表示案内**:
    - 招待された大人は、Google から届く共有通知メール内の「カレンダーを追加」リンクから自身の Google カレンダーに追加（`calendarList.insert`は呼ばず、`calendar.calendarlist`スコープは要求しない）。
+6. **不確定状態からの明示的な復旧**:
+   - 家族カレンダー作成が `uncertain` の場合、オーナーが画面の「状態を確認する」を押したときだけ `calendarList.list` で照合します。作成試行ごとの `calendarCreationId` を照合マーカーとして用い、完全な一覧で一意に一致した場合だけ `ready` にします。
+   - 招待 ACL 付与が `uncertain` の場合、元の招待をそのユーザーが明示的に再確認します。参加者の `pending` メンバー行と紐づく同じ招待を再利用し、別ユーザーの引き受けや別メンバー行の作成はしません。`claiming` の HTTP 200 応答を確認できるのは元の引受ユーザーだけで、別ユーザーには `USED_INVITE`（HTTP 410）を返します。
 
 ---
 
@@ -34,6 +37,7 @@ Task 1-3 の実機検証結果に基づき、以下の共有方式を採用し�
 | `GET` | `/api/families/:id` | 必須 | ログイン中ユーザーがオーナーまたはアクティブメンバーである指定家族の取得（非メンバーまたは存在しない場合は 404 NOT_FOUND） | 200 OK: `{ family: FamilyPublic }` |
 | `POST` | `/api/families` | 必須 | 家族カレンダーの新規作成および初期メンバー（オーナー）登録（新規作成時は 201 Created、同一オーナーで既に `ready` 状態の家族が存在する場合は 200 OK で既存家族を返却） | Body: `{ name: string, children?: ChildInput[] }`<br>201 Created / 200 OK: `{ family: FamilyPublic }` |
 | `PUT` | `/api/families/:id/children` | 必須（オーナー限定） | 子どもメンバー情報の一括置換（0〜10人、オーナー限定） | Body: `{ children: ChildInput[] }`<br>200 OK: `{ family: FamilyPublic }` |
+| `POST` | `/api/families/:id/reconcile` | 必須（オーナー限定） | `uncertain` な家族カレンダー作成を Google 上で照合。ready 状態の再要求は冪等 | Body: `{}`<br>200 OK: `{ family: FamilyPublic }` |
 | `POST` | `/api/families/:id/invites` | 必須（オーナー限定） | 招待リンクの発行または段階的認可 URL の要求（オーナー限定） | 200 OK: `{ authorizationRequired: true, authorizationUrl: string }`<br>または `{ authorizationRequired: false, inviteUrl: string, expiresAt: number }` |
 | `POST` | `/api/invites/inspect` | 必須 | 招待トークンの有効性・家族名の照会（期限切れ時は HTTP 410 Gone） | Body: `{ token: string }`<br>200 OK: `{ familyName: string, status: InviteStatus, alreadyMember: boolean }` |
 | `POST` | `/api/invites/join` | 必須 | 招待トークンによる明示的な家族参加 | Body: `{ token: string }`<br>200 OK: `{ family: FamilyPublic }` |
@@ -49,7 +53,7 @@ Task 1-3 の実機検証結果に基づき、以下の共有方式を採用し�
   - `NOT_FOUND`: 「対象のデータが見つかりませんでした。」
   - `ALREADY_IN_FAMILY`: 「すでに家族に所属しています。別の家族には参加できません。」
   - `IN_PROGRESS`: 「現在処理中です。しばらくお待ちください。」
-  - `UNCERTAIN_MUTATION`: 「処理結果を確認できませんでした。二重作成を防ぐため再試行は行わず、Google カレンダーで同名カレンダーの有無を確認し手動で整理してください。」
+  - `UNCERTAIN_MUTATION`: 「処理結果を確認できませんでした。状態を確認するか、しばらく経ってから再度お試しください。」不確定な家族作成は専用の状態確認操作で復旧し、不確定な招待参加は引き受け済み本人に限り明示的な再確認を許可します。
   - `GOOGLE_ERROR`: 「Google カレンダーとの通信に失敗しました。時間をおいて再度お試しください。」
   - `REAUTH_REQUIRED`: 「Google カレンダーの認可が不足しています。家族のオーナーに招待リンクの再発行を依頼してください。」
   - `INTERNAL_ERROR`: 「サーバーで問題が発生しました。しばらく経ってから再度お試しください。」
@@ -67,6 +71,7 @@ CREATE TABLE families (
   name TEXT NOT NULL,
   family_calendar_id TEXT UNIQUE,
   owner_user_id TEXT NOT NULL UNIQUE REFERENCES users(id),
+  calendar_creation_id TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))), -- 作成試行マーカー。API には公開しない
   day_start_hour INTEGER NOT NULL DEFAULT 8,
   day_end_hour INTEGER NOT NULL DEFAULT 20,
   creation_status TEXT NOT NULL DEFAULT 'creating', -- 'creating', 'ready', 'uncertain', 'failed'
@@ -80,7 +85,7 @@ CREATE TABLE members (
   user_id TEXT UNIQUE REFERENCES users(id), -- 子どもの場合は NULL
   kind TEXT NOT NULL,                      -- 'adult', 'child'
   name TEXT NOT NULL,
-  color TEXT NOT NULL,                     -- 'papa', 'mama', 'daughter', 'son'
+  color TEXT NOT NULL CHECK (color IN ('indigo', 'green', 'ochre', 'purple', 'coral', 'teal', 'rose', 'slate')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active'    -- 'pending', 'active'
 );
@@ -106,9 +111,15 @@ CREATE TABLE invites (
    - 招待受諾処理中の競合状態や多重登録を防ぐため、参加処理の段階に応じてステータスを管理します。
 3. **カレンダー作成状態の曖昧性管理（Creation Uncertainty）**:
    - Google Calendar API（`calendars.insert`）の呼び出しと D1 のコミットは非アトミックです。
-   - 途中でネットワーク切断や 5xx エラーが発生した場合、`creation_status = 'uncertain'` として記録。
-    - UI 上では盲目的な「作成の再試行」ボタンを無効化し、Google カレンダー側で重複作成が行われないよう、手動確認と再読み込みを促します。
-4. **休園日テーブルの外部キー移行**:
+   - 途中でネットワーク切断や 5xx エラーが発生した場合、`creation_status = 'uncertain'` として記録します。
+   - `calendarCreationId` を Google カレンダー説明欄の `danran-family:<familyId>;creation:<creationId>` に含めます。カレンダー名は `Danran（<family.name>）` で、summary はこの文字列と完全一致させます。照合はオーナー権限、非 primary・非 deleted、説明マーカー完全一致を要求し、`dataOwner` が存在する場合は検証済みオーナーメールとも一致させます。
+   - 全ページを安全に走査して一意一致なら `ready`、完全走査でゼロ件なら `failed` とします。複数一致、ページング異常、途中エラー、無効な応答では `uncertain` を維持します。Google への照会前後に認証・所有権を確認し、作成試行 ID と状態の CAS が一致するときだけ書き込みます。
+   - UI は盲目的な作成再試行を行わず、オーナーの明示的な「状態を確認する」操作だけで照合 API を呼びます。完全走査で `failed` になった後の新しい作成試行は新しい `calendarCreationId` を先に発行します。
+4. **招待参加と不確定 ACL の復旧**:
+   - `available` 招待は7日で失効します。期限前に引受処理を開始して `uncertain` になった招待は、同じ `claimed_user_id` と同じ `pending` adult member に限り、期限後も状態照会・再試行を許可します。
+   - 不確定後の再試行では、Google エラーや内部エラーを含む失敗時も招待と pending メンバーを保持して `uncertain` に戻します。最初の ACL 挿入が成功していた可能性を失わないためです。
+   - Google が ACL 挿入に 409 を返した場合、`acl.list` の完全な走査で同じ宛先の `writer` ルールを確認できた場合のみ成功扱いとします。照合できない場合は不確定状態を保持します。
+5. **休園日テーブルの外部キー移行**:
    - Task 1-5 で先行配備された `closure_days.family_id`（論理参照）に対し、Task 1-4 の `families` テーブル配備に伴い外部キー制約を付与。既存データに孤立レコードが存在する場合はマイグレーションが拒否され、既存行は保持されます（サイレントな自動削除や穴埋めは行いません）。新規登録時にも孤立レコードの発生を防止します。
 
 ---
@@ -145,10 +156,11 @@ CREATE TABLE invites (
 - **未認証時**: ログイン案内と Google ログインボタンを表示。
 - **家族未作成時**: 家族名入力フォーム（最大80文字）と「家族を作成する」ボタンを表示（この時点では ACL 認可は要求しない）。
 - **作成中・未確定時（`creating` / `uncertain`）**:
-  - 状態案内ボックスを表示し、重複作成を防ぐため盲目的再試行を禁止。再読み込みボタンを配置。
+  - 状態案内ボックスを表示。オーナーの `uncertain` 状態では「状態を確認する」ボタンを表示し、実行中は「確認中...」にして再押下を防ぎます。`creating` は読み取り更新のみを許可します。
+  - 家族作成リクエストが `UNCERTAIN_MUTATION` になった場合は、同じユーザーの家族一覧を読み直して状態を表示します。作成や状態確認 API は自動で再送しません。
 - **準備完了時（`ready`）**:
   - 家族名とステータスバッジ（「準備完了」）、メンバー凡例（色ドット＋名前）を表示。
-  - **子ども編集（オーナー限定）**: 子どもメンバーの名前入力と色選択（藍: papa, 緑: mama, 黄土: daughter, 紫: son）。追加（最大10人）・削除（>=44px タップ領域）・保存。
+  - **子ども編集（オーナー限定）**: 子どもメンバーの名前入力と色選択（藍、深緑、黄土、紫、珊瑚、青緑、薔薇、石板）。追加（最大10人）・削除（44px 以上のタップ領域）・保存。初期色はパレット順です。
   - **招待発行（オーナー限定）**:
     - オーナー以外には「招待リンクの発行は家族カレンダーの作成者のみ行えます」と表示。
     - オーナーが「招待リンクを発行する」を押下。
@@ -164,7 +176,7 @@ CREATE TABLE invites (
   - 家族カレンダーへの招待案内と「Google でログインして参加」ボタンを表示。
 - **認証済み・確認時**:
   - 家族名を照会して表示。
-  - 参加処理中（`claiming` / `uncertain`）の場合はボタンを無効化しオーナー確認を案内。
+  - 自分が引き受けた `claiming` 招待は状態案内を表示して参加ボタンを無効化します（別ユーザーには `USED_INVITE`、HTTP 410 が返ります）。自分が引き受けた `uncertain` 招待では「参加状態を確認する」を明示表示し、押下時のみ同じ参加処理を再実行します。実行中は「確認中...」で無効化します。
   - 使用済み（`used`）の場合は固定エラー「この招待リンクは既に使用されています。」を表示。
   - 期限切れ（`EXPIRED_INVITE`、HTTP 410）の場合は固定エラー「招待リンクの有効期限が切れています。」を表示し、参加ボタンは表示されない（fail-closed）。
   - 有効な場合、明示的な「この家族に参加する」ボタンを表示。

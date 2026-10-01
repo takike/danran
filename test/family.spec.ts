@@ -1,5 +1,7 @@
 import { env } from 'cloudflare:test';
 import {
+  MEMBER_COLORS,
+  type MemberColor,
   createFamilyResponseSchema,
   familyDetailResponseSchema,
   familyErrorResponseSchema,
@@ -7,6 +9,7 @@ import {
   inviteIssueResponseSchema,
   joinInfoResponseSchema,
   joinSuccessResponseSchema,
+  memberColorSchema,
 } from '@shared/schemas/family';
 import { FAMILY_ACL_SCOPE, PHASE1_SCOPES, SESSION_COOKIE_NAME } from '@worker/auth/config';
 import { encryptAesGcm, generateRandomToken, sha256Hex } from '@worker/auth/crypto';
@@ -226,6 +229,50 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
   }
 
   describe('1. Family Creation Sequence, Children Management, & Edge Cases', () => {
+    it('accepts the eight member colors and rejects legacy relationship labels in both Zod and D1', async () => {
+      expect(MEMBER_COLORS).toEqual([
+        'indigo',
+        'green',
+        'ochre',
+        'purple',
+        'coral',
+        'teal',
+        'rose',
+        'slate',
+      ]);
+      for (const color of MEMBER_COLORS)
+        expect(memberColorSchema.safeParse(color).success).toBe(true);
+      for (const color of ['papa', 'mama', 'daughter', 'son']) {
+        expect(memberColorSchema.safeParse(color).success).toBe(false);
+      }
+
+      const owner = await createTestUser({
+        id: 'usr_palette_check',
+        googleSub: 'sub-palette-check',
+        email: 'palette@example.test',
+        displayName: 'Palette Test',
+      });
+      await db.insert(families).values({
+        id: 'fam_palette_check',
+        name: '色検証家',
+        ownerUserId: owner.user.id,
+        creationStatus: 'ready',
+        calendarCreationId: 'palette-creation',
+      });
+      await expect(
+        db.insert(members).values({
+          id: 'mem_palette_invalid',
+          familyId: 'fam_palette_check',
+          userId: null,
+          kind: 'child',
+          name: '子ども',
+          color: 'daughter' as MemberColor,
+          sortOrder: 1,
+          status: 'active',
+        }),
+      ).rejects.toThrow();
+    });
+
     it('creates a family, provisions Google Calendar, reserves owner and child members atomically, and returns strictly mapped schema', async () => {
       const owner = await createTestUser({
         id: 'usr_owner_1',
@@ -246,7 +293,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           },
           body: JSON.stringify({
             name: '池町家',
-            children: [{ name: 'はな', color: 'daughter' }],
+            children: [{ name: 'はな', color: 'ochre' }],
           }),
         },
         TEST_ENV,
@@ -266,14 +313,14 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Takuya',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
       });
       expect(data.family.members[1]).toMatchObject({
         userId: null,
         kind: 'child',
         name: 'はな',
-        color: 'daughter',
+        color: 'ochre',
         sortOrder: 1,
       });
 
@@ -328,7 +375,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           },
           body: JSON.stringify({
             name: '子どもテスト家',
-            children: [{ name: 'はな', color: 'daughter' }],
+            children: [{ name: 'はな', color: 'ochre' }],
           }),
         },
         TEST_ENV,
@@ -349,8 +396,8 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           },
           body: JSON.stringify({
             children: [
-              { name: 'はな', color: 'daughter' },
-              { name: 'はる', color: 'son' },
+              { name: 'はな', color: 'ochre' },
+              { name: 'はる', color: 'purple' },
             ],
           }),
         },
@@ -375,8 +422,8 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           },
           body: JSON.stringify({
             children: [
-              { name: 'はな', color: 'daughter' },
-              { name: 'はる', color: 'son' },
+              { name: 'はな', color: 'ochre' },
+              { name: 'はる', color: 'purple' },
             ],
           }),
         },
@@ -408,7 +455,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           },
           body: JSON.stringify({
             name: '子無し更新家',
-            children: [{ name: 'はな', color: 'daughter' }],
+            children: [{ name: 'はな', color: 'ochre' }],
           }),
         },
         TEST_ENV,
@@ -732,7 +779,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Retry Race Owner',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -843,7 +890,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: otherOwner.user.id,
         kind: 'adult',
         name: 'Other Owner',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -928,7 +975,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
       }
     });
 
-    it('handles Google Calendar uncertain mutation (5xx/network): marks family uncertain, includes in owner list with uncertain status, and denies retry with 409 UNCERTAIN_MUTATION', async () => {
+    it('keeps uncertain calendar creation fenced until the owner uses reconcile', async () => {
       const owner = await createTestUser({
         id: 'usr_owner_uncertain',
         googleSub: 'google-sub-uncertain',
@@ -1434,7 +1481,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: pendingJoiner.user.id,
         kind: 'adult',
         name: 'Pending Joiner',
-        color: 'mama',
+        color: 'green',
         sortOrder: 1,
         status: 'pending',
       });
@@ -1508,7 +1555,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           userId: owner.user.id,
           kind: 'adult',
           name: 'Owner',
-          color: 'papa',
+          color: 'indigo',
           sortOrder: 0,
           status: 'active',
         },
@@ -1518,7 +1565,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           userId: memberUser.user.id,
           kind: 'adult',
           name: 'Member Adult',
-          color: 'mama',
+          color: 'green',
           sortOrder: 1,
           status: 'active',
         },
@@ -1828,7 +1875,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           userId: owner.user.id,
           kind: 'adult',
           name: 'Owner',
-          color: 'papa',
+          color: 'indigo',
           sortOrder: 0,
           status: 'active',
         },
@@ -1838,7 +1885,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
           userId: joiner.user.id,
           kind: 'adult',
           name: 'Joiner',
-          color: 'mama',
+          color: 'green',
           sortOrder: 1,
           status: 'active',
         },
@@ -1954,7 +2001,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner Join Race',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -2093,7 +2140,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner Two Invites',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -2199,7 +2246,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
       }
     });
 
-    it('handles Google ACL uncertain error (5xx/network): marks invite uncertain, member remains pending, joiner denied GET access, and join cannot be retried', async () => {
+    it('retries uncertain ACL sharing only for the original claimant and keeps their pending member', async () => {
       const owner = await createTestUser({
         id: 'usr_owner_acl_uncertain',
         googleSub: 'sub-owner-acl-uncertain',
@@ -2230,7 +2277,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -2248,12 +2295,14 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
       });
 
       // Simulate 500 error from Google ACL
+      let aclCallCount = 0;
       vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
         const req = input instanceof Request ? input : new Request(input, init);
         if (req.url === 'https://oauth2.googleapis.com/token') {
           return mockGoogleTokenResponse();
         }
         if (req.url.includes('/acl')) {
+          aclCallCount++;
           return new Response(
             JSON.stringify({ error: { code: 500, message: 'Google ACL Internal Error' } }),
             { status: 500, headers: { 'Content-Type': 'application/json' } },
@@ -2310,7 +2359,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
       const listData = familyListResponseSchema.parse(await listRes.json());
       expect(listData.families).toHaveLength(0);
 
-      // Subsequent join attempt returns 409 UNCERTAIN_MUTATION with no Google ACL call
+      // Explicit retry replays the ACL grant for the same claimant and preserves the reservation.
       const retryJoin = await app.request(
         `${TEST_ORIGIN}/api/invites/join`,
         {
@@ -2325,9 +2374,16 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         },
         TEST_ENV,
       );
-      expect(retryJoin.status).toBe(409);
+      expect(retryJoin.status).toBe(500);
       const retryBody = familyErrorResponseSchema.parse(await retryJoin.json());
       expect(retryBody.code).toBe('UNCERTAIN_MUTATION');
+      expect(aclCallCount).toBe(2);
+      const pendingAfterRetry = await db
+        .select()
+        .from(members)
+        .where(eq(members.userId, joiner.user.id));
+      expect(pendingAfterRetry).toHaveLength(1);
+      expect(pendingAfterRetry[0]?.id).toBe(joinerMembers[0]?.id);
     });
 
     it('handles definitive Google ACL error (403): resets invite to available, deletes pending member, and permits explicit retry', async () => {
@@ -2361,7 +2417,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -2500,7 +2556,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });
@@ -2598,7 +2654,7 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
         userId: owner.user.id,
         kind: 'adult',
         name: 'Owner Lost',
-        color: 'papa',
+        color: 'indigo',
         sortOrder: 0,
         status: 'active',
       });

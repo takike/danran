@@ -16,6 +16,7 @@ import {
   inviteIssueResponseSchema,
   joinInfoResponseSchema,
   joinSuccessResponseSchema,
+  reconcileFamilyResponseSchema,
 } from '@shared/schemas/family';
 import { z } from 'zod';
 
@@ -42,7 +43,7 @@ export const FAMILY_ERROR_MESSAGES: Record<FamilyErrorCode, string> = {
   ALREADY_IN_FAMILY: 'すでに家族に所属しています。別の家族には参加できません。',
   IN_PROGRESS: '現在処理中です。しばらくお待ちください。',
   UNCERTAIN_MUTATION:
-    '処理結果を確認できませんでした。二重作成を防ぐため再試行は行わず、Google カレンダーで同名カレンダーの有無を確認し手動で整理してください。',
+    '処理結果を確認できませんでした。状態を確認するか、しばらく経ってから再度お試しください。',
   GOOGLE_ERROR: 'Google カレンダーとの通信に失敗しました。時間をおいて再度お試しください。',
   REAUTH_REQUIRED:
     'Google カレンダーの認可が不足しています。家族のオーナーに招待リンクの再発行を依頼してください。',
@@ -211,6 +212,58 @@ export async function createFamily(
   const parsed = createFamilyResponseSchema.safeParse(rawJson);
   if (!parsed.success) {
     throw new FamilyApiError('作成レスポンスの検証に失敗しました。', undefined, response.status);
+  }
+
+  return parsed.data.family;
+}
+
+/**
+ * POST /api/families/:id/reconcile
+ * Reconciles uncertain family creation state with Google Calendar.
+ */
+export async function reconcileFamily(
+  familyId: string,
+  signal?: AbortSignal,
+): Promise<FamilyPublic> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/families/${encodeURIComponent(familyId)}/reconcile`, {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({}),
+      signal,
+    });
+  } catch (err: unknown) {
+    if (signal?.aborted) {
+      throw err;
+    }
+    throw new FamilyApiError('家族状態の確認通信に失敗しました。');
+  }
+
+  if (!response.ok) {
+    throw await parseApiError(response, '家族状態の確認に失敗しました。');
+  }
+
+  let rawJson: unknown;
+  try {
+    rawJson = await response.json();
+  } catch {
+    throw new FamilyApiError('状態確認レスポンスの形式が無効です。', undefined, response.status);
+  }
+
+  const parsed = reconcileFamilyResponseSchema.safeParse(rawJson);
+  if (!parsed.success) {
+    throw new FamilyApiError(
+      '状態確認レスポンスの検証に失敗しました。',
+      undefined,
+      response.status,
+    );
   }
 
   return parsed.data.family;

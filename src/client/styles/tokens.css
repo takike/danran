@@ -13,11 +13,15 @@
   --deadline: #8a5a12;
   --deadline-tint: #f3e9d6;
 
-  /* Member palette colors from docs/02 (indigo, deep green, ocher, purple) */
-  --member-papa: #2e4b73;
-  --member-mama: #2d5a3f;
-  --member-daughter: #a67c2e;
-  --member-son: #6b3e82;
+  /* Member palette colors (indigo, green, ochre, purple, coral, teal, rose, slate) */
+  --member-indigo: #2e4b73;
+  --member-green: #2d5a3f;
+  --member-ochre: #a67c2e;
+  --member-purple: #6b3e82;
+  --member-coral: #c05646;
+  --member-teal: #2b6e70;
+  --member-rose: #a23b5d;
+  --member-slate: #4f5d6b;
 
   /* accessibility & control sizing tokens */
   --tap-target-min: 44px;
@@ -59,10 +63,14 @@
   --color-accent-tint: var(--accent-tint);
   --color-deadline: var(--deadline);
   --color-deadline-tint: var(--deadline-tint);
-  --color-member-papa: var(--member-papa);
-  --color-member-mama: var(--member-mama);
-  --color-member-daughter: var(--member-daughter);
-  --color-member-son: var(--member-son);
+  --color-member-indigo: var(--member-indigo);
+  --color-member-green: var(--member-green);
+  --color-member-ochre: var(--member-ochre);
+  --color-member-purple: var(--member-purple);
+  --color-member-coral: var(--member-coral);
+  --color-member-teal: var(--member-teal);
+  --color-member-rose: var(--member-rose);
+  --color-member-slate: var(--member-slate);
   --color-focus: var(--focus-ring);
 }
 

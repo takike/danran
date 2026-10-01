@@ -1,8 +1,28 @@
 import { z } from 'zod';
 
-export const MEMBER_COLORS = ['papa', 'mama', 'daughter', 'son'] as const;
+export const MEMBER_COLORS = [
+  'indigo',
+  'green',
+  'ochre',
+  'purple',
+  'coral',
+  'teal',
+  'rose',
+  'slate',
+] as const;
 export const memberColorSchema = z.enum(MEMBER_COLORS);
 export type MemberColor = z.infer<typeof memberColorSchema>;
+
+export const MEMBER_COLOR_LABELS: Record<MemberColor, string> = {
+  indigo: '藍',
+  green: '深緑',
+  ochre: '黄土',
+  purple: '紫',
+  coral: '珊瑚',
+  teal: '青緑',
+  rose: '薔薇',
+  slate: '石板',
+} as const;
 
 export const MEMBER_STATUSES = ['pending', 'active'] as const;
 export const memberStatusSchema = z.enum(MEMBER_STATUSES);
@@ -77,6 +97,9 @@ export const inviteTokenSchema = z
 
 export const issueInviteInputSchema = z.object({}).strict();
 export type IssueInviteInput = z.infer<typeof issueInviteInputSchema>;
+
+export const reconcileFamilyInputSchema = z.object({}).strict();
+export type ReconcileFamilyInput = z.infer<typeof reconcileFamilyInputSchema>;
 
 export const inspectInviteInputSchema = z
   .object({
@@ -161,6 +184,8 @@ export const familyDetailResponseSchema = z
 export type FamilyDetailResponse = z.infer<typeof familyDetailResponseSchema>;
 export const familyResponseSchema = familyDetailResponseSchema;
 export type FamilyResponse = FamilyDetailResponse;
+export const reconcileFamilyResponseSchema = familyDetailResponseSchema;
+export type ReconcileFamilyResponse = FamilyDetailResponse;
 
 export const createFamilyResponseSchema = z
   .object({

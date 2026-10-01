@@ -90,7 +90,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
               userId: 'usr_owner',
               kind: 'adult',
               name: 'オーナーパパ',
-              color: 'papa',
+              color: 'indigo',
               sortOrder: 0,
             },
           ],
@@ -108,8 +108,8 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     await page.route('**/api/families/fam_tanaka/children', async (route) => {
       const body = route.request().postDataJSON();
       expect(body.children).toHaveLength(2);
-      expect(body.children[0]).toEqual({ name: 'はな', color: 'daughter' });
-      expect(body.children[1]).toEqual({ name: 'たろう', color: 'son' });
+      expect(body.children[0]).toEqual({ name: 'はな', color: 'ochre' });
+      expect(body.children[1]).toEqual({ name: 'たろう', color: 'purple' });
       const baseFamily = requireFamily(currentFamily);
       const updatedMembers = [
         ...baseFamily.members,
@@ -118,7 +118,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
           userId: null,
           kind: 'child' as const,
           name: 'はな',
-          color: 'daughter' as const,
+          color: 'ochre' as const,
           sortOrder: 1,
         },
         {
@@ -126,7 +126,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
           userId: null,
           kind: 'child' as const,
           name: 'たろう',
-          color: 'son' as const,
+          color: 'purple' as const,
           sortOrder: 2,
         },
       ];
@@ -189,12 +189,30 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     // Add 2 children
     const addChildBtn = page.locator('[data-testid="add-child-button"]');
     await addChildBtn.click();
+
+    // Verify 8 palette options on child-color-0 (exact Japanese labels without relationship roles)
+    const colorOptions = await page.locator('[data-testid="child-color-0"] option').all();
+    expect(colorOptions).toHaveLength(8);
+    const optionTexts = await Promise.all(colorOptions.map((opt) => opt.textContent()));
+    expect(optionTexts).toEqual(['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', '石板']);
+    const optionValues = await Promise.all(colorOptions.map((opt) => opt.getAttribute('value')));
+    expect(optionValues).toEqual([
+      'indigo',
+      'green',
+      'ochre',
+      'purple',
+      'coral',
+      'teal',
+      'rose',
+      'slate',
+    ]);
+
     await page.locator('[data-testid="child-name-0"]').fill('はな');
-    await page.locator('[data-testid="child-color-0"]').selectOption('daughter');
+    await page.locator('[data-testid="child-color-0"]').selectOption('ochre');
 
     await addChildBtn.click();
     await page.locator('[data-testid="child-name-1"]').fill('たろう');
-    await page.locator('[data-testid="child-color-1"]').selectOption('son');
+    await page.locator('[data-testid="child-color-1"]').selectOption('purple');
 
     // Save children
     const saveChildrenBtn = page.locator('[data-testid="save-children-button"]');
@@ -268,7 +286,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: 'usr_member',
                   kind: 'adult',
                   name: '参加ママ',
-                  color: 'mama',
+                  color: 'green',
                   sortOrder: 0,
                 },
               ],
@@ -286,15 +304,337 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     await expect(nonOwnerNotice).toContainText('招待リンクの発行は家族カレンダーの作成者');
   });
 
-  test('Creation status uncertain prevents duplicate creation retry and shows recovery guidance', async ({
+  test('Owner uncertain family: no automatic reconcile, explicit reconcile button updates to ready', async ({
     page,
   }) => {
+    let reconcileCalled = false;
+    let reconciledFamily: FamilyPublic | null = null;
+
     await page.route('**/api/auth/me', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           user: { id: 'usr_owner', email: 'owner@example.test', displayName: '作成中パパ' },
+        }),
+      });
+    });
+
+    await page.route('**/api/families', async (route) => {
+      const currentFamily: FamilyPublic = reconciledFamily ?? {
+        id: 'fam_uncertain',
+        name: 'さとう家',
+        familyCalendarId: null,
+        ownerUserId: 'usr_owner',
+        creationStatus: 'uncertain',
+        members: [
+          {
+            id: 'mem_owner',
+            userId: 'usr_owner',
+            kind: 'adult',
+            name: '作成中パパ',
+            color: 'indigo',
+            sortOrder: 0,
+          },
+        ],
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ families: [currentFamily] }),
+      });
+    });
+
+    let resolveReconcileEntered!: () => void;
+    const reconcileEnteredPromise = new Promise<void>((resolve) => {
+      resolveReconcileEntered = resolve;
+    });
+    let releaseReconcileGate!: () => void;
+    const reconcileGatePromise = new Promise<void>((resolve) => {
+      releaseReconcileGate = resolve;
+    });
+
+    await page.route('**/api/families/fam_uncertain/reconcile', async (route) => {
+      reconcileCalled = true;
+      resolveReconcileEntered();
+      await reconcileGatePromise;
+      reconciledFamily = {
+        id: 'fam_uncertain',
+        name: 'さとう家',
+        familyCalendarId: 'cal_satou_reconciled',
+        ownerUserId: 'usr_owner',
+        creationStatus: 'ready',
+        members: [
+          {
+            id: 'mem_owner',
+            userId: 'usr_owner',
+            kind: 'adult',
+            name: '作成中パパ',
+            color: 'indigo',
+            sortOrder: 0,
+          },
+        ],
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ family: reconciledFamily }),
+      });
+    });
+
+    await page.goto('/onboarding');
+    const notice = page.locator('[data-testid="family-status-notice"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('作成状態を確認中です');
+
+    // Invariant: reconcile API was NOT called automatically on mount
+    expect(reconcileCalled).toBe(false);
+    await expect(page.locator('[data-testid="create-family-button"]')).toHaveCount(0);
+
+    // Explicit owner button is visible and enabled
+    const reconcileBtn = page.locator('[data-testid="reconcile-family-button"]');
+    await expect(reconcileBtn).toBeVisible();
+    await expect(reconcileBtn).toHaveText('状態を確認する');
+    await expect(reconcileBtn).toBeEnabled();
+
+    // Click reconcile: pending state disables button with confirmation text
+    await reconcileBtn.click();
+    await reconcileEnteredPromise;
+    await expect(reconcileBtn).toBeDisabled();
+    await expect(reconcileBtn).toHaveText('確認中...');
+
+    // Release gate and verify UI transitions to ready state
+    releaseReconcileGate();
+    await expect(page.locator('[data-testid="family-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="family-status"]')).toHaveText('準備完了');
+    await expect(page.locator('[data-testid="family-name"]')).toHaveText('さとう家');
+    expect(reconcileCalled).toBe(true);
+  });
+
+  test('Uncertain first family creation refreshes status without retrying mutations', async ({
+    page,
+  }) => {
+    let createAttempts = 0;
+    let reconcileAttempts = 0;
+
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_owner', email: 'owner@example.test', displayName: '作成中パパ' },
+        }),
+      });
+    });
+
+    await page.route('**/api/families', async (route) => {
+      if (route.request().method() === 'GET') {
+        const families: FamilyPublic[] =
+          createAttempts === 0
+            ? []
+            : [
+                {
+                  id: 'fam_uncertain_create',
+                  name: 'さとう家',
+                  familyCalendarId: null,
+                  ownerUserId: 'usr_owner',
+                  creationStatus: 'uncertain',
+                  members: [
+                    {
+                      id: 'mem_owner',
+                      userId: 'usr_owner',
+                      kind: 'adult',
+                      name: '作成中パパ',
+                      color: 'indigo',
+                      sortOrder: 0,
+                    },
+                  ],
+                },
+              ];
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ families }),
+        });
+      } else if (route.request().method() === 'POST') {
+        createAttempts += 1;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: '処理結果を確認できませんでした。',
+            code: 'UNCERTAIN_MUTATION',
+          }),
+        });
+      }
+    });
+
+    await page.route('**/api/families/*/reconcile', async (route) => {
+      reconcileAttempts += 1;
+      await route.fulfill({ status: 500, body: '' });
+    });
+
+    await page.goto('/onboarding');
+    await expect(page.locator('[data-testid="family-name-input"]')).toBeVisible();
+    await page.locator('[data-testid="family-name-input"]').fill('さとう家');
+    await page.locator('[data-testid="create-family-button"]').click();
+
+    await expect(page.locator('[data-testid="family-status-notice"]')).toBeVisible();
+    await expect(page.locator('[data-testid="family-status-notice"]')).toContainText(
+      '作成状態を確認中です',
+    );
+    await expect(page.locator('[data-testid="reconcile-family-button"]')).toHaveText(
+      '状態を確認する',
+    );
+    expect(createAttempts).toBe(1);
+    expect(reconcileAttempts).toBe(0);
+  });
+
+  for (const lateStatus of [200, 401] as const) {
+    test(`Late reconcile ${lateStatus} response after session switch cannot replace the new user family`, async ({
+      page,
+    }) => {
+      let currentUserId = 'usr_owner_a';
+
+      await page.route('**/api/auth/me', async (route) => {
+        const isFirstOwner = currentUserId === 'usr_owner_a';
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            user: {
+              id: currentUserId,
+              email: `${currentUserId}@example.test`,
+              displayName: isFirstOwner ? '元のオーナー' : '切替後のオーナー',
+            },
+          }),
+        });
+      });
+
+      await page.route('**/api/families', async (route) => {
+        const family: FamilyPublic =
+          currentUserId === 'usr_owner_a'
+            ? {
+                id: 'fam_owner_a',
+                name: '元の家族',
+                familyCalendarId: null,
+                ownerUserId: 'usr_owner_a',
+                creationStatus: 'uncertain',
+                members: [
+                  {
+                    id: 'mem_owner_a',
+                    userId: 'usr_owner_a',
+                    kind: 'adult',
+                    name: '元のオーナー',
+                    color: 'indigo',
+                    sortOrder: 0,
+                  },
+                ],
+              }
+            : {
+                id: 'fam_owner_b',
+                name: '切替後の家族',
+                familyCalendarId: 'cal_owner_b',
+                ownerUserId: 'usr_owner_b',
+                creationStatus: 'ready',
+                members: [
+                  {
+                    id: 'mem_owner_b',
+                    userId: 'usr_owner_b',
+                    kind: 'adult',
+                    name: '切替後のオーナー',
+                    color: 'green',
+                    sortOrder: 0,
+                  },
+                ],
+              };
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ families: [family] }),
+        });
+      });
+
+      let resolveReconcileEntered!: () => void;
+      const reconcileEntered = new Promise<void>((resolve) => {
+        resolveReconcileEntered = resolve;
+      });
+      let releaseReconcile!: () => void;
+      const reconcileGate = new Promise<void>((resolve) => {
+        releaseReconcile = resolve;
+      });
+      let resolveReconcileHandlerFinished!: () => void;
+      const reconcileHandlerFinished = new Promise<void>((resolve) => {
+        resolveReconcileHandlerFinished = resolve;
+      });
+
+      await page.route('**/api/families/fam_owner_a/reconcile', async (route) => {
+        resolveReconcileEntered();
+        try {
+          await reconcileGate;
+          await route.fulfill({
+            status: lateStatus,
+            contentType: 'application/json',
+            body:
+              lateStatus === 200
+                ? JSON.stringify({
+                    family: {
+                      id: 'fam_owner_a',
+                      name: '元の家族',
+                      familyCalendarId: 'cal_owner_a',
+                      ownerUserId: 'usr_owner_a',
+                      creationStatus: 'ready',
+                      members: [
+                        {
+                          id: 'mem_owner_a',
+                          userId: 'usr_owner_a',
+                          kind: 'adult',
+                          name: '元のオーナー',
+                          color: 'indigo',
+                          sortOrder: 0,
+                        },
+                      ],
+                    },
+                  })
+                : JSON.stringify({ error: 'Unauthorized', code: 'UNAUTHORIZED' }),
+          });
+        } catch {
+          // The browser can abort the request when the authenticated identity changes.
+        } finally {
+          resolveReconcileHandlerFinished();
+        }
+      });
+
+      await page.goto('/onboarding');
+      await expect(page.locator('[data-testid="reconcile-family-button"]')).toBeVisible();
+      await page.locator('[data-testid="reconcile-family-button"]').click();
+      await reconcileEntered;
+
+      currentUserId = 'usr_owner_b';
+      const authRefresh = page.waitForResponse(
+        (response) => response.url().includes('/api/auth/me') && response.status() === 200,
+      );
+      await triggerVisibilityCycle(page);
+      await authRefresh;
+      await expect(page.locator('[data-testid="family-name"]')).toHaveText('切替後の家族');
+
+      releaseReconcile();
+      await reconcileHandlerFinished;
+      await waitForTwoRafs(page);
+      await expect(page.locator('[data-testid="family-name"]')).toHaveText('切替後の家族');
+    });
+  }
+
+  test('Non-owner cannot reconcile uncertain family; failed creation allows owner retry', async ({
+    page,
+  }) => {
+    // 1. Non-owner viewing uncertain family has no reconcile button
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_member', email: 'member@example.test', displayName: '参加者' },
         }),
       });
     });
@@ -309,16 +649,16 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
               id: 'fam_uncertain',
               name: 'さとう家',
               familyCalendarId: null,
-              ownerUserId: 'usr_owner',
+              ownerUserId: 'usr_other_owner',
               creationStatus: 'uncertain',
               members: [
                 {
-                  id: 'mem_owner',
-                  userId: 'usr_owner',
+                  id: 'mem_1',
+                  userId: 'usr_member',
                   kind: 'adult',
-                  name: '作成中パパ',
-                  color: 'papa',
-                  sortOrder: 0,
+                  name: '参加者',
+                  color: 'green',
+                  sortOrder: 1,
                 },
               ],
             },
@@ -328,10 +668,96 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     });
 
     await page.goto('/onboarding');
-    const notice = page.locator('[data-testid="family-status-notice"]');
-    await expect(notice).toBeVisible();
-    await expect(notice).toContainText('二重作成を防ぐため');
-    await expect(page.locator('[data-testid="create-family-button"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="family-status-notice"]')).toBeVisible();
+    await expect(page.locator('[data-testid="reconcile-family-button"]')).toHaveCount(0);
+
+    // 2. Owner viewing failed status sees retry button and can retry creation
+    await page.goto('about:blank');
+    await page.unroute('**/api/auth/me');
+    await page.unroute('**/api/families');
+
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_owner', email: 'owner@example.test', displayName: 'オーナー' },
+        }),
+      });
+    });
+
+    let retryCreated = false;
+    await page.route('**/api/families', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            families: [
+              {
+                id: 'fam_failed',
+                name: '失敗後リトライ家',
+                familyCalendarId: null,
+                ownerUserId: 'usr_owner',
+                creationStatus: retryCreated ? 'ready' : 'failed',
+                members: [
+                  {
+                    id: 'mem_1',
+                    userId: 'usr_owner',
+                    kind: 'adult',
+                    name: 'オーナー',
+                    color: 'indigo',
+                    sortOrder: 0,
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      } else if (route.request().method() === 'POST') {
+        retryCreated = true;
+        const body = route.request().postDataJSON();
+        expect(body.name).toBe('失敗後リトライ家');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            family: {
+              id: 'fam_failed',
+              name: '失敗後リトライ家',
+              familyCalendarId: 'cal_retry_success',
+              ownerUserId: 'usr_owner',
+              creationStatus: 'ready',
+              members: [
+                {
+                  id: 'mem_1',
+                  userId: 'usr_owner',
+                  kind: 'adult',
+                  name: 'オーナー',
+                  color: 'indigo',
+                  sortOrder: 0,
+                },
+              ],
+            },
+          }),
+        });
+      }
+    });
+
+    await page.goto('/onboarding');
+    const failedNotice = page.locator('[data-testid="family-status-notice"]');
+    await expect(failedNotice).toBeVisible();
+    await expect(failedNotice).toContainText('家族カレンダーの作成に失敗しました');
+
+    const retryBtn = page.locator('[data-testid="retry-create-family-button"]');
+    await expect(retryBtn).toBeVisible();
+    await expect(retryBtn).toHaveText('家族カレンダーの作成を再試行');
+    await retryBtn.click();
+
+    // After retry succeeds, transitions to ready state
+    await expect(page.locator('[data-testid="family-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="family-status"]')).toHaveText('準備完了');
+    expect(retryCreated).toBe(true);
   });
 
   test('Anonymous user at /invite: calls POST /api/auth/login with inviteToken, returns without auto-join', async ({
@@ -488,7 +914,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                 userId: 'usr_owner',
                 kind: 'adult',
                 name: 'パパ',
-                color: 'papa',
+                color: 'indigo',
                 sortOrder: 0,
               },
               {
@@ -496,7 +922,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                 userId: 'usr_invited',
                 kind: 'adult',
                 name: 'ママ',
-                color: 'mama',
+                color: 'green',
                 sortOrder: 1,
               },
             ],
@@ -554,7 +980,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     expect(inviteApiCalled).toBe(false);
   });
 
-  test('Used, expired, and uncertain tokens render fixed errors and disable join', async ({
+  test('Used and expired tokens show fixed errors; uncertain tokens allow explicit retry', async ({
     page,
   }) => {
     await page.route('**/api/auth/me', async (route) => {
@@ -569,22 +995,32 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
 
     // 1. Non-available states that return 200 JoinInfoResponse
     const validNonAvailableCases: Array<{
-      status: 'used' | 'uncertain';
+      status: 'used' | 'claiming' | 'uncertain';
       selector: string;
       text: string;
       btnText: string;
+      btnDisabled: boolean;
     }> = [
       {
         status: 'used',
         selector: '[data-testid="invite-error-used"]',
         text: 'この招待リンクは既に使用されています。',
         btnText: '既に使用されています',
+        btnDisabled: true,
+      },
+      {
+        status: 'claiming',
+        selector: '[data-testid="invite-status-notice"]',
+        text: '参加処理が確認待ちです',
+        btnText: '参加処理を確認中',
+        btnDisabled: true,
       },
       {
         status: 'uncertain',
         selector: '[data-testid="invite-status-notice"]',
         text: '参加処理が確認待ちです',
-        btnText: '参加処理を確認中',
+        btnText: '参加状態を確認する',
+        btnDisabled: false,
       },
     ];
 
@@ -610,7 +1046,11 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
 
       const joinBtn = page.locator('[data-testid="join-family-button"]');
       await expect(joinBtn).toBeVisible();
-      await expect(joinBtn).toBeDisabled();
+      if (tc.btnDisabled) {
+        await expect(joinBtn).toBeDisabled();
+      } else {
+        await expect(joinBtn).toBeEnabled();
+      }
       await expect(joinBtn).toContainText(tc.btnText);
 
       await page.unroute('**/api/invites/inspect');
@@ -638,6 +1078,266 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     // No join button on expired error
     await expect(page.locator('[data-testid="join-family-button"]')).toHaveCount(0);
     await page.unroute('**/api/invites/inspect');
+  });
+
+  test('Join initial uncertain mutation: refetches inspect to uncertain, explicit retry confirmation succeeds', async ({
+    page,
+  }) => {
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_joiner', email: 'joiner@example.test', displayName: '参加者' },
+        }),
+      });
+    });
+
+    let inspectCallCount = 0;
+    await page.route('**/api/invites/inspect', async (route) => {
+      inspectCallCount++;
+      if (inspectCallCount === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            familyName: 'たなか家',
+            status: 'available',
+            alreadyMember: false,
+          }),
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            familyName: 'たなか家',
+            status: 'uncertain',
+            alreadyMember: false,
+          }),
+        });
+      }
+    });
+
+    let joinCallCount = 0;
+    let resolveSecondJoinEntered!: () => void;
+    const secondJoinEnteredPromise = new Promise<void>((resolve) => {
+      resolveSecondJoinEntered = resolve;
+    });
+    let releaseSecondJoinGate!: () => void;
+    const secondJoinGatePromise = new Promise<void>((resolve) => {
+      releaseSecondJoinGate = resolve;
+    });
+
+    await page.route('**/api/invites/join', async (route) => {
+      joinCallCount++;
+      if (joinCallCount === 1) {
+        // First join attempt encounters uncertain mutation (e.g. Google network timeout)
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'Calendar sharing state uncertain',
+            code: 'UNCERTAIN_MUTATION',
+          }),
+        });
+      } else {
+        // Second join attempt (user clicked explicit retry) succeeds
+        resolveSecondJoinEntered();
+        await secondJoinGatePromise;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            family: {
+              id: 'fam_tanaka',
+              name: 'たなか家',
+              familyCalendarId: 'cal_123',
+              ownerUserId: 'usr_owner',
+              creationStatus: 'ready',
+              members: [
+                {
+                  id: 'm1',
+                  userId: 'usr_owner',
+                  kind: 'adult',
+                  name: 'オーナー',
+                  color: 'indigo',
+                  sortOrder: 0,
+                },
+                {
+                  id: 'm2',
+                  userId: 'usr_joiner',
+                  kind: 'adult',
+                  name: '参加者',
+                  color: 'green',
+                  sortOrder: 1,
+                },
+              ],
+            },
+          }),
+        });
+      }
+    });
+
+    await page.goto(`/invite#${VALID_TOKEN}`);
+
+    // First inspect returns available: join button is visible
+    const joinBtn = page.locator('[data-testid="join-family-button"]');
+    await expect(joinBtn).toBeVisible();
+    await expect(joinBtn).toHaveText('この家族に参加する');
+
+    // Click join -> fails with UNCERTAIN_MUTATION -> client invalidates/refetches inspect to uncertain
+    const secondInspectPromise = page.waitForResponse(
+      (res) => res.url().includes('/api/invites/inspect') && res.status() === 200,
+    );
+    await joinBtn.click();
+    await secondInspectPromise;
+    expect(inspectCallCount).toBe(2);
+
+    // Notice is visible and join button changes to explicit retry button
+    const notice = page.locator('[data-testid="invite-status-notice"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('参加処理が確認待ちです');
+
+    // Button is now enabled for explicit retry with text 『参加状態を確認する』
+    await expect(joinBtn).toBeVisible();
+    await expect(joinBtn).toHaveText('参加状態を確認する');
+    await expect(joinBtn).toBeEnabled();
+
+    // Invariant: second join mutation was NOT called automatically
+    expect(joinCallCount).toBe(1);
+
+    // User explicitly clicks retry button
+    await joinBtn.click();
+    await secondJoinEnteredPromise;
+
+    // While pending, button is disabled with confirmation text
+    await expect(joinBtn).toBeDisabled();
+    await expect(joinBtn).toHaveText('確認中...');
+
+    // Release second join gate and verify success view with notification guide
+    releaseSecondJoinGate();
+    const successCard = page.locator('[data-testid="join-success-card"]');
+    await expect(successCard).toBeVisible();
+    await expect(page.locator('[data-testid="joined-family-name"]')).toHaveText('たなか家');
+
+    const notificationGuide = page.locator('[data-testid="notification-guide"]');
+    await expect(notificationGuide).toBeVisible();
+    await expect(notificationGuide).toHaveText(
+      'Google から届く共有通知メールの『カレンダーを追加』を押すと、普段の Google カレンダーにも表示されます',
+    );
+    expect(joinCallCount).toBe(2);
+  });
+
+  test('Uncertain inspect refresh does not refetch for a new identity after the invite query switches users', async ({
+    page,
+  }) => {
+    let currentUserId = 'usr_joiner_a';
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: {
+            id: currentUserId,
+            email: `${currentUserId}@example.test`,
+            displayName: '参加者',
+          },
+        }),
+      });
+    });
+
+    let inspectCallCount = 0;
+    let resolveRefreshEntered!: () => void;
+    const refreshEntered = new Promise<void>((resolve) => {
+      resolveRefreshEntered = resolve;
+    });
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let resolveRefreshHandlerFinished!: () => void;
+    const refreshHandlerFinished = new Promise<void>((resolve) => {
+      resolveRefreshHandlerFinished = resolve;
+    });
+    let resolveNewIdentityInspect!: () => void;
+    const newIdentityInspectEntered = new Promise<void>((resolve) => {
+      resolveNewIdentityInspect = resolve;
+    });
+
+    await page.route('**/api/invites/inspect', async (route) => {
+      inspectCallCount += 1;
+      const requestUserId = currentUserId;
+      if (requestUserId === 'usr_joiner_a' && inspectCallCount === 2) {
+        resolveRefreshEntered();
+        try {
+          await refreshGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              familyName: 'たなか家',
+              status: 'uncertain',
+              alreadyMember: false,
+            }),
+          });
+        } catch {
+          // The old identity's query may be cancelled when the session changes.
+        } finally {
+          resolveRefreshHandlerFinished();
+        }
+        return;
+      }
+      if (requestUserId === 'usr_joiner_b') {
+        resolveNewIdentityInspect();
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          familyName: 'たなか家',
+          status: 'available',
+          alreadyMember: false,
+        }),
+      });
+    });
+
+    let joinCallCount = 0;
+    await page.route('**/api/invites/join', async (route) => {
+      joinCallCount += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Calendar sharing state uncertain',
+          code: 'UNCERTAIN_MUTATION',
+        }),
+      });
+    });
+
+    await page.goto(`/invite#${VALID_TOKEN}`);
+    const joinBtn = page.locator('[data-testid="join-family-button"]');
+    await expect(joinBtn).toHaveText('この家族に参加する');
+    await joinBtn.click();
+    await refreshEntered;
+
+    currentUserId = 'usr_joiner_b';
+    const authRefresh = page.waitForResponse(
+      (response) => response.url().includes('/api/auth/me') && response.status() === 200,
+    );
+    await triggerVisibilityCycle(page);
+    await authRefresh;
+    await newIdentityInspectEntered;
+    expect(inspectCallCount).toBe(3);
+
+    releaseRefresh();
+    await refreshHandlerFinished;
+    await page.waitForLoadState('networkidle');
+    await waitForTwoRafs(page);
+
+    // The new identity gets its own initial inspect only; the old mutation does not refetch it.
+    expect(inspectCallCount).toBe(3);
+    expect(joinCallCount).toBe(1);
   });
 
   test('Regression: refetch failure (410 expired or 500 error) fails closed, hiding previous confirmation card and join button', async ({
@@ -783,7 +1483,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                 id: 'm1',
                 userId: 'usr_other',
                 name: 'パパ',
-                color: 'papa',
+                color: 'indigo',
                 kind: 'adult',
                 sortOrder: 0,
               },
@@ -871,7 +1571,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   id: 'm1',
                   userId: 'usr_original',
                   name: '元ユーザー',
-                  color: 'papa',
+                  color: 'indigo',
                   kind: 'adult',
                   sortOrder: 0,
                 },
@@ -971,7 +1671,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   id: 'm1',
                   userId: 'usr_owner',
                   name: 'パパ',
-                  color: 'papa',
+                  color: 'indigo',
                   kind: 'adult',
                   sortOrder: 0,
                 },
@@ -1117,7 +1817,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                       id: 'm1',
                       userId: 'usr_owner',
                       name: 'パパ',
-                      color: 'papa',
+                      color: 'indigo',
                       kind: 'adult',
                       sortOrder: 0,
                     },
@@ -1148,7 +1848,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                         id: 'm1',
                         userId: 'usr_owner',
                         name: 'パパ',
-                        color: 'papa',
+                        color: 'indigo',
                         kind: 'adult',
                         sortOrder: 0,
                       },
@@ -1249,7 +1949,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: 'usr_owner',
                   kind: 'adult',
                   name: 'オーナーパパ',
-                  color: 'papa',
+                  color: 'indigo',
                   sortOrder: 0,
                 },
               ],
@@ -1361,7 +2061,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: 'usr_owner',
                   kind: 'adult',
                   name: 'オーナー',
-                  color: 'papa',
+                  color: 'indigo',
                   sortOrder: 0,
                 },
               ],
@@ -1424,7 +2124,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: 'usr_owner',
                   kind: 'adult',
                   name: 'オーナー',
-                  color: 'papa',
+                  color: 'indigo',
                   sortOrder: 0,
                 },
               ],
@@ -1515,7 +2215,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: 'usr_owner',
                   kind: 'adult',
                   name: 'オーナーパパ',
-                  color: 'papa',
+                  color: 'indigo',
                   sortOrder: 0,
                 },
                 {
@@ -1523,7 +2223,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
                   userId: null,
                   kind: 'child',
                   name: longChildName,
-                  color: 'daughter',
+                  color: 'ochre',
                   sortOrder: 1,
                 },
               ],

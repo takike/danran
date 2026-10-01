@@ -311,7 +311,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       userId,
       kind: 'adult',
       name: userName,
-      color: 'papa',
+      color: 'indigo',
       sortOrder: 0,
       status: 'active',
     });

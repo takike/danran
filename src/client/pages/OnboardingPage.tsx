@@ -8,9 +8,10 @@ import {
   useCreateFamilyMutation,
   useFamiliesQuery,
   useIssueInviteMutation,
+  useReconcileFamilyMutation,
   useUpdateChildrenMutation,
 } from '@client/features/onboarding/useFamily';
-import type { MemberColor } from '@shared/schemas/family';
+import { type FamilyPublic, MEMBER_COLORS, type MemberColor } from '@shared/schemas/family';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -56,6 +57,7 @@ export default function OnboardingPage(): React.ReactElement {
   const createFamilyMutation = useCreateFamilyMutation();
   const updateChildrenMutation = useUpdateChildrenMutation();
   const issueInviteMutation = useIssueInviteMutation();
+  const reconcileFamilyMutation = useReconcileFamilyMutation();
 
   // Lifecycle generation and AbortController to prevent mutation completion races
   const generationRef = useRef(0);
@@ -79,6 +81,7 @@ export default function OnboardingPage(): React.ReactElement {
     createFamilyMutation.reset();
     updateChildrenMutation.reset();
     issueInviteMutation.reset();
+    reconcileFamilyMutation.reset();
 
     await queryClient.cancelQueries({ queryKey: SESSION_QUERY_KEY });
     queryClient.setQueryData(SESSION_QUERY_KEY, null);
@@ -98,6 +101,7 @@ export default function OnboardingPage(): React.ReactElement {
     createFamilyMutation.reset,
     updateChildrenMutation.reset,
     issueInviteMutation.reset,
+    reconcileFamilyMutation.reset,
   ]);
 
   // Clear private data and abort in-flight requests on session change or auth error
@@ -116,6 +120,7 @@ export default function OnboardingPage(): React.ReactElement {
       createFamilyMutation.reset();
       updateChildrenMutation.reset();
       issueInviteMutation.reset();
+      reconcileFamilyMutation.reset();
 
       setInviteUrl(null);
       setCopied(false);
@@ -132,6 +137,7 @@ export default function OnboardingPage(): React.ReactElement {
     createFamilyMutation.reset,
     updateChildrenMutation.reset,
     issueInviteMutation.reset,
+    reconcileFamilyMutation.reset,
   ]);
 
   // Clean up on unmount
@@ -191,7 +197,107 @@ export default function OnboardingPage(): React.ReactElement {
         return;
       }
       const errorObj = err as { status?: number; code?: string };
-      if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
+      if (errorObj?.code === 'UNCERTAIN_MUTATION') {
+        await queryClient.invalidateQueries({
+          queryKey: [...FAMILIES_QUERY_KEY, currentUserId],
+          exact: true,
+        });
+      } else if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
+        await handleAuthRevocation();
+      }
+    }
+  };
+
+  // Reconcile family creation status with Google Calendar (owner only)
+  const handleReconcileFamily = async () => {
+    const currentGen = generationRef.current;
+    const currentUserId = user?.id;
+    if (!currentUserId || !family || family.ownerUserId !== currentUserId) return;
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const reconciledFamily = await reconcileFamilyMutation.mutateAsync({
+        familyId: family.id,
+        signal: controller.signal,
+      });
+      if (
+        generationRef.current !== currentGen ||
+        user?.id !== currentUserId ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      queryClient.setQueryData<FamilyPublic[]>([...FAMILIES_QUERY_KEY, currentUserId], (old) => {
+        if (!old) return [reconciledFamily];
+        return old.map((item) => (item.id === reconciledFamily.id ? reconciledFamily : item));
+      });
+      await queryClient.invalidateQueries({
+        queryKey: [...FAMILIES_QUERY_KEY, currentUserId],
+        exact: true,
+      });
+    } catch (err: unknown) {
+      if (
+        generationRef.current !== currentGen ||
+        user?.id !== currentUserId ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      const errorObj = err as { status?: number; code?: string };
+      if (errorObj?.code === 'UNCERTAIN_MUTATION') {
+        await queryClient.invalidateQueries({
+          queryKey: [...FAMILIES_QUERY_KEY, currentUserId],
+          exact: true,
+        });
+      } else if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
+        await handleAuthRevocation();
+      }
+    }
+  };
+
+  // Retry family creation from failed status (owner only)
+  const handleRetryCreateFamily = async () => {
+    const currentGen = generationRef.current;
+    const currentUserId = user?.id;
+    if (!currentUserId || !family || family.ownerUserId !== currentUserId) return;
+
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      await createFamilyMutation.mutateAsync({
+        input: {
+          name: family.name,
+          children: [],
+        },
+        signal: controller.signal,
+      });
+      if (
+        generationRef.current !== currentGen ||
+        user?.id !== currentUserId ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+    } catch (err: unknown) {
+      if (
+        generationRef.current !== currentGen ||
+        user?.id !== currentUserId ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      const errorObj = err as { status?: number; code?: string };
+      if (errorObj?.code === 'UNCERTAIN_MUTATION') {
+        await queryClient.invalidateQueries({
+          queryKey: [...FAMILIES_QUERY_KEY, currentUserId],
+          exact: true,
+        });
+      } else if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
         await handleAuthRevocation();
       }
     }
@@ -200,7 +306,8 @@ export default function OnboardingPage(): React.ReactElement {
   // Add child
   const handleAddChild = () => {
     if (children.length >= 10) return;
-    const defaultColor: MemberColor = children.length % 2 === 0 ? 'daughter' : 'son';
+    const defaultColor: MemberColor =
+      MEMBER_COLORS[(children.length + 1) % MEMBER_COLORS.length] ?? 'green';
     const newDraft: ChildDraft = {
       id: crypto.randomUUID ? crypto.randomUUID() : `draft-${Date.now()}-${Math.random()}`,
       name: '',
@@ -386,7 +493,7 @@ export default function OnboardingPage(): React.ReactElement {
             <div className="flex items-start gap-[var(--spacing-sm)]">
               <Check
                 size={18}
-                className="text-[var(--member-mama)] shrink-0 mt-[var(--spacing-2xs)]"
+                className="text-[var(--member-green)] shrink-0 mt-[var(--spacing-2xs)]"
                 aria-hidden="true"
               />
               <div>
@@ -585,9 +692,26 @@ export default function OnboardingPage(): React.ReactElement {
                   <span>作成状態を確認中です</span>
                 </div>
                 <p className="m-0 leading-relaxed text-muted">
-                  処理結果を確認できませんでした。二重作成を防ぐため再試行は行わず、Google
-                  カレンダーで同名カレンダーの有無を確認し手動で整理してください。
+                  処理結果を確認できませんでした。状態を確認するか、しばらく経ってから再度お試しください。
                 </p>
+                {family.ownerUserId === user.id && (
+                  <button
+                    type="button"
+                    data-testid="reconcile-family-button"
+                    disabled={reconcileFamilyMutation.isPending}
+                    onClick={handleReconcileFamily}
+                    className="w-full min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-xs)] bg-accent text-surface rounded-[var(--radius-md)] text-xs font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center justify-center gap-[var(--spacing-xs)] cursor-pointer"
+                  >
+                    <span>
+                      {reconcileFamilyMutation.isPending ? '確認中...' : '状態を確認する'}
+                    </span>
+                  </button>
+                )}
+                {reconcileFamilyMutation.isError && (
+                  <p role="alert" className="text-xs text-accent m-0 font-medium text-center">
+                    {reconcileFamilyMutation.error.message || '状態の確認に失敗しました。'}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => refetchFamilies()}
@@ -609,8 +733,24 @@ export default function OnboardingPage(): React.ReactElement {
                   <span>家族カレンダーの作成に失敗しました</span>
                 </div>
                 <p className="m-0 leading-relaxed">
-                  Google カレンダーの作成に失敗しました。時間をおいて再試行してください。
+                  Google
+                  カレンダーの作成に失敗しました。再試行ボタンを押して作成を再試行してください。
                 </p>
+                {family.ownerUserId === user.id && (
+                  <button
+                    type="button"
+                    data-testid="retry-create-family-button"
+                    disabled={createFamilyMutation.isPending}
+                    onClick={handleRetryCreateFamily}
+                    className="min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-xs)] bg-accent text-surface rounded-[var(--radius-md)] text-xs font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center justify-center gap-[var(--spacing-xs)] cursor-pointer"
+                  >
+                    <span>
+                      {createFamilyMutation.isPending
+                        ? '作成中...'
+                        : '家族カレンダーの作成を再試行'}
+                    </span>
+                  </button>
+                )}
               </div>
             )}
 
@@ -769,7 +909,7 @@ export default function OnboardingPage(): React.ReactElement {
                       {saveChildrenSuccess && (
                         <p
                           data-testid="save-children-success"
-                          className="text-xs text-[var(--member-mama)] m-0 font-medium text-center"
+                          className="text-xs text-[var(--member-green)] m-0 font-medium text-center"
                         >
                           子ども情報を保存しました
                         </p>
@@ -862,7 +1002,7 @@ export default function OnboardingPage(): React.ReactElement {
                           {copied && (
                             <p
                               data-testid="copy-status"
-                              className="text-xs text-[var(--member-mama)] m-0 font-medium text-center"
+                              className="text-xs text-[var(--member-green)] m-0 font-medium text-center"
                             >
                               リンクをコピーしました
                             </p>

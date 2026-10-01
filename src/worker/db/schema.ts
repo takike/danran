@@ -98,6 +98,9 @@ export const families = sqliteTable('families', {
   })
     .notNull()
     .default('creating'),
+  calendarCreationId: text('calendar_creation_id')
+    .notNull()
+    .default(sql`(lower(hex(randomblob(16))))`),
   createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
 });
 
@@ -123,7 +126,9 @@ export const members = sqliteTable(
       .references(() => users.id, { onDelete: 'restrict' }),
     kind: text('kind', { enum: ['adult', 'child'] }).notNull(),
     name: text('name').notNull(),
-    color: text('color', { enum: ['papa', 'mama', 'daughter', 'son'] }).notNull(),
+    color: text('color', {
+      enum: ['indigo', 'green', 'ochre', 'purple', 'coral', 'teal', 'rose', 'slate'],
+    }).notNull(),
     sortOrder: integer('sort_order', { mode: 'number' }).notNull().default(0),
     status: text('status', { enum: ['pending', 'active'] })
       .notNull()
@@ -136,6 +141,10 @@ export const members = sqliteTable(
     check(
       'members_user_id_kind_check',
       sql`(kind = 'adult' AND user_id IS NOT NULL) OR (kind = 'child' AND user_id IS NULL)`,
+    ),
+    check(
+      'members_color_check',
+      sql`color IN ('indigo', 'green', 'ochre', 'purple', 'coral', 'teal', 'rose', 'slate')`,
     ),
   ],
 );
