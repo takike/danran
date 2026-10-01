@@ -16,22 +16,24 @@ Workers 環境では `googleapis` npm パッケージが動作しないため、
 
 ---
 
-## 2. 実装済み 10 メソッド一覧
+## 2. 実装済み 12 メソッド一覧
 
-本タスクで実装されたメソッドは計画と完全に合致する以下の 10 件です：
+本クライアントで実装されたメソッドは以下の 12 件です：
 
 | # | メソッド | HTTP | パス | 概要 | 主な引数・戻り値 |
 |---|---|---|---|---|---|
 | 1 | `calendars.insert` | `POST` | `/calendars` | 家族カレンダーの新規作成 | `InsertCalendarInput` → `GoogleCalendar`（既定 timeZone: `Asia/Tokyo`） |
-| 2 | `acl.insert` | `POST` | `/calendars/{calId}/acl` | 家族カレンダーの ACL 付与（writer 等） | `InsertAclRuleInput` → `GoogleAclRule`（`sendNotifications` オプション対応） |
-| 3 | `events.list` | `GET` | `/calendars/{calId}/events` | 家族予定の単一ページ一覧取得 | `EventsListOptions` → `GoogleEventsPage`（`timeMin`/`timeMax`/`singleEvents`） |
-| 4 | `events.get` | `GET` | `/calendars/{calId}/events/{eventId}` | 予定の詳細取得 | `calendarId`, `eventId` → `GoogleEvent` |
-| 5 | `events.insert` | `POST` | `/calendars/{calId}/events` | 予定の作成 | `InsertEventInput` → `GoogleEvent`（クライアント生成安定 ID） |
-| 6 | `events.patch` | `PATCH` | `/calendars/{calId}/events/{eventId}` | 予定の部分更新 | `PatchEventInput` → `GoogleEvent`（デフォルト値無補完・nullクリア対応） |
-| 7 | `events.delete` | `DELETE` | `/calendars/{calId}/events/{eventId}` | 予定の削除 | `calendarId`, `eventId` → `void`（204 No Content） |
-| 8 | `events.instances` | `GET` | `/calendars/{calId}/events/{eventId}/instances` | 繰り返し予定の個別回一覧取得 | `EventsInstancesOptions` → `GoogleEventsPage` |
-| 9 | `calendarList.list` | `GET` | `/users/me/calendarList` | カレンダー一覧（free/busy 対象選択用） | `CalendarListListOptions` → `GoogleCalendarListPage`（最大 250 件） |
-| 10 | `freeBusy.query` | `POST` | `/freeBusy` | 個人カレンダーの空き時間問い合わせ | `FreeBusyQueryInput` → `FreeBusyQueryResponse`（プライバシー保護済み） |
+| 2 | `calendars.delete` | `DELETE` | `/calendars/{calId}` | カレンダーの削除 | `calendarId` → `void`（204 No Content） |
+| 3 | `acl.insert` | `POST` | `/calendars/{calId}/acl` | 家族カレンダーの ACL 付与（writer 等） | `InsertAclRuleInput` → `GoogleAclRule`（`sendNotifications` オプション対応） |
+| 4 | `events.list` | `GET` | `/calendars/{calId}/events` | 家族予定の単一ページ一覧取得 | `EventsListOptions` → `GoogleEventsPage`（`timeMin`/`timeMax`/`singleEvents`） |
+| 5 | `events.get` | `GET` | `/calendars/{calId}/events/{eventId}` | 予定の詳細取得 | `calendarId`, `eventId` → `GoogleEvent` |
+| 6 | `events.insert` | `POST` | `/calendars/{calId}/events` | 予定の作成 | `InsertEventInput` → `GoogleEvent`（クライアント生成安定 ID） |
+| 7 | `events.patch` | `PATCH` | `/calendars/{calId}/events/{eventId}` | 予定の部分更新 | `PatchEventInput` → `GoogleEvent`（デフォルト値無補完・nullクリア対応） |
+| 8 | `events.delete` | `DELETE` | `/calendars/{calId}/events/{eventId}` | 予定の削除 | `calendarId`, `eventId` → `void`（204 No Content） |
+| 9 | `events.instances` | `GET` | `/calendars/{calId}/events/{eventId}/instances` | 繰り返し予定の個別回一覧取得 | `EventsInstancesOptions` → `GoogleEventsPage` |
+| 10 | `calendarList.list` | `GET` | `/users/me/calendarList` | カレンダー一覧（free/busy 対象選択用） | `CalendarListListOptions` → `GoogleCalendarListPage`（最大 250 件） |
+| 11 | `calendarList.insert` | `POST` | `/users/me/calendarList` | カレンダー一覧への登録（スパイク・参加用） | `InsertCalendarListEntryInput` → `GoogleCalendarListEntry` |
+| 12 | `freeBusy.query` | `POST` | `/freeBusy` | 個人カレンダーの空き時間問い合わせ | `FreeBusyQueryInput` → `FreeBusyQueryResponse`（プライバシー保護済み） |
 
 ### ページネーション契約
 
@@ -69,13 +71,15 @@ Google API のレート制限（429、特定の 403）およびサーバーエ�
 export class GoogleCalendarError extends Error {
   readonly code: GoogleCalendarErrorCode; // 'INVALID_INPUT' | 'AUTH_ERROR' | 'RATE_LIMITED' | 'NOT_FOUND' | 'CONFLICT' | 'UNCERTAIN_MUTATION' | 'REDIRECT_REJECTED' | 'INVALID_RESPONSE' | 'API_ERROR'
   readonly status: number;                // HTTP ステータスコード
-  readonly reason?: string;               // 許可リスト化された安全な識別子のみ（例: 'rateLimitExceeded'）
+  readonly reason?: string;               // 許可リスト化された安全な識別子のみ（例: 'rateLimitExceeded', 'forbidden', 'insufficientPermissions'）
   readonly outcome: 'uncertain' | 'failed';
+  readonly googleStatus?: number;         // 実際の Google HTTP ステータス（upstream レスポンスが存在する場合のみ設定）
 }
 ```
 
 - Google の生エラーメッセージ（ユーザー名、メールアドレス、カレンダー ID 等が含まれ得る）は一切 Error の message やログに出力せず、コードに基づいた固定安全メッセージを返却します。
-- 許可リストにない upstream reason は `undefined` として扱われます。
+- 許可リストにない upstream reason は `undefined` として扱われます（許可リスト: `rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `notFound`, `conflict`, `invalid`, `required`, `backendError`, `authError`, `invalidCredentials`, `forbidden`, `insufficientPermissions`, `requiredAccessLevel`）。
+- `googleStatus` は、Google から実際に HTTP レスポンス（パース失敗・ステータスコードを含む）を受信した場合にのみ記録され、ローカルバリデーション失敗やネットワーク到達不能、トークン取得エラーでは設定されません（捏造ステータスの防止）。
 
 ---
 
@@ -103,8 +107,8 @@ export class GoogleCalendarError extends Error {
 
 1. **ACL 共有スコープの留意点**:
    - Google 公式リファレンスでは `acl.insert` に必要なスコープとして `calendar` または `calendar.acls` が挙げられており、`calendar.app.created` は明記されていません。
-   - 本タスクではスコープの拡張は行わず、Phase 1 認可のままとしています。実際の動作可否は続く**タスク 1-3 スパイク（2 アカウントによる検証）**で判定します。
+   - 本タスクではスコープの拡張は行わず、Phase 1 認可のままとしています。実際の動作可否は続く**タスク 1-3 スパイク（2 アカウントによる検証、[docs/13-calendar-sharing-spike.md](13-calendar-sharing-spike.md)）**で判定します。
 2. **`freeBusy.query` のスコープ**:
    - 本タスクでは将来の Phase 2（空き状況取得）に向けたクライアントメソッドとして実装していますが、Phase 1 の OAuth 認可スコープには `calendar.freebusy` は含まれていません（Phase 2 で段階的認可を実施予定）。
 3. **`calendarList.insert`**:
-   - タスク 1-2 のスコープ外であり、タスク 1-4（家族への参加・カレンダー追加）にて扱います。
+   - タスク 1-3 スパイク（およびタスク 1-4 家族への参加・カレンダー追加）向けにクライアントメソッドとして実装。招待された大人が自身の `calendarList` に共有カレンダーを登録できるかを実機検証します（公式ドキュメントでは `calendar` または `calendar.calendarlist` が記載）。

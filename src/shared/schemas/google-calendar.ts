@@ -543,6 +543,39 @@ export const googleCalendarListEntrySchema = z.object({
 export type GoogleCalendarListEntry = z.infer<typeof googleCalendarListEntrySchema>;
 
 /**
+ * Insert CalendarList entry input schema (strict).
+ */
+export const insertCalendarListEntryInputSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(1024)
+      .refine((val) => val === val.trim(), {
+        message: 'id must not have leading or trailing whitespace',
+      })
+      .refine((val) => val !== '.' && val !== '..', {
+        message: 'id must not be relative path segments',
+      })
+      .refine(
+        (val) => {
+          try {
+            encodeURIComponent(val);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: 'id contains invalid unicode characters',
+        },
+      ),
+  })
+  .strict();
+
+export type InsertCalendarListEntryInput = z.infer<typeof insertCalendarListEntryInputSchema>;
+
+/**
  * Google CalendarList paginated response schema.
  */
 export const googleCalendarListPageResponseSchema = z.object({

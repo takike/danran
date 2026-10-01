@@ -148,7 +148,7 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 ## 8. 環境設定と人間による手順（Cloudflare / Google Cloud）
 
 > [!IMPORTANT]
-> **2026-09-30 人間による確認済みステータス**:
+> **2026-10-01 人間による確認済みステータス**:
 > - **Google Cloud Console**: Web OAuth クライアント作成済み。
 > - **登録済みリダイレクト URI**:
 >   - `http://localhost:5173/api/auth/callback`
@@ -157,13 +157,13 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 >   `openid`, `email`, `profile`, `https://www.googleapis.com/auth/calendar.app.created`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
 > - **Secret 登録状況**:
 >   - local: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が `.dev.vars` に設定済み。
->   - staging: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が Cloudflare Secrets に登録済み。
->   - `SESSION_SECRET` および `TOKEN_ENC_KEY` の登録状況は**未確認（UNCONFIRMED）**です。
->   - production 環境の OAuth 設定および Secret は**未確認（UNCONFIRMED）**です。
-> - **同意画面のプライバシーポリシー URL**:
->   staging 環境デプロイ後、Google Cloud Console の OAuth 同意画面に `https://danran-staging.tak-ikemachi.workers.dev/privacy` を設定できます（production は本番公開時に設定）。
->
-> このタスクでは、外部サービスのアカウント設定や Secret 登録を人間（管理者）の担当作業として残しており、エージェントによる自動設定・登録は実施していません。
+>   - staging: すべての Secret（`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `TOKEN_ENC_KEY`）が Cloudflare Secrets に登録済み（2026-10-01 人間により確認）。
+>   - production: OAuth 設定およびすべての Secret は**未確認**です。
+> - **プライバシーポリシー公開 URL**:
+>   staging 環境において公開 URL（`https://danran-staging.tak-ikemachi.workers.dev/privacy`）が利用可能（OAuth 同意画面の設定項目として利用可能。Google Cloud Console への登録有無は未確認）。
+> - **ログイン動作確認状況**:
+>   - staging 環境において、実 Google アカウントによるログインが正常に完了することを確認済み（2026-10-01 人間により確認）。
+>   - ※ なお、実ステージング環境でのその他の詳細手動ケース（ログアウト後の再ログイン、ブラウザ再起動後のセッション維持、トークン自動更新・失効時のハンドリング等）は未確認（自動テストにてカバー）。
 
 ### 1. Google Cloud Console 設定手順
 1. Google Cloud Console でプロジェクトを作成（または既存プロジェクトを選択）。
@@ -182,14 +182,16 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
      - 本番: `https://danran.tak-ikemachi.workers.dev/api/auth/callback`
 
 ### 2. Cloudflare Secrets の登録手順
-オペレーターは、未登録の Secret のみを以下のコマンドで登録します（Google 認証情報は staging 登録済み）：
+オペレーターは、環境構築時やシークレットローテーション時に以下のコマンドで登録します（staging は 2026-10-01 時点ですべて登録済み）：
 
 ```bash
-# staging の未登録 Secret（SESSION_SECRET, TOKEN_ENC_KEY）
+# staging の Secret 登録・更新（SESSION_SECRET, TOKEN_ENC_KEY 等）
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env staging
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env staging
 pnpm exec wrangler secret put SESSION_SECRET --env staging
 pnpm exec wrangler secret put TOKEN_ENC_KEY --env staging
 
-# production の Secret 登録（本番稼働準備時）
+# production の Secret 登録（本番稼働準備時に実施・未確認）
 pnpm exec wrangler secret put GOOGLE_CLIENT_ID --env production
 pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --env production
 pnpm exec wrangler secret put SESSION_SECRET --env production

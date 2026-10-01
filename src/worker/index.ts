@@ -2,6 +2,7 @@ import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import type { WorkerEnv } from '@worker/env';
 import { authRoute } from '@worker/routes/auth';
 import { healthRoute } from '@worker/routes/health';
+import { spikeApiRoute, spikeDocumentRoute } from '@worker/routes/spike';
 import { Hono } from 'hono';
 
 /**
@@ -14,6 +15,10 @@ export function createApp() {
   // Mount API routes under /api
   application.route('/api', healthRoute);
   application.route('/api', authRoute);
+  application.route('/api/spike', spikeApiRoute);
+
+  // Mount spike document navigation route under /spike
+  application.route('/spike', spikeDocumentRoute);
 
   // Global sanitized error handler ensuring sensitive payloads/tokens are never leaked
   application.onError((_err, c) => {
@@ -23,8 +28,14 @@ export function createApp() {
 
   // Ensure unknown API routes return 404 JSON validated against boundary schema, preventing SPA HTML fallback
   application.notFound((c) => {
-    const data = apiErrorResponseSchema.parse({ error: 'Not Found' });
-    return c.json(data, 404);
+    c.header('Cache-Control', 'no-store');
+    c.header('Pragma', 'no-cache');
+    c.header('Referrer-Policy', 'no-referrer');
+    if (c.req.path.startsWith('/api')) {
+      const data = apiErrorResponseSchema.parse({ error: 'Not Found' });
+      return c.json(data, 404);
+    }
+    return c.text('Not Found', 404);
   });
 
   return application;

@@ -7,6 +7,7 @@ import React from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
 const DevUiPage = import.meta.env.DEV ? React.lazy(() => import('@client/pages/DevUiPage')) : null;
+const SpikeCalendarSharingPage = React.lazy(() => import('@client/pages/SpikeCalendarSharingPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,20 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/privacy" element={<PrivacyPage />} />
+          <Route
+            path="/spike/calendar-sharing"
+            element={
+              <React.Suspense
+                fallback={
+                  <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-[var(--spacing-md)] text-xs text-muted">
+                    読み込み中...
+                  </div>
+                }
+              >
+                <SpikeCalendarSharingPage />
+              </React.Suspense>
+            }
+          />
           {import.meta.env.DEV && DevUiPage ? (
             <Route
               path="/dev/ui"

@@ -11,11 +11,13 @@ import {
   type FreeBusyQueryResponse,
   type GoogleAclRule,
   type GoogleCalendar,
+  type GoogleCalendarListEntry,
   type GoogleCalendarListPage,
   type GoogleEvent,
   type GoogleEventsPage,
   type InsertAclRuleInput,
   type InsertCalendarInput,
+  type InsertCalendarListEntryInput,
   type InsertEventInput,
   type PatchEventInput,
   aclInsertOptionsSchema,
@@ -30,12 +32,14 @@ import {
   freeBusyQueryResponseSchema,
   googleAclRuleResponseSchema,
   googleApiErrorBodySchema,
+  googleCalendarListEntrySchema,
   googleCalendarListPageResponseSchema,
   googleCalendarResponseSchema,
   googleEventResponseSchema,
   googleEventsPageResponseSchema,
   insertAclRuleInputSchema,
   insertCalendarInputSchema,
+  insertCalendarListEntryInputSchema,
   insertEventInputSchema,
   patchEventInputSchema,
 } from '@shared/schemas/google-calendar';
@@ -62,6 +66,7 @@ export interface GoogleCalendarErrorOptions {
   status: number;
   reason?: string;
   outcome?: 'uncertain' | 'failed';
+  googleStatus?: number;
 }
 
 /**
@@ -73,6 +78,7 @@ export class GoogleCalendarError extends Error {
   readonly status: number;
   readonly reason?: string;
   readonly outcome: 'uncertain' | 'failed';
+  readonly googleStatus?: number;
 
   constructor(options: GoogleCalendarErrorOptions) {
     super(options.message);
@@ -81,6 +87,7 @@ export class GoogleCalendarError extends Error {
     this.status = options.status;
     this.reason = options.reason;
     this.outcome = options.outcome ?? 'failed';
+    this.googleStatus = options.googleStatus;
   }
 }
 
@@ -98,6 +105,9 @@ const ALLOWLISTED_REASONS = new Set([
   'backendError',
   'authError',
   'invalidCredentials',
+  'forbidden',
+  'insufficientPermissions',
+  'requiredAccessLevel',
 ]);
 
 /**
@@ -290,6 +300,7 @@ async function sendHttpRequestWithRetry(
         message: 'Redirect response rejected',
         code: 'REDIRECT_REJECTED',
         status: response.status,
+        googleStatus: response.status,
       });
     }
 
@@ -306,6 +317,7 @@ async function sendHttpRequestWithRetry(
         code: 'AUTH_ERROR',
         status: 401,
         reason: 'authError',
+        googleStatus: 401,
       });
     }
 
@@ -343,6 +355,7 @@ async function sendHttpRequestWithRetry(
         status: response.status,
         outcome: 'uncertain',
         reason: upstreamReason,
+        googleStatus: response.status,
       });
     }
 
@@ -360,6 +373,7 @@ async function sendHttpRequestWithRetry(
         code: 'RATE_LIMITED',
         status: response.status,
         reason: upstreamReason ?? 'rateLimitExceeded',
+        googleStatus: response.status,
       });
     }
 
@@ -369,6 +383,7 @@ async function sendHttpRequestWithRetry(
         code: 'INVALID_INPUT',
         status: 400,
         reason: upstreamReason,
+        googleStatus: response.status,
       });
     }
 
@@ -378,6 +393,7 @@ async function sendHttpRequestWithRetry(
         code: 'NOT_FOUND',
         status: 404,
         reason: upstreamReason ?? 'notFound',
+        googleStatus: response.status,
       });
     }
 
@@ -387,6 +403,7 @@ async function sendHttpRequestWithRetry(
         code: 'CONFLICT',
         status: 409,
         reason: upstreamReason ?? 'conflict',
+        googleStatus: response.status,
       });
     }
 
@@ -395,6 +412,7 @@ async function sendHttpRequestWithRetry(
       code: 'API_ERROR',
       status: response.status,
       reason: upstreamReason,
+      googleStatus: response.status,
     });
   }
 
@@ -424,12 +442,14 @@ async function executeJsonRequest<T>(options: JsonRequestOptions<T>): Promise<T>
           code: 'UNCERTAIN_MUTATION',
           status: 204,
           outcome: 'uncertain',
+          googleStatus: 204,
         });
       }
       throw new GoogleCalendarError({
         message: 'Invalid response format from Google Calendar API',
         code: 'INVALID_RESPONSE',
         status: 204,
+        googleStatus: 204,
       });
     }
 
@@ -443,12 +463,14 @@ async function executeJsonRequest<T>(options: JsonRequestOptions<T>): Promise<T>
           code: 'UNCERTAIN_MUTATION',
           status: response.status,
           outcome: 'uncertain',
+          googleStatus: response.status,
         });
       }
       throw new GoogleCalendarError({
         message: 'Invalid response format from Google Calendar API',
         code: 'INVALID_RESPONSE',
         status: response.status,
+        googleStatus: response.status,
       });
     }
 
@@ -460,12 +482,14 @@ async function executeJsonRequest<T>(options: JsonRequestOptions<T>): Promise<T>
           code: 'UNCERTAIN_MUTATION',
           status: response.status,
           outcome: 'uncertain',
+          googleStatus: response.status,
         });
       }
       throw new GoogleCalendarError({
         message: 'Invalid response format from Google Calendar API',
         code: 'INVALID_RESPONSE',
         status: response.status,
+        googleStatus: response.status,
       });
     }
 
@@ -499,16 +523,18 @@ async function executeVoidRequest(options: VoidRequestOptions): Promise<void> {
       message: 'Invalid response format from Google Calendar API',
       code: 'INVALID_RESPONSE',
       status: response.status,
+      googleStatus: response.status,
     });
   });
 }
 
 /**
- * Public Google Calendar Client interface exposing exactly ten scoped methods.
+ * Public Google Calendar Client interface exposing twelve scoped methods.
  */
 export interface GoogleCalendarClient {
   calendars: {
     insert(input: InsertCalendarInput): Promise<GoogleCalendar>;
+    delete(calendarId: string): Promise<void>;
   };
   acl: {
     insert(
@@ -540,6 +566,7 @@ export interface GoogleCalendarClient {
   };
   calendarList: {
     list(options?: CalendarListListOptions): Promise<GoogleCalendarListPage>;
+    insert(input: InsertCalendarListEntryInput): Promise<GoogleCalendarListEntry>;
   };
   freeBusy: {
     query(input: FreeBusyQueryInput): Promise<FreeBusyQueryResponse>;
@@ -570,6 +597,16 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
           bodyText: JSON.stringify(validated.data),
           isNonIdempotentCreation: true,
           responseSchema: googleCalendarResponseSchema,
+        });
+      },
+
+      async delete(calendarId: string): Promise<void> {
+        const encodedCalendarId = validatePathSegment('calendarId', calendarId);
+        await executeVoidRequest({
+          env,
+          userId,
+          method: 'DELETE',
+          path: `/calendars/${encodedCalendarId}`,
         });
       },
     },
@@ -861,6 +898,28 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
           path: '/users/me/calendarList',
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
           responseSchema: googleCalendarListPageResponseSchema,
+        });
+      },
+
+      async insert(input: InsertCalendarListEntryInput): Promise<GoogleCalendarListEntry> {
+        const validated = insertCalendarListEntryInputSchema.safeParse(input);
+        if (!validated.success) {
+          throw new GoogleCalendarError({
+            message: 'Invalid request arguments for Google Calendar API',
+            code: 'INVALID_INPUT',
+            status: 400,
+          });
+        }
+        validatePathSegment('id', validated.data.id);
+
+        return await executeJsonRequest<GoogleCalendarListEntry>({
+          env,
+          userId,
+          method: 'POST',
+          path: '/users/me/calendarList',
+          bodyText: JSON.stringify(validated.data),
+          isNonIdempotentCreation: true,
+          responseSchema: googleCalendarListEntrySchema,
         });
       },
     },

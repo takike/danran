@@ -50,7 +50,7 @@ const pwaPlugins: Plugin[] = VitePWA({
     globDirectory: 'dist/client',
     globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
     navigateFallback: '/index.html',
-    navigateFallbackDenylist: [/^\/api(?:\/|$)/],
+    navigateFallbackDenylist: [/^\/api(?:\/|$)/, /^\/spike(?:\/|$)/],
     cleanupOutdatedCaches: true,
     runtimeCaching: [],
   },
@@ -66,8 +66,17 @@ const pwaPlugins: Plugin[] = VitePWA({
   }),
 );
 
+const persistState = process.env.DANRAN_PERSIST_PATH
+  ? { path: process.env.DANRAN_PERSIST_PATH }
+  : undefined;
+
 export default defineConfig({
-  plugins: [tailwindcss(), react(), cloudflare(), ...pwaPlugins],
+  plugins: [
+    tailwindcss(),
+    react(),
+    cloudflare(persistState ? { persistState } : undefined),
+    ...pwaPlugins,
+  ],
   resolve: {
     alias: {
       '@client': fileURLToPath(new URL('./src/client', import.meta.url)),
