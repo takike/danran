@@ -52,7 +52,7 @@
 
 | # | 論点 | いつ決めるか | メモ |
 |---|---|---|---|
-| Q1 | `calendar.app.created` だけで (a) 家族カレンダーの ACL を追加できるか、(b) 招待された大人が自分のトークンで家族カレンダーを読み書きできるか | Phase 1（タスク 1-3） | (a) が不可なら `calendar.acls` を追加するか、手動共有の手順を案内する。(b) が不可なら、読み書きを作成者のトークンに寄せる（サーバー経由なので可能）か、`calendar.events` を Phase 1 から要求する。**検証用画面・API・自動テストの実装完了。staging 実機での人間による A/B 実験待ち（保留中・PENDING）** |
+| Q1 | `calendar.app.created` だけで (a) 家族カレンダーの ACL を追加できるか、(b) 招待された大人が自分のトークンで家族カレンダーを読み書きできるか | Phase 1（タスク 1-3） | (a) が不可なら `calendar.acls` を追加するか、手動共有の手順を案内する。(b) が不可なら、読み書きを作成者のトークンに寄せる（サーバー経由なので可能）か、`calendar.events` を Phase 1 から要求する。**2026-10-01 検証済み**：(a) 不可（403）、(b) 可。共有方式は未決（下の記録を参照） |
 | Q2 | Workers 上の Web Push の実装方法 | Phase 6（タスク 6-4） | WebCrypto 対応のライブラリか自前実装か |
 | Q3 | プリント抽出に使う LLM のモデル、データ利用ポリシーの確認と記載 | Phase 4 の前 | 子どもの名前を含む画像を送るため、学習利用されない API 設定であることを確認する |
 | Q4 | 送迎ブロックを担当者の個人カレンダーに書き出すか（仕事側に「いない」ことを伝えるため） | Phase 2 以降 | 書き出す場合は `mirrored_blocks` で二重表示を防ぐ。既定はオフが無難 |
@@ -74,29 +74,30 @@
 
 | 項目 | 記録内容 | 備考 |
 |---|---|---|
-| 実施日 | （未実施 / YYYY-MM-DD） | — |
+| 実施日 | 2026-10-01 | — |
 | 検証環境 | staging (`https://danran-staging.tak-ikemachi.workers.dev`) | `ENABLE_SPIKES === 'true'` |
 | Account A エイリアス | `user-a`（カレンダー作成者） | 実メールアドレスはコミットしない |
 | Account B エイリアス | `user-b`（招待される大人） | 実メールアドレスはコミットしない |
-| スコープ確認（A） | [ ] 既存 5 スコープのみ確認（確認日: ） | 余分な広範スコープが付与されていないことを確認 |
-| スコープ確認（B） | [ ] 既存 5 スコープのみ確認（確認日: ） | 余分な広範スコープが付与されていないことを確認 |
+| スコープ確認（A） | 未確認（Danran 用の OAuth クライアントは 2026-09-29 新規作成で、Phase 1 の 5 スコープ以外を要求したことはない） | 余分な広範スコープが付与されていないことを確認 |
+| スコープ確認（B） | 未確認（同上） | 余分な広範スコープが付与されていないことを確認 |
 
-#### 実験結果記録テーブル（空枠）
+#### 実験結果記録テーブル
 
 | 検証項目 | 実行主体 | 実行操作 | 期待される挙動 / 確認内容 | 成否 (OK/NG) | Google HTTP Status | safe reason | 備考・所見 |
 |---|---|---|---|---|---|---|---|
-| **事前準備** | Account A | カレンダー作成 (`calendars.insert`) | 検証用カレンダー "Danran spike" が作成され ID 発行 | — | — | — | — |
-| **事前準備** | Account A | 基準予定作成 (`events.insert`) | 合成予定 "Danran spike test" (2030-01-01) が登録される | — | — | — | — |
-| **Q1(a)** | Account A | ACL 付与 (`acl.insert`) | Account B のメールアドレスに対し writer 権限を付与できるか | — | — | — | 公式仕様では `calendar.acls` / `calendar` が要求されるため 403 予想 |
-| **手動共有** | 人間 | Google カレンダー Web UI 手動共有 | Q1(a) が 403 で拒否された場合のみ、Web UI から Account B に変更権限を手動共有 | — | — | — | 実施有無: [ ] はい / [ ] いいえ |
-| **補助検証** | Account B | リスト追加 (`calendarList.insert`) | Account B が共有カレンダーを自身のカレンダーリストに追加できるか | — | — | — | 403 失敗しても Q1(b) 読み書き検証は継続する |
-| **Q1(b)-1** | Account B | 予定一覧取得 (`events.list`) | Account B 自身のトークンで共有カレンダーの予定一覧が読めるか（1件確認） | — | — | — | プライバシー保護のため件数のみ返却 |
-| **Q1(b)-2** | Account B | 予定作成 (`events.insert`) | Account B 自身のトークンで共有カレンダーにテスト予定を登録できるか | — | — | — | 合成予定 (2030-01-01) |
-| **Q1(b)-3** | Account B | 予定削除 (`events.delete`) | Account B 自身が作成したテスト予定を削除できるか | — | — | — | 署名レシート検証 |
-| **後片付け** | Account A | カレンダー削除 (`calendars.delete`) | Account A のレシートで検証用カレンダーが削除されるか | — | — | — | [ ] API削除完了 / [ ] Google Web UI手動削除 |
+| **事前準備** | Account A | カレンダー作成 (`calendars.insert`) | 検証用カレンダー "Danran spike" が作成され ID 発行 | OK | 200 | — | — |
+| **事前準備** | Account A | 基準予定作成 (`events.insert`) | 合成予定 "Danran spike test" (2030-01-01) が登録される | 未実施 | — | — | 省略（B の events.list は 0 件、B 作成後の削除まで確認済み） |
+| **Q1(a)** | Account A | ACL 付与 (`acl.insert`) | Account B のメールアドレスに対し writer 権限を付与できるか | **NG** | 403 | insufficientPermissions | 予想どおり。複数回再試行しても同一結果 |
+| **手動共有** | 人間 | Google カレンダー Web UI 手動共有 | Q1(a) が 403 で拒否された場合のみ、Web UI から Account B に変更権限を手動共有 | OK | — | — | 実施有無: はい（「予定の変更」権限） |
+| **補助検証** | Account B | リスト追加 (`calendarList.insert`) | Account B が共有カレンダーを自身のカレンダーリストに追加できるか | **NG** | 403 | insufficientPermissions | `calendarList.insert` は `calendar.calendarlist`（または `calendar`）が必要 |
+| **Q1(b)-1** | Account B | 予定一覧取得 (`events.list`) | Account B 自身のトークンで共有カレンダーの予定一覧が読めるか（1件確認） | **OK** | 200 | — | 0 件（基準予定は未作成のため） |
+| **Q1(b)-2** | Account B | 予定作成 (`events.insert`) | Account B 自身のトークンで共有カレンダーにテスト予定を登録できるか | **OK** | 200 | — | 合成予定 (2030-01-01) |
+| **Q1(b)-3** | Account B | 予定削除 (`events.delete`) | Account B 自身が作成したテスト予定を削除できるか | **OK** | 204 | — | — |
+| **後片付け** | Account A | カレンダー削除 (`calendars.delete`) | Account A のレシートで検証用カレンダーが削除されるか | 実施待ち | — | — | 3-a で削除予定 |
 
-#### 意思決定ステータス（判定待ち）
+#### 意思決定ステータス
 
-- **Q1(a) 判定**: （保留中 / PENDING）— `calendar.app.created` だけで ACL 追加可能か、手動共有案内または `calendar.acls` 要求が必要か。
-- **Q1(b) 判定**: （保留中 / PENDING）— 招待された大人が自身のトークンで読み書き可能か、作成者トークンプロキシまたは `calendar.events` 要求が必要か。
-- **総合判定**: 人間によるステージング実機検証完了後に更新。
+- **Q1(a) 判定（2026-10-01）**: `calendar.app.created` だけでは `acl.insert` は **不可**（403 insufficientPermissions）。共有方法は下の「1-4 の共有方式」で決める。
+- **Q1(b) 判定（2026-10-01）**: 招待された大人は、自分のトークン（`calendar.app.created` のみ）で、共有された家族カレンダーの予定を **読み書き・削除できる**。作成者トークンへのプロキシや `calendar.events` の追加は不要。
+- **補助（calendarList）**: `calendarList.insert` は今のスコープでは **不可**。招待された大人の Google カレンダー画面に家族カレンダーを出すには、共有通知メールからの追加、または `calendar.calendarlist` スコープが必要。
+- **1-4 の共有方式**: 未決（オーナー判断待ち）。候補は「`calendar.acls` を招待時だけ追加で要求（incremental authorization）」か「Google カレンダー画面での手動共有を案内」。
