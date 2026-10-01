@@ -96,7 +96,10 @@ danran/
 ### ② 家族カレンダー
 
 - 家族作成時に、オーナーのトークンで `calendars.insert` を呼んで作成する（名前例「Danran（家族）」、タイムゾーン `Asia/Tokyo`）。
-- 他の大人は ACL（`writer`）で共有する。**要検証**：`calendar.app.created` スコープだけで、作成したカレンダーの ACL を追加できるか。また、招待された大人のトークン（同じく `app.created`）で家族カレンダーを読み書きできるか（できなければ、家族カレンダーへのアクセスはサーバー側でオーナーのトークンに寄せる）。できなければ、(a) `calendar.acls` スコープを追加する、(b) オーナーに Google Calendar 上で手動共有してもらう手順を案内する、のどちらか（[06-decisions.md](06-decisions.md)）。
+- 他の大人は ACL（`writer`）で共有する（2026-10-01 のスパイク結果に基づく。[06-decisions.md](06-decisions.md) の Q1）。
+  - **共有の設定**：`calendar.app.created` だけでは `acl.insert` が 403 になるため、オーナーが招待リンクを発行するときに限り `https://www.googleapis.com/auth/calendar.acls` を追加で同意してもらう（incremental authorization、`include_granted_scopes=true`）。`acl.insert` は `sendNotifications=true` で呼び、Google から招待された大人に共有通知メールが届くようにする。
+  - **招待された大人の読み書き**：自分のトークン（`calendar.app.created` のみ）で、共有された家族カレンダーの予定を読み書き・削除できることを確認済み。オーナーのトークンに寄せる必要はない。
+  - **招待された大人の Google カレンダー一覧への表示**：`calendarList.insert` は今のスコープでは不可。スコープは増やさず、共有通知メールの「カレンダーを追加」から追加してもらう。参加完了画面でその操作を案内する。
 - イベントの `extendedProperties.private` に最小限のメタデータを入れる。Google 側だけでも関係が復元できるようにするため。
   - `danran`: `"1"`（Danran 管理のイベント）
   - `members`: `"m_xxx,m_yyy"`（対象メンバー ID。子どもを含む）
@@ -153,7 +156,7 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
   - `https://www.googleapis.com/auth/calendar.app.created`：家族カレンダーの作成と、その上の予定の読み書き
   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：free/busy 対象カレンダーの選択
   - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events`（個人予定の取得・書き出し）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。
-  - ACL が `app.created` で足りなければ `calendar.acls`（要検証）
+  - `https://www.googleapis.com/auth/calendar.acls`：**招待リンクを発行するオーナーだけ**に、発行時に追加で同意を求める（incremental authorization）。家族カレンダーの共有設定にのみ使う
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。
 
 ### 取得の流れ（Phase 1〜2 はオンデマンド）

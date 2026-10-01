@@ -46,13 +46,13 @@
 | 2026-09-30 | 静的プライバシーポリシー（`/privacy`）：認証 API やバックエンド Secret の設定状態に依存しない独立した公開ルートとして配置。Google 連携情報・リフレッシュトークン暗号化・3層データモデル（個人予定の内容は保持せず busy のみ共有）を平易な日本語で記載し、現在実装済みのログイン機能と将来の予定を明確に区分 | ユーザーへの情報提供および Google OAuth 同意画面要件の充足のため |
 | 2026-09-30 | シークレット鍵フォーマットの明確化：`SESSION_SECRET` は `openssl rand -hex 32` による 64文字 16進文字列（256bit エントロピー、互換性のため 32文字以上の文字列も許容）を推奨とし、`TOKEN_ENC_KEY` は `openssl rand -base64 32` による標準 Base64 32バイト（44文字、末尾 `=`）に規約化。環境（local/staging/production）ごとに独立させ、ローテーション時の影響を文書化 | 鍵生成の標準化と運用の明確化のため |
 | 2026-10-01 | カレンダー共有スパイク（Task 1-3）の検証アーキテクチャ：一時的な認証付き検証画面（`/spike/calendar-sharing`）および API（`/api/spike/calendar-sharing`）を配備。wrangler の `env.staging.vars` のみ `ENABLE_SPIKES: "true"` を設定し、local/production は未定義（デフォルト無効）。`assets.binding = "ASSETS"` および `assets.run_worker_first = ["/api/*", "/spike", "/spike/*"]` により、無効環境では SPA 静的アセット配信前に Worker が真の HTTP 404 を返却。Workbox `navigateFallbackDenylist` にも `/^\/spike(?:\/|$)/` を追加。新規 DB テーブルやスキーマ変更を行わず、jose と `SESSION_SECRET` による 24時間有効な短命 HS256 署名付きレシート（kind, userId, calendarId, eventId）をページメモリ内のみで保持し、カレンダー・予定の破壊的削除および ACL 付与を暗号学的にガード。E2E の SQLite ロック（SQLITE_BUSY）防止のため `DANRAN_PERSIST_PATH` による D1 永続化ディレクトリ分離を導入 | 実 Google アカウントによる共有権限境界（Q1）の客観的検証を安全に行うため。本番・ローカルへの不要な画面露出や DB マイグレーションの汚染を防ぎ、無効時のフェイルクローズおよび破壊的操作の境界を厳格に保護するため |
-
+| 2026-10-01 | 家族カレンダーの共有方式：招待リンク発行時のみオーナーに `calendar.acls` を incremental authorization で追加要求し、参加時に `acl.insert`（writer、通知あり）。参加者はログイン時の `calendar.app.created` のみで家族カレンダーを読み書きする。参加者の Google カレンダー一覧への追加は共有通知メール経由（`calendar.calendarlist` は要求しない） | 1-3 スパイクの結果（acl.insert / calendarList.insert は 403、参加者の予定読み書きは可）。同意画面の権限を最小にし、強い権限は必要な人に必要なときだけ求めるため |
 
 ## 未決事項
 
 | # | 論点 | いつ決めるか | メモ |
 |---|---|---|---|
-| Q1 | `calendar.app.created` だけで (a) 家族カレンダーの ACL を追加できるか、(b) 招待された大人が自分のトークンで家族カレンダーを読み書きできるか | Phase 1（タスク 1-3） | (a) が不可なら `calendar.acls` を追加するか、手動共有の手順を案内する。(b) が不可なら、読み書きを作成者のトークンに寄せる（サーバー経由なので可能）か、`calendar.events` を Phase 1 から要求する。**2026-10-01 検証済み**：(a) 不可（403）、(b) 可。共有方式は未決（下の記録を参照） |
+| Q1 | `calendar.app.created` だけで (a) 家族カレンダーの ACL を追加できるか、(b) 招待された大人が自分のトークンで家族カレンダーを読み書きできるか | Phase 1（タスク 1-3） | (a) が不可なら `calendar.acls` を追加するか、手動共有の手順を案内する。(b) が不可なら、読み書きを作成者のトークンに寄せる（サーバー経由なので可能）か、`calendar.events` を Phase 1 から要求する。**2026-10-01 解決**：(a) 不可（403）、(b) 可。共有は招待時のみ `calendar.acls` を追加同意、一覧への追加は共有通知メールから（下の記録を参照） |
 | Q2 | Workers 上の Web Push の実装方法 | Phase 6（タスク 6-4） | WebCrypto 対応のライブラリか自前実装か |
 | Q3 | プリント抽出に使う LLM のモデル、データ利用ポリシーの確認と記載 | Phase 4 の前 | 子どもの名前を含む画像を送るため、学習利用されない API 設定であることを確認する |
 | Q4 | 送迎ブロックを担当者の個人カレンダーに書き出すか（仕事側に「いない」ことを伝えるため） | Phase 2 以降 | 書き出す場合は `mirrored_blocks` で二重表示を防ぐ。既定はオフが無難 |
@@ -100,4 +100,4 @@
 - **Q1(a) 判定（2026-10-01）**: `calendar.app.created` だけでは `acl.insert` は **不可**（403 insufficientPermissions）。共有方法は下の「1-4 の共有方式」で決める。
 - **Q1(b) 判定（2026-10-01）**: 招待された大人は、自分のトークン（`calendar.app.created` のみ）で、共有された家族カレンダーの予定を **読み書き・削除できる**。作成者トークンへのプロキシや `calendar.events` の追加は不要。
 - **補助（calendarList）**: `calendarList.insert` は今のスコープでは **不可**。招待された大人の Google カレンダー画面に家族カレンダーを出すには、共有通知メールからの追加、または `calendar.calendarlist` スコープが必要。
-- **1-4 の共有方式**: 未決（オーナー判断待ち）。候補は「`calendar.acls` を招待時だけ追加で要求（incremental authorization）」か「Google カレンダー画面での手動共有を案内」。
+- **1-4 の共有方式（2026-10-01 決定）**: 招待リンク発行時に、オーナーにだけ `calendar.acls` を追加で同意してもらい（incremental authorization）、参加時にアプリが `acl.insert`（writer、`sendNotifications=true`）を実行する。参加者の Google カレンダー一覧への追加はスコープを増やさず、共有通知メールから追加してもらう。
