@@ -19,11 +19,11 @@ test.describe('Dev UI Component Showcase (/dev/ui)', () => {
     await expect(page.getByText('締切 10/10')).toBeVisible();
     await expect(page.getByText('候補')).toBeVisible();
 
-    // 3. MemberDot (synthetic names with aria-hidden color dots)
-    await expect(page.getByText('メンバーA')).toBeVisible();
-    await expect(page.getByText('メンバーB')).toBeVisible();
-    await expect(page.getByText('メンバーC')).toBeVisible();
-    await expect(page.getByText('メンバーD')).toBeVisible();
+    // 3. MemberDot palette
+    const memberDotShowcase = page.locator('section[aria-labelledby="heading-member-dot"]');
+    for (const colorName of ['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', '石板']) {
+      await expect(memberDotShowcase.getByText(colorName)).toBeVisible();
+    }
 
     // 4. Segmented group
     await expect(page.getByRole('group', { name: 'やることの表示順切り替え' })).toBeVisible();

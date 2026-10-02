@@ -19,6 +19,8 @@ export const PHASE1_SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
 ] as const;
 
+export const FAMILY_ACL_SCOPE = 'https://www.googleapis.com/auth/calendar.acls' as const;
+
 /**
  * Validates and extracts pure application origin from configured APP_ORIGIN.
  * Enforces HTTPS except for localhost and loopback IPv4/IPv6 development origins.

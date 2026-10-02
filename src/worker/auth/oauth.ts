@@ -1,4 +1,9 @@
-import { oauthPayloadSchema } from '@shared/schemas/auth';
+import {
+  type OAuthFamilyAclPayload,
+  type OAuthLoginPayload,
+  type OAuthPayload,
+  oauthPayloadSchema,
+} from '@shared/schemas/auth';
 import type { Database } from '@worker/db';
 import { oauthStates } from '@worker/db/schema';
 import { and, eq, gt, lt } from 'drizzle-orm';
@@ -6,6 +11,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import {
   type AuthConfig,
+  FAMILY_ACL_SCOPE,
   GOOGLE_AUTH_ENDPOINT,
   OAUTH_COOKIE_NAME,
   OAUTH_STATE_TTL_SECONDS,
@@ -26,6 +32,19 @@ export const OAUTH_COOKIE_OPTIONS = {
   sameSite: 'Lax' as const,
   maxAge: OAUTH_STATE_TTL_SECONDS,
 };
+
+export type InitiateOAuthContext =
+  | {
+      purpose?: 'login';
+      inviteToken?: string;
+    }
+  | {
+      purpose: 'family-acl';
+      userId: string;
+      sessionId: string;
+      familyId: string;
+      loginHint?: string;
+    };
 
 /**
  * Opportunistically cleans up expired transient OAuth states from D1.
@@ -52,6 +71,7 @@ export async function initiateOAuthFlow(
   c: Context,
   db: Database,
   config: AuthConfig,
+  context?: InitiateOAuthContext,
 ): Promise<{ authUrl: string }> {
   await cleanupExpiredOAuthStates(db);
 
@@ -64,7 +84,30 @@ export async function initiateOAuthFlow(
   const bindingHash = await sha256Hex(browserBinding);
   const codeChallenge = await generateCodeChallenge(codeVerifier);
 
-  const payload = JSON.stringify({ codeVerifier, nonce });
+  let payload: string;
+  if (context?.purpose === 'family-acl') {
+    const aclPayload: OAuthFamilyAclPayload = {
+      purpose: 'family-acl',
+      codeVerifier,
+      nonce,
+      userId: context.userId,
+      sessionId: context.sessionId,
+      familyId: context.familyId,
+    };
+    payload = JSON.stringify(aclPayload);
+  } else if (context?.inviteToken) {
+    const loginPayload: OAuthLoginPayload = {
+      purpose: 'login',
+      codeVerifier,
+      nonce,
+      inviteToken: context.inviteToken,
+    };
+    payload = JSON.stringify(loginPayload);
+  } else {
+    // Preserve legacy format { codeVerifier, nonce } for standard login without invite token
+    payload = JSON.stringify({ codeVerifier, nonce });
+  }
+
   const payloadEnc = await encryptAesGcm(payload, config.tokenEncKey, `oauth-state:${stateHash}`);
 
   const now = Math.floor(Date.now() / 1000);
@@ -87,11 +130,13 @@ export async function initiateOAuthFlow(
   );
 
   const redirectUri = `${config.appOrigin}/api/auth/callback`;
+  const isFamilyAcl = context?.purpose === 'family-acl';
+
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: PHASE1_SCOPES.join(' '),
+    scope: isFamilyAcl ? [...PHASE1_SCOPES, FAMILY_ACL_SCOPE].join(' ') : PHASE1_SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     state,
@@ -99,6 +144,13 @@ export async function initiateOAuthFlow(
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
   });
+
+  if (isFamilyAcl) {
+    params.set('include_granted_scopes', 'true');
+    if (context.loginHint) {
+      params.set('login_hint', context.loginHint);
+    }
+  }
 
   const authUrl = `${GOOGLE_AUTH_ENDPOINT}?${params.toString()}`;
   return { authUrl };
@@ -114,7 +166,7 @@ export async function consumeOAuthFlow(
   db: Database,
   config: AuthConfig,
   state: string,
-): Promise<{ codeVerifier: string; nonce: string }> {
+): Promise<OAuthPayload> {
   const browserBinding = await getSignedCookie(c, config.sessionSecret, OAUTH_COOKIE_NAME);
 
   // Clear oauth cookie immediately regardless of outcome

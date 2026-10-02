@@ -1,8 +1,8 @@
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import type { WorkerEnv } from '@worker/env';
 import { authRoute } from '@worker/routes/auth';
+import { familiesRoute, invitesRoute } from '@worker/routes/families';
 import { healthRoute } from '@worker/routes/health';
-import { spikeApiRoute, spikeDocumentRoute } from '@worker/routes/spike';
 import { Hono } from 'hono';
 
 /**
@@ -15,10 +15,8 @@ export function createApp() {
   // Mount API routes under /api
   application.route('/api', healthRoute);
   application.route('/api', authRoute);
-  application.route('/api/spike', spikeApiRoute);
-
-  // Mount spike document navigation route under /spike
-  application.route('/spike', spikeDocumentRoute);
+  application.route('/api/families', familiesRoute);
+  application.route('/api/invites', invitesRoute);
 
   // Global sanitized error handler ensuring sensitive payloads/tokens are never leaked
   application.onError((_err, c) => {

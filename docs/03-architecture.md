@@ -96,6 +96,7 @@ danran/
 ### ② 家族カレンダー
 
 - 家族作成時に、オーナーのトークンで `calendars.insert` を呼んで作成する（名前例「Danran（家族）」、タイムゾーン `Asia/Tokyo`）。
+  - 作成試行ごとの識別子を説明欄に付け、結果が不確定になったときはオーナーの `calendarList.list` で照合する。判定条件と復旧手順は [14-family-onboarding.md](14-family-onboarding.md) を参照。
 - 他の大人は ACL（`writer`）で共有する（2026-10-01 のスパイク結果に基づく。[06-decisions.md](06-decisions.md) の Q1）。
   - **共有の設定**：`calendar.app.created` だけでは `acl.insert` が 403 になるため、オーナーが招待リンクを発行するときに限り `https://www.googleapis.com/auth/calendar.acls` を追加で同意してもらう（incremental authorization、`include_granted_scopes=true`）。`acl.insert` は `sendNotifications=true` で呼び、Google から招待された大人に共有通知メールが届くようにする。
   - **招待された大人の読み書き**：自分のトークン（`calendar.app.created` のみ）で、共有された家族カレンダーの予定を読み書き・削除できることを確認済み。オーナーのトークンに寄せる必要はない。
@@ -118,10 +119,13 @@ users            id, google_sub, email, display_name, created_at
 oauth_states     state_hash, browser_binding_hash, payload_enc, expires_at, created_at -- PKCE/nonce/ブラウザバインド暗号化一時保管（単一消費・TTL10分）
 google_tokens    user_id, refresh_token_enc, scopes, updated_at        -- AES-GCM で暗号化（AAD: google-refresh:userId）
 sessions         id, user_id, expires_at, created_at                   -- id は生の256bit乱数トークンの SHA-256。Cookie には HMAC 署名値を格納
-families         id, name, family_calendar_id, owner_user_id, day_start_hour(8), day_end_hour(20), created_at
-members          id, family_id, user_id NULL, kind(adult|child), name, color, sort_order
+families         id, name, family_calendar_id, owner_user_id, day_start_hour(8), day_end_hour(20),
+                 creation_status(creating|ready|uncertain|failed), calendar_creation_id, created_at
+members          id, family_id, user_id NULL, kind(adult|child), name,
+                 color(indigo|green|ochre|purple|coral|teal|rose|slate), sort_order, status(active|pending)
 member_calendars member_id, calendar_id, include_in_busy(bool)          -- free/busy 対象の個人カレンダー
-invites          id, family_id, token_hash, expires_at, used_at
+invites          id, family_id, token_hash, expires_at, used_at, claimed_user_id NULL,
+                 status(available|claiming|uncertain|used), created_at
 closure_days     id, family_id, date, label, member_ids                -- 保育園の休園日など
 event_meta       id, family_id, calendar_id, event_id, recurring_event_id NULL, original_start NULL,
                  items_json, assignee_member_id NULL, status, source, import_job_id NULL, updated_at

@@ -1,11 +1,19 @@
 import {
   type AuthCallbackQuery,
+  type OAuthPayload,
   authCallbackQuerySchema,
+  authLoginRequestBodySchema,
+  authLoginResponseSchema,
   authLogoutResponseSchema,
   authMeResponseSchema,
 } from '@shared/schemas/auth';
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
-import { type AuthConfig, SESSION_TTL_SECONDS, getAuthConfig } from '@worker/auth/config';
+import {
+  type AuthConfig,
+  FAMILY_ACL_SCOPE,
+  SESSION_TTL_SECONDS,
+  getAuthConfig,
+} from '@worker/auth/config';
 import { encryptAesGcm, generateRandomToken, sha256Hex } from '@worker/auth/crypto';
 import { clearOAuthCookie, consumeOAuthFlow, initiateOAuthFlow } from '@worker/auth/oauth';
 import {
@@ -15,7 +23,7 @@ import {
   setSessionCookie,
 } from '@worker/auth/session';
 import { createDb } from '@worker/db';
-import { googleTokens, sessions, users } from '@worker/db/schema';
+import { families, googleTokens, members, sessions, users } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import {
   GoogleAuthError,
@@ -23,8 +31,9 @@ import {
   validateAndNormalizeScopes,
   verifyGoogleIdToken,
 } from '@worker/google/oauth';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 
 export const authRoute = new Hono<{ Bindings: WorkerEnv }>();
 
@@ -84,14 +93,81 @@ authRoute.onError((err, c) => {
 /**
  * GET /api/auth/login
  * Initiates Google OAuth 2.0 flow with PKCE, state, and browser binding.
+ * Plain baseline login only. Rejects arbitrary returnURL query parameter.
  */
 authRoute.get('/auth/login', async (c) => {
+  if (c.req.query('returnUrl') || c.req.query('return_url')) {
+    const errorBody = apiErrorResponseSchema.parse({ error: 'Invalid query parameters' });
+    return c.json(errorBody, 400);
+  }
+
   const config = getAuthConfig(c.env);
   const db = createDb(c.env.DB);
 
   const { authUrl } = await initiateOAuthFlow(c, db, config);
   return c.redirect(authUrl, 302);
 });
+
+/**
+ * POST /api/auth/login
+ * Initiates baseline OAuth login with invite token continuation.
+ * Strict body validation max 2KiB, exact Origin and XMLHttpRequest even anonymous.
+ * Rejects arbitrary returnURL. Returns { authorizationUrl }.
+ */
+authRoute.post(
+  '/auth/login',
+  bodyLimit({
+    maxSize: 2048,
+    onError: (c) => {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Payload Too Large' });
+      return c.json(errorBody, 413);
+    },
+  }),
+  async (c) => {
+    const xRequestedWith = c.req.header('x-requested-with');
+    if (xRequestedWith !== 'XMLHttpRequest') {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Forbidden' });
+      return c.json(errorBody, 403);
+    }
+
+    const originHeader = c.req.header('origin');
+    const config = getAuthConfig(c.env);
+    if (originHeader !== config.appOrigin) {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Forbidden' });
+      return c.json(errorBody, 403);
+    }
+
+    if (c.req.query('returnUrl') || c.req.query('return_url')) {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Invalid query parameters' });
+      return c.json(errorBody, 400);
+    }
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = await c.req.json();
+    } catch {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Invalid JSON' });
+      return c.json(errorBody, 400);
+    }
+
+    const bodyResult = authLoginRequestBodySchema.safeParse(parsedJson);
+    if (!bodyResult.success) {
+      const errorBody = apiErrorResponseSchema.parse({ error: 'Invalid request body' });
+      return c.json(errorBody, 400);
+    }
+
+    const db = createDb(c.env.DB);
+    const { authUrl } = await initiateOAuthFlow(c, db, config, {
+      purpose: 'login',
+      inviteToken: bodyResult.data.inviteToken,
+    });
+
+    const responseBody = authLoginResponseSchema.parse({
+      authorizationUrl: authUrl,
+    });
+    return c.json(responseBody, 200);
+  },
+);
 
 /**
  * GET /api/auth/callback
@@ -115,7 +191,7 @@ authRoute.get('/auth/callback', async (c) => {
   const db = createDb(c.env.DB);
 
   // Handle user cancellation / error from Google:
-  // Must atomically consume matching valid state and browser binding before redirecting to fixed root
+  // Must atomically consume matching valid state and browser binding before redirecting
   if (query.error) {
     if (!query.state) {
       clearOAuthCookie(c);
@@ -125,14 +201,23 @@ authRoute.get('/auth/callback', async (c) => {
       return c.json(errorBody, 400);
     }
 
+    let consumed: OAuthPayload;
     try {
-      await consumeOAuthFlow(c, db, config, query.state);
+      consumed = await consumeOAuthFlow(c, db, config, query.state);
     } catch {
       clearOAuthCookie(c);
       const errorBody = apiErrorResponseSchema.parse({
         error: 'Invalid or expired OAuth state',
       });
       return c.json(errorBody, 400);
+    }
+
+    if (consumed.purpose === 'family-acl') {
+      return c.redirect('/onboarding?error=acl_denied', 302);
+    }
+
+    if (consumed.inviteToken) {
+      return c.redirect(`/invite?error=access_denied#${consumed.inviteToken}`, 302);
     }
 
     return c.redirect('/?error=access_denied', 302);
@@ -147,12 +232,9 @@ authRoute.get('/auth/callback', async (c) => {
   }
 
   // 1. Single-use atomic consumption of OAuth state and browser binding
-  let codeVerifier: string;
-  let nonce: string;
+  let consumed: OAuthPayload;
   try {
-    const consumed = await consumeOAuthFlow(c, db, config, query.state);
-    codeVerifier = consumed.codeVerifier;
-    nonce = consumed.nonce;
+    consumed = await consumeOAuthFlow(c, db, config, query.state);
   } catch {
     const errorBody = apiErrorResponseSchema.parse({
       error: 'Invalid or expired OAuth state',
@@ -160,6 +242,248 @@ authRoute.get('/auth/callback', async (c) => {
     return c.json(errorBody, 400);
   }
 
+  const { codeVerifier, nonce } = consumed;
+
+  // -------------------------------------------------------------
+  // BRANCH 1: Incremental Family ACL authorization flow
+  // -------------------------------------------------------------
+  if (consumed.purpose === 'family-acl') {
+    // 1. BEFORE token exchange: validate signed current session cookie matches payload sessionId/userId,
+    // and current family is ready, owned by user, with active owner membership
+    const currentSession = await getSessionUser(c, db, config.sessionSecret);
+    if (
+      !currentSession ||
+      currentSession.sessionId !== consumed.sessionId ||
+      currentSession.user.id !== consumed.userId
+    ) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Session invalid or expired',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    const boundFamilies = await db
+      .select()
+      .from(families)
+      .where(
+        and(
+          eq(families.id, consumed.familyId),
+          eq(families.ownerUserId, consumed.userId),
+          eq(families.creationStatus, 'ready'),
+        ),
+      );
+
+    const boundFamily = boundFamilies[0];
+    if (!boundFamily) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Family not found or not owned',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    const activeMembers = await db
+      .select()
+      .from(members)
+      .where(
+        and(
+          eq(members.familyId, consumed.familyId),
+          eq(members.userId, consumed.userId),
+          eq(members.status, 'active'),
+        ),
+      );
+
+    if (!activeMembers[0]) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Family ownership lost',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    // 2. Token exchange with Google
+    let tokenResponse: Awaited<ReturnType<typeof exchangeCodeForTokens>>;
+    try {
+      tokenResponse = await exchangeCodeForTokens(query.code, codeVerifier, config);
+    } catch {
+      return c.redirect('/onboarding?error=acl_failed', 302);
+    }
+
+    if (!tokenResponse.id_token) {
+      return c.redirect('/onboarding?error=acl_failed', 302);
+    }
+
+    // 3. Cryptographic JWT Verification (sub, exp, iat, nonce required)
+    let claims: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
+    try {
+      claims = await verifyGoogleIdToken(tokenResponse.id_token, config.clientId, nonce);
+    } catch {
+      return c.redirect('/onboarding?error=acl_failed', 302);
+    }
+
+    // 4. Require claims.sub === initiating current user.googleSub
+    if (claims.sub !== currentSession.user.googleSub) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Account mismatch',
+      });
+      return c.json(errorBody, 400);
+    }
+
+    // 5. Require returned scope baseline + FAMILY_ACL_SCOPE (no union with stored scopes)
+    let canonicalScopes: string;
+    try {
+      const scopeData = validateAndNormalizeScopes(tokenResponse.scope);
+      if (!scopeData.normalizedScopes.includes(FAMILY_ACL_SCOPE)) {
+        return c.redirect('/onboarding?error=acl_failed', 302);
+      }
+      canonicalScopes = scopeData.canonicalScopeString;
+    } catch {
+      return c.redirect('/onboarding?error=acl_failed', 302);
+    }
+
+    // 6. Recheck bound session + owner after asynchronous Google verify, immediately before write
+    const recheckedSession = await getSessionUser(c, db, config.sessionSecret);
+    if (
+      !recheckedSession ||
+      recheckedSession.sessionId !== consumed.sessionId ||
+      recheckedSession.user.id !== consumed.userId
+    ) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Session invalid or expired',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    const recheckedFamilies = await db
+      .select()
+      .from(families)
+      .where(
+        and(
+          eq(families.id, consumed.familyId),
+          eq(families.ownerUserId, consumed.userId),
+          eq(families.creationStatus, 'ready'),
+        ),
+      );
+
+    if (!recheckedFamilies[0]) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Family ownership lost',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    const recheckedMembers = await db
+      .select()
+      .from(members)
+      .where(
+        and(
+          eq(members.familyId, consumed.familyId),
+          eq(members.userId, consumed.userId),
+          eq(members.status, 'active'),
+        ),
+      );
+
+    if (!recheckedMembers[0]) {
+      const errorBody = apiErrorResponseSchema.parse({
+        error: 'Family ownership lost',
+      });
+      return c.json(errorBody, 403);
+    }
+
+    // 7. Token grant write with atomic WHERE EXISTS guarding session, family, active member, and matching old ciphertext
+    const existingTokens = await db
+      .select()
+      .from(googleTokens)
+      .where(eq(googleTokens.userId, consumed.userId));
+    const existingToken = existingTokens[0];
+
+    let encryptedRefresh: string | undefined;
+    if (tokenResponse.refresh_token && tokenResponse.refresh_token.length > 0) {
+      encryptedRefresh = await encryptAesGcm(
+        tokenResponse.refresh_token,
+        config.tokenEncKey,
+        `google-refresh:${consumed.userId}`,
+      );
+    }
+
+    if (!encryptedRefresh && !existingToken) {
+      return c.redirect('/onboarding?error=acl_failed', 302);
+    }
+
+    const writeTime = Math.floor(Date.now() / 1000);
+
+    if (existingToken) {
+      const newRefreshTokenEnc = encryptedRefresh ?? existingToken.refreshTokenEnc;
+      const updateResult = await db.all<{ user_id: string }>(
+        sql`UPDATE google_tokens
+            SET refresh_token_enc = ${newRefreshTokenEnc},
+                scopes = ${canonicalScopes},
+                updated_at = ${writeTime}
+            WHERE user_id = ${consumed.userId}
+              AND refresh_token_enc = ${existingToken.refreshTokenEnc}
+              AND EXISTS (
+                SELECT 1 FROM sessions
+                WHERE id = ${consumed.sessionId}
+                  AND user_id = ${consumed.userId}
+                  AND expires_at > unixepoch()
+              )
+              AND EXISTS (
+                SELECT 1 FROM families
+                WHERE id = ${consumed.familyId}
+                  AND owner_user_id = ${consumed.userId}
+                  AND creation_status = 'ready'
+              )
+              AND EXISTS (
+                SELECT 1 FROM members
+                WHERE family_id = ${consumed.familyId}
+                  AND user_id = ${consumed.userId}
+                  AND status = 'active'
+              )
+            RETURNING user_id`,
+      );
+
+      if (!updateResult || updateResult.length !== 1) {
+        return c.redirect('/onboarding?error=acl_failed', 302);
+      }
+    } else if (encryptedRefresh) {
+      const insertResult = await db.all<{ user_id: string }>(
+        sql`INSERT INTO google_tokens (user_id, refresh_token_enc, scopes, updated_at)
+            SELECT ${consumed.userId}, ${encryptedRefresh}, ${canonicalScopes}, ${writeTime}
+            WHERE EXISTS (
+              SELECT 1 FROM sessions
+              WHERE id = ${consumed.sessionId}
+                AND user_id = ${consumed.userId}
+                AND expires_at > unixepoch()
+            )
+            AND EXISTS (
+              SELECT 1 FROM families
+              WHERE id = ${consumed.familyId}
+                AND owner_user_id = ${consumed.userId}
+                AND creation_status = 'ready'
+            )
+            AND EXISTS (
+              SELECT 1 FROM members
+              WHERE family_id = ${consumed.familyId}
+                AND user_id = ${consumed.userId}
+                AND status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM google_tokens
+              WHERE user_id = ${consumed.userId}
+            )
+            RETURNING user_id`,
+      );
+
+      if (!insertResult || insertResult.length !== 1) {
+        return c.redirect('/onboarding?error=acl_failed', 302);
+      }
+    }
+
+    // 8. No normal login upsert, no session rotation, no invite issued in callback
+    return c.redirect('/onboarding?acl=granted', 302);
+  }
+
+  // -------------------------------------------------------------
+  // BRANCH 2: Ordinary baseline login flow (with optional invite continuation)
+  // -------------------------------------------------------------
   // 2. Token exchange with Google
   let tokenResponse: Awaited<ReturnType<typeof exchangeCodeForTokens>>;
   try {
@@ -318,6 +642,10 @@ authRoute.get('/auth/callback', async (c) => {
 
   // Issue session cookie only after atomic batch transaction succeeds
   await setSessionCookie(c, newRawToken, config.sessionSecret);
+
+  if (consumed.inviteToken) {
+    return c.redirect(`/invite#${consumed.inviteToken}`, 302);
+  }
 
   return c.redirect('/', 302);
 });

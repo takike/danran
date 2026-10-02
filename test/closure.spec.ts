@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:test';
 import { closureDaySchema, createClosureDaySchema } from '@shared/schemas/closure';
 import { type Database, closureDays, createDb } from '@worker/db';
+import { families, users } from '@worker/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -13,6 +14,8 @@ describe('closureDays schema & D1 storage', () => {
 
   afterEach(async () => {
     await db.delete(closureDays);
+    await db.delete(families);
+    await db.delete(users);
   });
 
   describe('Zod boundary schemas', () => {
@@ -115,7 +118,21 @@ describe('closureDays schema & D1 storage', () => {
 
   describe('D1 table CRUD and JSON array roundtrip', () => {
     it('inserts and queries closureDays with JSON member_ids array', async () => {
+      const synthUserId = 'usr_synth_closure_owner';
       const synthFamilyId = 'fam_synth_closure_test';
+
+      await db.insert(users).values({
+        id: synthUserId,
+        googleSub: 'google-sub-closure-owner',
+        email: 'owner@closure.test',
+        displayName: 'Closure Owner',
+      });
+
+      await db.insert(families).values({
+        id: synthFamilyId,
+        name: 'Closure Test Family',
+        ownerUserId: synthUserId,
+      });
 
       const familyWideRecord = {
         id: 'cls_synth_fam_wide',
@@ -164,6 +181,40 @@ describe('closureDays schema & D1 storage', () => {
         .from(closureDays)
         .where(eq(closureDays.familyId, synthFamilyId));
       expect(afterDelete).toHaveLength(0);
+    });
+
+    it('rejects inserting closureDays referencing non-existent family (FK constraint)', async () => {
+      const orphanRecord = {
+        id: 'cls_orphan_bad_fk',
+        familyId: 'fam_non_existent',
+        date: '2026-10-08',
+        label: 'Orphan Closure Day',
+        memberIds: [],
+      };
+
+      let thrownError: unknown;
+      try {
+        await db.insert(closureDays).values(orphanRecord);
+      } catch (err: unknown) {
+        thrownError = err;
+      }
+
+      expect(thrownError).toBeInstanceOf(Error);
+      const cause = (thrownError as Error).cause;
+      const causeMessage =
+        cause instanceof Error
+          ? cause.message
+          : typeof cause === 'string'
+            ? cause
+            : String(cause ?? '');
+      expect(causeMessage).toMatch(/FOREIGN KEY/i);
+
+      // Verify invalid row remains absent
+      const inserted = await db
+        .select()
+        .from(closureDays)
+        .where(eq(closureDays.id, orphanRecord.id));
+      expect(inserted).toHaveLength(0);
     });
   });
 });

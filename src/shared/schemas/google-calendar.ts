@@ -512,6 +512,29 @@ export const googleAclRuleResponseSchema = z.object({
 export type GoogleAclRule = z.infer<typeof googleAclRuleResponseSchema>;
 
 /**
+ * ACL list options schema (strict).
+ */
+export const aclListOptionsSchema = z
+  .object({
+    maxResults: z.number().int().min(1).max(250).optional(),
+    pageToken: z.string().optional(),
+  })
+  .strict();
+
+export type AclListOptions = z.infer<typeof aclListOptionsSchema>;
+
+/**
+ * Google ACL list page response schema.
+ */
+export const googleAclListPageResponseSchema = z.object({
+  items: z.array(googleAclRuleResponseSchema),
+  nextPageToken: z.string().optional(),
+  etag: z.string().optional(),
+});
+
+export type GoogleAclListPage = z.infer<typeof googleAclListPageResponseSchema>;
+
+/**
  * CalendarList list options schema (strict).
  */
 export const calendarListListOptionsSchema = z
@@ -531,12 +554,14 @@ export type CalendarListListOptions = z.input<typeof calendarListListOptionsSche
 export const googleCalendarListEntrySchema = z.object({
   id: z.string().min(1),
   summary: z.string().optional(),
+  description: z.string().optional(),
   timeZone: z.string().optional(),
   accessRole: z.string().optional(),
   primary: z.boolean().optional(),
   selected: z.boolean().optional(),
   hidden: z.boolean().optional(),
   deleted: z.boolean().optional(),
+  dataOwner: z.string().optional(),
   etag: z.string().optional(),
 });
 

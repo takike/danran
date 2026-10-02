@@ -7,5 +7,4 @@ export interface WorkerEnv {
   GOOGLE_CLIENT_SECRET?: string;
   SESSION_SECRET?: string;
   TOKEN_ENC_KEY?: string;
-  ENABLE_SPIKES?: string;
 }

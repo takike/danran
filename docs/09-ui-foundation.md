@@ -20,10 +20,14 @@ CSS カスタムプロパティを単一の真実源（Single Source of Truth）
 | `--accent-tint` | `#f7e6e1` | アクセントの薄い背景 | `bg-accent-tint` |
 | `--deadline` | `#8a5a12` | 締切強調テキスト | `text-deadline` |
 | `--deadline-tint` | `#f3e9d6` | 締切チップ背景 | `bg-deadline-tint` |
-| `--member-papa` | `#2e4b73` | パパ固有色（藍） | `bg-member-papa` |
-| `--member-mama` | `#2d5a3f` | ママ固有色（深緑） | `bg-member-mama` |
-| `--member-daughter` | `#a67c2e` | 長女固有色（黄土） | `bg-member-daughter` |
-| `--member-son` | `#6b3e82` | 長男固有色（紫） | `bg-member-son` |
+| `--member-indigo` | `#2e4b73` | メンバー固有色（藍） | `bg-member-indigo` |
+| `--member-green` | `#2d5a3f` | メンバー固有色（深緑） | `bg-member-green` |
+| `--member-ochre` | `#a67c2e` | メンバー固有色（黄土） | `bg-member-ochre` |
+| `--member-purple` | `#6b3e82` | メンバー固有色（紫） | `bg-member-purple` |
+| `--member-coral` | `#c05646` | メンバー固有色（珊瑚） | `bg-member-coral` |
+| `--member-teal` | `#2b6e70` | メンバー固有色（青緑） | `bg-member-teal` |
+| `--member-rose` | `#a23b5d` | メンバー固有色（薔薇） | `bg-member-rose` |
+| `--member-slate` | `#4f5d6b` | メンバー固有色（石板） | `bg-member-slate` |
 | `--tap-target-min` | `44px` | アクセシビリティ最小タップ領域（44px） | `w-[var(--tap-target-min)]` |
 | `--capture-button-size`| `56px` | タブバー中央の撮影ボタンサイズ | `w-[var(--capture-button-size)]` |
 | `--member-dot-size` | `10px` | メンバー色ドットサイズ | `w-[var(--member-dot-size)]` |
@@ -68,7 +72,7 @@ CSS カスタムプロパティを単一の真実源（Single Source of Truth）
 色ドット（`aria-hidden="true"`）と視認可能なメンバー名テキストのセット。色のみによる情報伝達を防止します。
 
 ```tsx
-<MemberDot name="メンバーA" color="var(--member-papa)" />
+<MemberDot name="メンバーA" color="var(--member-indigo)" />
 ```
 
 ### 4. `Segmented` (`src/client/components/Segmented.tsx`)

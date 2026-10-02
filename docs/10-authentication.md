@@ -253,9 +253,55 @@ pnpm exec wrangler secret put TOKEN_ENC_KEY --env production
 
 ---
 
-## 10. 参考リンク（一次情報）
+## 11. 段階的認可（Incremental Authorization）と招待ログイン連携（Task 1-4）
+
+Task 1-4 において、最小権限の原則（Least Privilege）を維持しながら家族カレンダー共有（ACL）を実現するため、Google OAuth 2.0 の段階的認可（Incremental Authorization）および招待付きログインを採用しています。
+
+```
+【オーナー：カレンダー共有権限の追加認可フロー】
+[オーナーブラウザ]                     [Danran Worker]                     [Google OAuth]
+       │                                     │                                    │
+       │ 1. POST /api/families/:id/invites   │                                    │
+       │────────────────────────────────────>│ (calendar.acls 未同意を検知)       │
+       │<────────────────────────────────────│                                    │
+       │    { authorizationRequired: true,   │                                    │
+       │      authorizationUrl: GoogleURL }  │                                    │
+       │                                     │                                    │
+       │ 2. Google 認可画面へ遷移            │                                    │
+       │─────────────────────────────────────────────────────────────────────────>│
+       │    (scope: calendar.acls, include_granted_scopes: true)                  │
+       │                                                                          │
+       │ 3. 認可完了リダイレクト                                                  │
+       │<─────────────────────────────────────────────────────────────────────────│
+       │ 4. GET /api/auth/callback           │                                    │
+       │────────────────────────────────────>│ 5. トークン更新 (D1: google_tokens)│
+       │<────────────────────────────────────│                                    │
+       │    302 Redirect (/onboarding?acl=granted)                                │
+       │                                     │                                    │
+       │ 6. POST /api/families/:id/invites   │                                    │
+       │────────────────────────────────────>│ 7. acl.acls スコープ確認済み       │
+       │<────────────────────────────────────│    招待リンク発行                  │
+       │    { authorizationRequired: false,  │                                    │
+       │      inviteUrl: .../invite#token }  │                                    │
+```
+
+### 1. オーナー向け共有権限の追加認可（`calendar.acls`）
+- **基本スコープの不変性**: 通常ログイン（`GET /api/auth/login`）では `calendar.acls` を要求しません。家族カレンダーの共有（`acl.insert`）を必要とするオーナーが招待リンクを発行する瞬間にのみ追加同意を求めます。
+- **認可パラメータ**: `include_granted_scopes: 'true'` を付与し、既存の 5 スコープを保持したまま `https://www.googleapis.com/auth/calendar.acls` を追加します。
+- **コールバックと復帰**: 同意完了後は `/onboarding?acl=granted` へリダイレクトし、UI 上でユーザーが「招待リンクを発行する」を再度押すことで、実際の招待トークンが発行されます。同意拒否時は `/onboarding?error=acl_denied` へ安全な固定パラメータで戻り、任意のエラー文字列は DOM に反映しません。
+
+### 2. 招待付きログイン（`POST /api/auth/login`）
+- **未認証ユーザーの動線**: `/invite#<raw43token>` を開いた未ログインユーザーが「Google でログインして参加」を押すと、同一オリジンからの `POST /api/auth/login`（JSON ペイロード `{ inviteToken: raw43token }`）が送信されます。
+- **暗号化 state への格納**: `oauth_states` テーブルに保存される一時暗号化ペイロード内に `inviteToken` を保持（ブラウザバインディングおよび AES-256-GCM で保護）。
+- **復帰と URL フラグメント**: OAuth コールバック完了時、暗号化 state から `inviteToken` を復元し、302 リダイレクト先として `/invite#<inviteToken>` を指定します。トークンはクエリパラメータ（`?token=...`）や Cookie ではなく、URL フラグメント（`#`）としてブラウザにのみ渡され、サーバーアクセスログやリファラヘッダ（Referrer-Policy: `no-referrer`）への平文漏洩を完全に防止します。
+- **自動参加の禁止（Explicit Confirmation）**: ログイン復帰後、即座に家族参加（`join`）API を自動実行することは固く禁止します。UI 上で家族名を確認し、ユーザー本人が明示的に「この家族に参加する」ボタンを押下して初めて `POST /api/invites/join` が実行されます。
+
+---
+
+## 12. 参考リンク（一次情報）
 
 - [Google Identity: Using OAuth 2.0 for Web Server Applications](https://developers.google.com/identity/protocols/oauth2/web-server)
+- [Google Identity: Incremental Authorization](https://developers.google.com/identity/protocols/oauth2/web-server#incremental-auth)
 - [Google Identity: OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
 - [Google Identity: PKCE Code Verifier & Challenge Guidelines](https://developers.google.com/identity/protocols/oauth2/native-app#step1-code-verifier)
 - [panva/jose: Universal Web Cryptography JSON Object Signing and Encryption](https://github.com/panva/jose)

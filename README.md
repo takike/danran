@@ -36,9 +36,10 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/08-deployment.md](docs/08-deployment.md) | CI/CD・デプロイ運用手順書（GitHub Actions、環境構成、マイグレーション、復旧） |
 | [docs/09-ui-foundation.md](docs/09-ui-foundation.md) | デザイントークンと汎用 UI 部品（UI Foundation）の仕様・利用例 |
 | [docs/10-authentication.md](docs/10-authentication.md) | 認証・Google OAuth 連携仕様（エンドポイント、Cookie、暗号化、手動確認） |
-| [docs/11-google-calendar-client.md](docs/11-google-calendar-client.md) | Google Calendar REST クライアント仕様（10メソッド、リトライ、サニタイズ、プライバシー） |
+| [docs/11-google-calendar-client.md](docs/11-google-calendar-client.md) | Google Calendar REST クライアント仕様（13メソッド、リトライ、サニタイズ、プライバシー） |
 | [docs/12-time-and-layout.md](docs/12-time-and-layout.md) | 日時・祝日・週レイアウト仕様（Asia/Tokyo 日付計算、連休延長、dayLayout、休園日） |
 | [docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md) | カレンダー共有スパイク仕様書（staging A/B 実機検証プロトコル、記録枠、権限境界） |
+| [docs/14-family-onboarding.md](docs/14-family-onboarding.md) | 家族作成・招待オンボーディング仕様（データモデル、段階的認可、招待URL、手動検証手順） |
 
 ## 前提条件
 
@@ -121,8 +122,8 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
 - デザイントークン（`tokens.css`）と Tailwind CSS v4 連携、汎用 UI 部品（`Card`, `Chip`, `MemberDot`, `Segmented`, `IconButton`, `TabBar`）、開発専用カタログ（`/dev/ui`、本番ビルドから完全除外）を実装（[docs/09-ui-foundation.md](docs/09-ui-foundation.md)）。
 - Phase 1 ログイン・家族・週ビュー：
   - **タスク 1-1（Google OAuth 2.0 連携）**: 実装完了。staging 環境においてすべての Secret（`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `TOKEN_ENC_KEY`）が登録され、実 Google アカウントによるログイン（同意フロー・コールバック・D1 セッション発行・ユーザー表示名表示）が正常に完了することを確認済み（2026-10-01 人間により確認。※実環境での詳細ケース（ログアウト後再ログイン・セッション維持・トークン自動更新等）は自動テストでカバー、production は未確認）。
-  - **タスク 1-2（Google カレンダー REST クライアント実装）**: 実装完了（[docs/11-google-calendar-client.md](docs/11-google-calendar-client.md)）。12 メソッド（`calendars.insert/delete`, `acl.insert`, `events.list/get/insert/patch/delete/instances`, `calendarList.list/insert`, `freeBusy.query`）、Zod 入出力境界検証、429/5xx 指数バックオフ、単一 401 トークン更新、非冪等作成の 5xx 即時フェイルクローズ、workerd redirect: manual 制御、エラーサニタイズ（`googleStatus` 追加）、および D1 暗号化トークン復号を含む Worker 統合テストを配備。
-  - **タスク 1-3（スパイク：家族カレンダー共有方法）**: 検証ツール（`/spike/calendar-sharing` 画面、`/api/spike/calendar-sharing` API、暗号署名レシート、Vitest / Playwright テスト）実装完了（[docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md)）。スクリーンショット: [docs/screenshots/calendar-sharing-spike.png](docs/screenshots/calendar-sharing-spike.png)（幅 390px）。staging 環境における A/B 実アカウントを用いた人間による実機検証待ち（保留中・PENDING）。
-  - **タスク 1-4（家族の作成・参加）**: タスク 1-3 の実機検証結果・Q1 判定待ち（BLOCKED）。
-  - **タスク 1-5（時間・祝日・レイアウトのドメインロジック）**: 実装完了（[docs/12-time-and-layout.md](docs/12-time-and-layout.md)）。Asia/Tokyo 固定の日付計算、@holiday-jp/holiday_jp による祝日判定（1970–2050）、月曜起点・祝日連続延長週範囲、dayLayout（週末カード/展開平日/畳み込み平日）、および休園日（`closure_days`、Task 1-4 前のため FK なし論理参照）Drizzle スキーマ・Zod バリデーション・テストを配備。ローカルマイグレーション適用および 4 つのホストタイムゾーン（UTC, Asia/Tokyo, America/New_York, Pacific/Auckland）検証を通過。
-  - **次のタスク**: タスク 1-3（staging での A/B 実機検証・Q1 決定）→ タスク 1-4（家族の作成・参加）→ タスク 1-6（週表示 API。タスク 1-4 の家族モデル・所有権に依存）。
+  - **タスク 1-2（Google カレンダー REST クライアント実装）**: 実装完了（[docs/11-google-calendar-client.md](docs/11-google-calendar-client.md)）。13 メソッド（`calendars.insert/delete`, `acl.insert/list`, `events.list/get/insert/patch/delete/instances`, `calendarList.list/insert`, `freeBusy.query`）、Zod 入出力境界検証、429/5xx 指数バックオフ、単一 401 トークン更新、非冪等作成の 5xx 即時フェイルクローズ、workerd redirect: manual 制御、エラーサニタイズ（`googleStatus` 追加）、および D1 暗号化トークン復号を含む Worker 統合テストを配備。
+  - **タスク 1-3（スパイク：家族カレンダー共有方法）**: 実機検証完了、Q1 解決済み（[docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md)）。Q1(a) 403 不可、Q1(b) 読み書き可能を確認し、オーナーへの段階的認可（`calendar.acls`）および共有通知メールからのカレンダー追加方式を採用（※スパイクツールのコード削除は Task 1-4 で実施され、マージ・ステージングデプロイ後に 404 となります）。
+  - **タスク 1-4（家族の作成・参加）**: 実装完了（[docs/14-family-onboarding.md](docs/14-family-onboarding.md)）。オンボーディング画面（`/onboarding`）、招待参加画面（`/invite`）、8色メンバーパレット、曖昧な Google 操作結果の安全な照合・明示的再開、API クライアント、Playwright E2E テスト（`e2e/family.spec.ts`）、段階的認可連携を配備。人間による staging 実アカウント手動検証待ち（PENDING）。
+  - **タスク 1-5（時間・祝日・レイアウトのドメインロジック）**: 実装完了（[docs/12-time-and-layout.md](docs/12-time-and-layout.md)）。Asia/Tokyo 固定の日付計算、@holiday-jp/holiday_jp による祝日判定（1970–2050）、月曜起点・祝日連続延長週範囲、dayLayout（週末カード/展開平日/畳み込み平日）、および休園日（`closure_days`、タスク 1-4 にて families への外部キー制約を追加）Drizzle スキーマ・Zod バリデーション・テストを配備。ローカルマイグレーション適用および 4 つのホストタイムゾーン（UTC, Asia/Tokyo, America/New_York, Pacific/Auckland）検証を通過。
+  - **次のタスク**: タスク 1-6（`GET /api/families/:id/week` 週表示 API）。

@@ -84,13 +84,16 @@ export default function PrivacyPage(): React.ReactElement {
             カレンダー情報
           </h2>
           <p className="text-muted mb-[var(--spacing-xs)]">
-            ※ カレンダー連携は今後提供予定の機能です。
+            専用の家族カレンダーの作成およびメンバー間の共有機能を提供しています。個人の空き時間（busy）連携や予定の詳細管理機能は、今後のアップデートで順次提供予定です。
+          </p>
+          <p className="text-muted mb-[var(--spacing-xs)]">
+            家族の設定や招待のために、家族名、メンバーのお名前（表示名）、および表示色をサーバーに保存して利用します。
           </p>
           <p className="text-muted mb-[var(--spacing-xs)]">
             個人の予定の詳細（タイトル・場所・説明・参加者など）はアプリ内に保存されず、他の家族にも共有されません。他の家族に伝わるのは、予定が入っている時間帯（busy）のみです。
           </p>
           <p className="text-muted m-0">
-            家族共有カレンダーの予定は Google
+            家族カレンダーの予定は Google
             カレンダー側に保存され、担当者や持ち物などの追加情報のみをアプリ側で保持します。
           </p>
         </section>

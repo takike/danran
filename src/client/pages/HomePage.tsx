@@ -93,6 +93,16 @@ export default function HomePage(): React.ReactElement {
                 {user.displayName}
               </p>
 
+              <div className="mt-[var(--spacing-md)]">
+                <Link
+                  to="/onboarding"
+                  data-testid="onboarding-link"
+                  className="w-full min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-sm)] bg-surface text-ink border border-line rounded-[var(--radius-md)] text-sm font-medium hover:bg-chip transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus inline-flex items-center justify-center gap-[var(--spacing-xs)] text-center box-border"
+                >
+                  <span>家族の設定・オンボーディング</span>
+                </Link>
+              </div>
+
               {logoutMutation.isError && (
                 <div
                   role="alert"
@@ -160,7 +170,7 @@ export default function HomePage(): React.ReactElement {
 
             <Card className="bg-surface border border-line rounded-[var(--radius-md)] p-[var(--spacing-md)]">
               <div className="flex items-center gap-[var(--spacing-xs)] text-ink mb-[var(--spacing-xs)]">
-                <Shield size={16} className="text-[var(--member-mama)]" aria-hidden="true" />
+                <Shield size={16} className="text-[var(--member-green)]" aria-hidden="true" />
                 <h3 className="text-xs font-semibold m-0">プライバシーを保護</h3>
               </div>
               <p className="text-xs text-muted m-0 leading-relaxed">

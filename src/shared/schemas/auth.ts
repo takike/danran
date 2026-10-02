@@ -43,13 +43,65 @@ export const authCallbackQuerySchema = z.object({
 
 export type AuthCallbackQuery = z.infer<typeof authCallbackQuerySchema>;
 
+export const inviteTokenRegex = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Request schema for POST /api/auth/login
+ */
+export const authLoginRequestBodySchema = z
+  .object({
+    inviteToken: z.string().regex(inviteTokenRegex),
+  })
+  .strict();
+
+export type AuthLoginRequestBody = z.infer<typeof authLoginRequestBodySchema>;
+
+/**
+ * Response schema for POST /api/auth/login
+ */
+export const authLoginResponseSchema = z
+  .object({
+    authorizationUrl: z.string().url(),
+  })
+  .strict();
+
+export type AuthLoginResponse = z.infer<typeof authLoginResponseSchema>;
+
+/**
+ * Decrypted OAuth login flow payload stored in oauth_states.
+ */
+export const oauthLoginPayloadSchema = z
+  .object({
+    purpose: z.literal('login').optional(),
+    codeVerifier: z.string().min(1),
+    nonce: z.string().min(1),
+    inviteToken: z.string().regex(inviteTokenRegex).optional(),
+  })
+  .strict();
+
+export type OAuthLoginPayload = z.infer<typeof oauthLoginPayloadSchema>;
+
+/**
+ * Decrypted OAuth incremental family-acl flow payload stored in oauth_states.
+ */
+export const oauthFamilyAclPayloadSchema = z
+  .object({
+    purpose: z.literal('family-acl'),
+    codeVerifier: z.string().min(1),
+    nonce: z.string().min(1),
+    userId: z.string().min(1).max(128),
+    sessionId: z.string().min(1).max(128),
+    familyId: z.string().min(1).max(128),
+  })
+  .strict();
+
+export type OAuthFamilyAclPayload = z.infer<typeof oauthFamilyAclPayloadSchema>;
+
 /**
  * Decrypted OAuth flow payload stored in oauth_states.
+ * Retains backward-compatibility for legacy login payload {codeVerifier, nonce}.
  */
-export const oauthPayloadSchema = z.object({
-  codeVerifier: z.string().min(1),
-  nonce: z.string().min(1),
-});
+export const oauthPayloadSchema = z.union([oauthFamilyAclPayloadSchema, oauthLoginPayloadSchema]);
 
 export type OAuthPayload = z.infer<typeof oauthPayloadSchema>;
 
