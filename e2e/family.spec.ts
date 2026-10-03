@@ -2331,4 +2331,479 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     await expect(page.locator('[data-testid="invalid-token-error"]')).toBeVisible();
     await expect(page.locator('[data-testid="inspect-family-name"]')).toHaveCount(0);
   });
+
+  test('Invite issue locks synchronously, stays disabled during authorization redirect, and unlocks on persisted pageshow', async ({
+    page,
+  }) => {
+    const family: FamilyPublic = {
+      id: 'fam_owner',
+      name: 'たなか家',
+      familyCalendarId: 'cal_owner',
+      ownerUserId: 'usr_owner',
+      creationStatus: 'ready',
+      members: [
+        {
+          id: 'mem_owner',
+          userId: 'usr_owner',
+          kind: 'adult',
+          name: 'オーナー',
+          color: 'indigo',
+          sortOrder: 0,
+        },
+      ],
+    };
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_owner', email: 'owner@example.test', displayName: 'オーナー' },
+        }),
+      }),
+    );
+    await page.route('**/api/families', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ families: [family] }),
+      }),
+    );
+
+    let inviteCount = 0;
+    await page.route('**/api/families/fam_owner/invites', async (route) => {
+      inviteCount++;
+      if (inviteCount === 1) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'temporary failure' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authorizationRequired: true,
+          authorizationUrl:
+            'https://accounts.google.com/o/oauth2/v2/auth?scope=calendar.acls&client_id=mock',
+        }),
+      });
+    });
+    await page.route('https://accounts.google.com/**', async (route) => {
+      await route.abort('aborted');
+    });
+
+    await page.goto('/onboarding');
+    const button = page.locator('[data-testid="issue-invite-button"]');
+    await expect(button).toBeEnabled();
+    await button.click();
+    await expect(page.locator('[data-testid="issue-invite-error"]')).toBeVisible();
+    await expect(button).toBeEnabled();
+
+    const firstGoogleFailure = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    const firstRetryPostCount = inviteCount;
+    await button.evaluate((element: HTMLButtonElement) => {
+      element.click();
+      element.click();
+    });
+    await firstGoogleFailure;
+    await expect.poll(() => inviteCount).toBe(firstRetryPostCount + 1);
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    });
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+    await button.evaluate((element: HTMLButtonElement) => element.click());
+    await expect.poll(() => inviteCount).toBe(2);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    });
+    await expect(button).toBeEnabled();
+    const nextRetryPostCount = inviteCount;
+    const secondGoogleFailure = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    await button.click();
+    await secondGoogleFailure;
+    await expect.poll(() => inviteCount).toBe(nextRetryPostCount + 1);
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+  });
+
+  test('Invite login locks synchronously, remains disabled while redirecting, and resets after persisted pageshow', async ({
+    page,
+  }) => {
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      }),
+    );
+    let loginCount = 0;
+    await page.route('**/api/auth/login', async (route) => {
+      loginCount++;
+      if (loginCount === 1) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'temporary failure' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=mock',
+        }),
+      });
+    });
+    await page.route('https://accounts.google.com/**', async (route) => {
+      await route.abort('aborted');
+    });
+
+    await page.goto(`/invite#${VALID_TOKEN}`);
+    const button = page.locator('[data-testid="login-with-invite-button"]');
+    await expect(button).toBeEnabled();
+    await button.click();
+    await expect(page.getByText('ログイン処理の開始に失敗しました。')).toBeVisible();
+    await expect(button).toBeEnabled();
+
+    const firstGoogleFailure = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    const firstRetryPostCount = loginCount;
+    await button.evaluate((element: HTMLButtonElement) => {
+      element.click();
+      element.click();
+    });
+    await firstGoogleFailure;
+    await expect.poll(() => loginCount).toBe(firstRetryPostCount + 1);
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    });
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+    await button.evaluate((element: HTMLButtonElement) => element.click());
+    await expect.poll(() => loginCount).toBe(2);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    });
+    await expect(button).toBeEnabled();
+    const nextRetryPostCount = loginCount;
+    const secondGoogleFailure = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    await button.click();
+    await secondGoogleFailure;
+    await expect.poll(() => loginCount).toBe(nextRetryPostCount + 1);
+    await expect(button).toHaveText('Google に移動中...');
+    await expect(button).toBeDisabled();
+  });
+
+  test('ACL callback notices remain visible when logged out and ignore unknown error values', async ({
+    page,
+  }) => {
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      }),
+    );
+    await page.goto('/onboarding?error=acl_failed');
+    await expect(page.locator('[data-testid="acl-error-message"]')).toContainText(
+      '共有権限を追加できませんでした',
+    );
+    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+
+    await page.goto('/onboarding?error=acl_account_mismatch');
+    await expect(page.locator('[data-testid="acl-account-mismatch-message"]')).toContainText(
+      '別の Google アカウント',
+    );
+
+    await page.goto('/onboarding?error=unknown_private_value');
+    expect(await page.locator('body').innerText()).not.toContain('unknown_private_value');
+  });
+
+  test('Saving children does not cancel or duplicate a pending invite, and invite can be retried', async ({
+    page,
+  }) => {
+    const family: FamilyPublic = {
+      id: 'fam_owner',
+      name: 'たなか家',
+      familyCalendarId: 'cal_owner',
+      ownerUserId: 'usr_owner',
+      creationStatus: 'ready',
+      members: [
+        {
+          id: 'mem_owner',
+          userId: 'usr_owner',
+          kind: 'adult',
+          name: 'オーナー',
+          color: 'indigo',
+          sortOrder: 0,
+        },
+      ],
+    };
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_owner', email: 'owner@example.test', displayName: 'オーナー' },
+        }),
+      }),
+    );
+    await page.route('**/api/families', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ families: [family] }),
+      }),
+    );
+
+    let inviteCount = 0;
+    let enterFirstInvite: () => void = () => {};
+    let releaseFirstInvite: () => void = () => {};
+    const firstInviteEntered = new Promise<void>((resolve) => {
+      enterFirstInvite = resolve;
+    });
+    const firstInviteGate = new Promise<void>((resolve) => {
+      releaseFirstInvite = resolve;
+    });
+    let inviteHandlerDone: Promise<void> = Promise.resolve();
+    await page.route('**/api/families/fam_owner/invites', async (route) => {
+      inviteCount++;
+      if (inviteCount === 1) {
+        enterFirstInvite();
+        inviteHandlerDone = (async () => {
+          await firstInviteGate;
+          try {
+            await route.fulfill({
+              status: 500,
+              contentType: 'application/json',
+              body: JSON.stringify({ error: 'temporary failure' }),
+            });
+          } catch {
+            // The page may abort this request during lifecycle cleanup.
+          }
+        })();
+        await inviteHandlerDone;
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            authorizationRequired: false,
+            inviteUrl: `http://127.0.0.1:4173/invite#${VALID_TOKEN}`,
+            expiresAt: 1790000000,
+          }),
+        });
+      }
+    });
+    await page.route('**/api/families/fam_owner/children', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ family }),
+      }),
+    );
+
+    await page.goto('/onboarding');
+    const inviteButton = page.locator('[data-testid="issue-invite-button"]');
+    try {
+      await inviteButton.click();
+      await firstInviteEntered;
+      await page.locator('[data-testid="save-children-button"]').click();
+      await expect(page.locator('[data-testid="save-children-success"]')).toBeVisible();
+      expect(inviteCount).toBe(1);
+      releaseFirstInvite();
+      await inviteHandlerDone;
+      await expect(inviteButton).toBeEnabled();
+      await inviteButton.click();
+      await expect.poll(() => inviteCount).toBe(2);
+      await expect(page.locator('[data-testid="invite-url-input"]')).toHaveValue(
+        `http://127.0.0.1:4173/invite#${VALID_TOKEN}`,
+      );
+    } finally {
+      releaseFirstInvite();
+      await inviteHandlerDone;
+    }
+  });
+
+  test('A delayed invite response after persisted pageshow cannot overwrite a newer attempt', async ({
+    page,
+  }) => {
+    const family: FamilyPublic = {
+      id: 'fam_owner',
+      name: 'たなか家',
+      familyCalendarId: 'cal_owner',
+      ownerUserId: 'usr_owner',
+      creationStatus: 'ready',
+      members: [
+        {
+          id: 'mem_owner',
+          userId: 'usr_owner',
+          kind: 'adult',
+          name: 'オーナー',
+          color: 'indigo',
+          sortOrder: 0,
+        },
+      ],
+    };
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'usr_owner', email: 'owner@example.test', displayName: 'オーナー' },
+        }),
+      }),
+    );
+    await page.route('**/api/families', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ families: [family] }),
+      }),
+    );
+
+    let inviteCount = 0;
+    let enterFirstInvite: () => void = () => {};
+    let releaseFirstInvite: () => void = () => {};
+    let finishFirstInvite: () => void = () => {};
+    let firstInviteRequest: import('@playwright/test').Request | null = null;
+    const firstInviteEntered = new Promise<void>((resolve) => {
+      enterFirstInvite = resolve;
+    });
+    const firstInviteGate = new Promise<void>((resolve) => {
+      releaseFirstInvite = resolve;
+    });
+    const firstInviteFinished = new Promise<void>((resolve) => {
+      finishFirstInvite = resolve;
+    });
+    let enterSecondInvite: () => void = () => {};
+    let releaseSecondInvite: () => void = () => {};
+    let finishSecondInvite: () => void = () => {};
+    const secondInviteEntered = new Promise<void>((resolve) => {
+      enterSecondInvite = resolve;
+    });
+    const secondInviteGate = new Promise<void>((resolve) => {
+      releaseSecondInvite = resolve;
+    });
+    const secondInviteFinished = new Promise<void>((resolve) => {
+      finishSecondInvite = resolve;
+    });
+    await page.route('**/api/families/fam_owner/invites', async (route) => {
+      inviteCount++;
+      if (inviteCount === 1) {
+        firstInviteRequest = route.request();
+        enterFirstInvite();
+        try {
+          await firstInviteGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              authorizationRequired: true,
+              authorizationUrl:
+                'https://accounts.google.com/o/oauth2/v2/auth?scope=calendar.acls&client_id=mock',
+            }),
+          });
+        } catch {
+          // The aborted original fetch can no longer receive the delayed response.
+        } finally {
+          finishFirstInvite();
+        }
+      } else {
+        enterSecondInvite();
+        try {
+          await secondInviteGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              authorizationRequired: false,
+              inviteUrl: `http://127.0.0.1:4173/invite#${VALID_TOKEN}`,
+              expiresAt: 1790000000,
+            }),
+          });
+        } finally {
+          finishSecondInvite();
+        }
+      }
+    });
+    let googleRequests = 0;
+    await page.route('https://accounts.google.com/**', async (route) => {
+      googleRequests++;
+      await route.abort('aborted');
+    });
+
+    await page.goto('/onboarding');
+    const inviteButton = page.locator('[data-testid="issue-invite-button"]');
+    await inviteButton.click();
+    await firstInviteEntered;
+    if (!firstInviteRequest) throw new Error('First invite request was not captured');
+    const firstInviteFailed = page.waitForEvent(
+      'requestfailed',
+      (request) => request === firstInviteRequest,
+    );
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await cdp.send('Runtime.evaluate', {
+        expression:
+          "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))",
+      });
+      await cdp.send('Runtime.evaluate', {
+        expression: 'document.querySelector(\'[data-testid="issue-invite-button"]\').click()',
+      });
+      await secondInviteEntered;
+
+      // The obsolete request settles while the newer request remains pending.
+      releaseFirstInvite();
+      await firstInviteFinished;
+      await firstInviteFailed;
+      await waitForTwoRafs(page);
+      const readButton = async () => {
+        const result = await cdp.send('Runtime.evaluate', {
+          expression:
+            '({ text: document.querySelector(\'[data-testid=\\"issue-invite-button\\"]\')?.innerText, disabled: document.querySelector(\'[data-testid=\\"issue-invite-button\\"]\')?.disabled })',
+          returnByValue: true,
+        });
+        return result.result.value as { text?: string; disabled?: boolean };
+      };
+      await expect.poll(readButton).toEqual({ text: '発行中...', disabled: true });
+      expect(inviteCount).toBe(2);
+      await cdp.send('Runtime.evaluate', {
+        expression: 'document.querySelector(\'[data-testid="issue-invite-button"]\').click()',
+      });
+      expect(inviteCount).toBe(2);
+
+      releaseSecondInvite();
+      await secondInviteFinished;
+      await expect(page.locator('[data-testid="invite-url-input"]')).toHaveValue(
+        `http://127.0.0.1:4173/invite#${VALID_TOKEN}`,
+      );
+      expect(googleRequests).toBe(0);
+    } finally {
+      releaseFirstInvite();
+      releaseSecondInvite();
+      await firstInviteFinished;
+      await secondInviteFinished;
+      await cdp.detach();
+    }
+  });
 });

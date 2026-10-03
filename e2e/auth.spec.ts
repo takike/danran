@@ -523,6 +523,48 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     expect(rawBody).not.toContain('alert(1)');
   });
 
+  test('OAuth callback notices use fixed text for logged-out and logged-in users', async ({
+    page,
+  }) => {
+    let loggedIn = false;
+    await page.route('**/api/auth/me', async (route) => {
+      if (loggedIn) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            user: { id: 'usr_notice', email: 'private@example.test', displayName: '利用者' },
+          }),
+        });
+      } else {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Unauthorized' }),
+        });
+      }
+    });
+
+    const expiredText =
+      '手続きの有効期限が切れたか、すでに完了しています。必要ならもう一度操作してください。';
+    await page.goto('/?error=auth_expired');
+    await expect(page.locator('[data-testid="auth-expired-message"]')).toContainText(expiredText);
+    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+
+    await page.goto('/?error=auth_failed');
+    await expect(page.locator('[data-testid="auth-failed-message"]')).toContainText(
+      'もう一度お試しください',
+    );
+
+    loggedIn = true;
+    await page.goto('/?error=auth_expired');
+    await expect(page.locator('[data-testid="auth-expired-message"]')).toContainText(expiredText);
+    await expect(page.locator('[data-testid="user-display-name"]')).toContainText('利用者');
+
+    await page.goto('/?error=unknown_sensitive_value');
+    expect(await page.locator('body').innerText()).not.toContain('unknown_sensitive_value');
+  });
+
   test('/privacy route loads directly without ANY auth request and returns to home root', async ({
     page,
   }) => {

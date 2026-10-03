@@ -80,6 +80,21 @@ function cookieHeaderFromJar(jar: Record<string, string>): string {
     .join('; ');
 }
 
+async function expectCallbackFailure(response: Response, destination: string): Promise<void> {
+  expect(response.status).toBe(302);
+  expect(response.headers.get('Location')).toBe(destination);
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(response.headers.get('Pragma')).toBe('no-cache');
+  expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+  const clearedCookie = response.headers.get('set-cookie') ?? '';
+  expect(clearedCookie).toContain(`${OAUTH_COOKIE_NAME}=`);
+  expect(clearedCookie).toContain('Max-Age=0');
+  expect(clearedCookie).toContain('Path=/');
+  expect(clearedCookie).toContain('HttpOnly');
+  expect(clearedCookie).toContain('Secure');
+  expect(await response.clone().text()).toBe('');
+}
+
 async function computeS256Challenge(verifier: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   return uint8ArrayToBase64Url(new Uint8Array(hash));
@@ -314,14 +329,23 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       });
       expect(loginRes.headers.get('Cache-Control')).toBe('no-store');
 
-      // 2. /api/auth/callback returns safe 503
+      // Callback failures always redirect to a fixed safe destination.
       const cbRes = await app.request(
         'http://localhost:5173/api/auth/callback',
         {},
         unconfiguredEnv,
       );
-      expect(cbRes.status).toBe(503);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_expired');
+      expect(cbRes.headers.get('set-cookie')).toContain('Max-Age=0');
+
+      const postCallbackRes = await app.request(
+        'http://localhost:5173/api/auth/callback',
+        { method: 'POST' },
+        unconfiguredEnv,
+      );
+      expect(postCallbackRes.status).toBe(503);
+      expect(apiErrorResponseSchema.parse(await postCallbackRes.json())).toEqual({
         error: 'Auth service unconfigured',
       });
 
@@ -437,10 +461,9 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         {},
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Forbidden',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_expired');
+      expect(cbRes.headers.get('set-cookie')).toContain('Max-Age=0');
 
       // 3. Me with wrong origin
       const meRes = await app.request(`${wrongOrigin}/api/auth/me`, {}, TEST_AUTH_ENV);
@@ -578,7 +601,15 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       );
 
       expect(cancelRes.status).toBe(302);
-      expect(cancelRes.headers.get('Location')).toBe('/?error=access_denied');
+      expect(cancelRes.headers.get('Location')).toBe('/?error=auth_failed');
+      expect(cancelRes.headers.get('Cache-Control')).toBe('no-store');
+      expect(cancelRes.headers.get('Pragma')).toBe('no-cache');
+      expect(cancelRes.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(cancelRes.headers.get('set-cookie')).toContain('Path=/');
+      expect(cancelRes.headers.get('set-cookie')).toContain('Max-Age=0');
+      expect(cancelRes.headers.get('set-cookie')).toContain('HttpOnly');
+      expect(cancelRes.headers.get('set-cookie')).toContain('Secure');
+      expect(await cancelRes.text()).not.toContain('User denied consent');
 
       // Ensure cookie is cleared with HttpOnly
       const cancelSetCookie = cancelRes.headers.get('set-cookie') ?? '';
@@ -601,10 +632,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         },
         TEST_AUTH_ENV,
       );
-      expect(replayRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await replayRes.json())).toEqual({
-        error: 'Invalid or expired OAuth state',
-      });
+      expect(replayRes.status).toBe(302);
+      expect(replayRes.headers.get('Location')).toBe('/?error=auth_expired');
     });
 
     it('rejects OAuth denial callback when state is missing, without touching Google or DB', async () => {
@@ -613,10 +642,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         {},
         TEST_AUTH_ENV,
       );
-      expect(cancelRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cancelRes.json())).toEqual({
-        error: 'Missing state parameter on denial',
-      });
+      expect(cancelRes.status).toBe(302);
+      expect(cancelRes.headers.get('Location')).toBe('/?error=auth_expired');
     });
   });
 
@@ -678,13 +705,11 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       );
 
       expect(redirectOptionObserved).toBe('manual');
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Failed to exchange authorization code',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
-    it('handles Google token endpoint returning non-JSON body safely with 400', async () => {
+    it('redirects safely when Google token endpoint returns a non-JSON body', async () => {
       const { jar, state } = await initiateLogin();
       setupGoogleFetchMock({
         rawResponseBody: '<html><body>Internal Gateway Error</body></html>',
@@ -698,13 +723,11 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Failed to exchange authorization code',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
-    it('rejects callback with 400 when Google returns partial scopes missing calendar permissions', async () => {
+    it('redirects when Google returns partial scopes missing calendar permissions', async () => {
       const { jar, state, nonce } = await initiateLogin();
       const signedIdToken = await signTestIdToken({ nonce });
 
@@ -727,10 +750,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Required permissions not granted',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
   });
 
@@ -746,10 +767,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Failed to verify Google identity',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects expired ID token (exp in the past)', async () => {
@@ -768,7 +787,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects ID token with untrusted issuer', async () => {
@@ -785,7 +805,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects ID token with wrong audience', async () => {
@@ -802,7 +823,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects ID token missing required claims: sub, exp, iat, or nonce', async () => {
@@ -827,7 +849,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
           { headers: { Cookie: cookieHeaderFromJar(jar) } },
           TEST_AUTH_ENV,
         );
-        expect(cbRes.status, `Failed for ${tc.label}`).toBe(400);
+        expect(cbRes.status, `Failed for ${tc.label}`).toBe(302);
+        expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
       }
     });
 
@@ -844,7 +867,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects ID token with mismatched azp claim', async () => {
@@ -861,7 +885,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
 
     it('rejects ID token with unverified email', async () => {
@@ -878,7 +903,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
     });
   });
 
@@ -910,7 +936,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cb2.status).toBe(400);
+      expect(cb2.status).toBe(302);
+      expect(cb2.headers.get('Location')).toBe('/?error=auth_expired');
       expect(tokenExchangeCount).toBe(1);
     });
 
@@ -943,13 +970,15 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       // Exactly one Google exchange occurred
       expect(googleTokenExchangeCount).toBe(1);
 
-      // One request succeeded (302) and one rejected (400)
+      // One request succeeds and one gets the fixed pre-consumption failure redirect.
       const statuses = [res1.status, res2.status].sort();
-      expect(statuses).toEqual([302, 400]);
+      expect(statuses).toEqual([302, 302]);
+      const locations = [res1.headers.get('Location'), res2.headers.get('Location')].sort();
+      expect(locations).toEqual(['/', '/?error=auth_expired']);
     });
 
     it('rejects callback with expired state in DB', async () => {
-      const { jar, state, nonce } = await initiateLogin();
+      const { jar, state } = await initiateLogin();
       const stateHash = await sha256Hex(state);
 
       // Force state expiry into past
@@ -958,26 +987,87 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         .set({ expiresAt: Math.floor(Date.now() / 1000) - 30 })
         .where(eq(oauthStates.stateHash, stateHash));
 
-      const signedIdToken = await signTestIdToken({ nonce });
-      setupGoogleFetchMock({ idToken: signedIdToken });
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
 
       const cbRes = await app.request(
         `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('redirects auth_expired when state hashing throws and does not call Google', async () => {
+      const { jar, state } = await initiateLogin();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const digestSpy = vi
+        .spyOn(crypto.subtle, 'digest')
+        .mockRejectedValue(new Error('crypto fault'));
+
+      const cbRes = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      digestSpy.mockRestore();
+    });
+
+    it('redirects auth_expired when state consumption fails in D1 and leaves OAuth state untouched', async () => {
+      const { jar, state } = await initiateLogin();
+      const stateHash = await sha256Hex(state);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const originalPrepare = TEST_AUTH_ENV.DB.prepare.bind(TEST_AUTH_ENV.DB);
+      const prepareSpy = vi.spyOn(TEST_AUTH_ENV.DB, 'prepare').mockImplementation((query) => {
+        if (/delete\s+from\s+"?oauth_states"?/i.test(query)) {
+          throw new Error('synthetic OAuth state consumption database fault');
+        }
+        return originalPrepare(query);
+      });
+
+      try {
+        const cbRes = await app.request(
+          `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+          { headers: { Cookie: cookieHeaderFromJar(jar) } },
+          TEST_AUTH_ENV,
+        );
+
+        await expectCallbackFailure(cbRes, '/?error=auth_expired');
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(prepareSpy).toHaveBeenCalled();
+
+        const remainingState = await db
+          .select()
+          .from(oauthStates)
+          .where(eq(oauthStates.stateHash, stateHash));
+        expect(remainingState).toHaveLength(1);
+        expect(await db.select().from(users)).toHaveLength(0);
+        expect(await db.select().from(googleTokens)).toHaveLength(0);
+        expect(await db.select().from(sessions)).toHaveLength(0);
+      } finally {
+        prepareSpy.mockRestore();
+      }
     });
 
     it('rejects callback when state parameter does not match any DB state', async () => {
       const { jar } = await initiateLogin();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
 
       const cbRes = await app.request(
         'http://localhost:5173/api/auth/callback?code=mock-code&state=nonexistent-state-parameter',
         { headers: { Cookie: cookieHeaderFromJar(jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('rejects callback when browser binding cookie belongs to another browser flow', async () => {
@@ -985,7 +1075,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       const flowB = await initiateLogin();
 
       const signedIdToken = await signTestIdToken({ nonce: flowA.nonce });
-      setupGoogleFetchMock({ idToken: signedIdToken });
+      const onTokenRequest = vi.fn();
+      setupGoogleFetchMock({ idToken: signedIdToken, onTokenRequest });
 
       // Request callback with flowA's state, but flowB's browser cookie
       const cbRes = await app.request(
@@ -993,11 +1084,14 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         { headers: { Cookie: cookieHeaderFromJar(flowB.jar) } },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(onTokenRequest).not.toHaveBeenCalled();
     });
 
     it('rejects callback with tampered or forged browser binding cookie', async () => {
       const { state } = await initiateLogin();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
 
       const cbRes = await app.request(
         `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
@@ -1008,7 +1102,23 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         },
         TEST_AUTH_ENV,
       );
-      expect(cbRes.status).toBe(400);
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects callback with a missing browser binding cookie before Google exchange', async () => {
+      const { state } = await initiateLogin();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const cbRes = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+        {},
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(cbRes, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -1262,10 +1372,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         TEST_AUTH_ENV,
       );
 
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'First-time sign-in requires offline consent',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
 
       const createdUsers = await db
         .select()
@@ -1353,10 +1461,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         TEST_AUTH_ENV,
       );
 
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Missing Google credentials for user',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/?error=auth_failed');
 
       // User profile must NOT be mutated before grant validation
       const userAfterRows = await db.select().from(users).where(eq(users.id, existingUserId));
@@ -1491,7 +1597,8 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
           },
           TEST_AUTH_ENV,
         );
-        expect(cb2.status).toBe(500);
+        expect(cb2.status).toBe(302);
+        expect(cb2.headers.get('Location')).toBe('/?error=auth_failed');
 
         // Assert batch fault mock called exactly once
         expect(batchFaultMock).toHaveBeenCalledTimes(1);

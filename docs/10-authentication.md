@@ -55,7 +55,7 @@ Danran では、家族のプライバシー保護と Google カレンダー連�
 
 ### セキュリティレスポンスヘッダ
 
-すべての認証関連エンドポイント（成功・リダイレクト・エラー問わず）において、以下のヘッダを常に強制適用します：
+認証関連レスポンスには、以下のヘッダを適用します。特に `GET /api/auth/callback` は成功・失敗のすべてで適用します。ログイン・ログアウト・`/api/auth/me` などの API エラーは JSON 契約を維持し、認証 API 全体がリダイレクトになるわけではありません。
 - `Cache-Control: no-store`
 - `Pragma: no-cache`
 - `Referrer-Policy: no-referrer`
@@ -124,9 +124,26 @@ WHERE state_hash = ? AND browser_binding_hash = ? AND expires_at > ?
 RETURNING payload_enc;
 ```
 
-- レコードが存在しない場合（期限切れ、ブラウザバインド不一致、既に消費済み）、Google へのトークン交換リクエスト（POST /token）は一切実行されず、即座に 400 Bad Request を返却します。
+- レコードが存在しない場合（期限切れ、ブラウザバインド不一致、既に消費済み）、Google へのトークン交換リクエスト（POST /token）は一切実行されません。callback の失敗はすべて固定の同一オリジン相対パスへの 302 とし、JSON や生のエラー応答は返しません。
 - OAuth state パラメータ、PKCE（RFC 7636 S256）、および暗号署名されたブラウザバインディング Cookie の多層防御により、認可コードの差し替えやブラウザ横断でのリプレイ、戻るボタンによる多重交換を防止します（※ state 単体ですべての認可コード横取り攻撃を防げるわけではなく、PKCE code_verifier やブラウザバインディングと組み合わせることで安全性を確保しています）。
-- 同意画面で拒否（`error=access_denied` 等）された場合も、有効な state とブラウザバインドが存在する場合に限り DB レコードと Cookie をアトミックに消費・破棄し、ルート URL へ安全な固定エラーパラメータ（`/?error=access_denied`）でリダイレクトします。
+- 同意拒否などで Google が `error` を返した場合も、state とブラウザバインドを検証して一時状態を単一消費し、フローの種別に対応する固定エラーへリダイレクトします。Google のエラー文字列は転送しません。
+
+### Callback の失敗応答契約
+
+`GET /api/auth/callback` の成功時は従来どおり、通常ログインを `/`、招待付きログインを `/invite#<token>`、家族カレンダー ACL の追加認可を `/onboarding?acl=granted` にリダイレクトします。失敗時は以下の4コードだけを、固定された同一オリジン相対パスに付けて返します。
+
+| 状況 | リダイレクト先 |
+|---|---|
+| 必須クエリの欠落、不正なクエリ、state 不一致・期限切れ・再利用、OAuth binding Cookie の欠落・不一致 | `/?error=auth_expired` |
+| state 消費後の通常ログイン失敗（同意拒否を含む）、招待付きログイン失敗 | `/?error=auth_failed` |
+| state 消費後の家族 ACL 認可失敗（同意拒否、セッション不一致、所有権消失、トークン/JWT/スコープ/書き込み失敗を含む） | `/onboarding?error=acl_failed` |
+| 検証済み Google アカウントが ACL 認可対象アカウントと異なる | `/onboarding?error=acl_account_mismatch` |
+
+- state の暗号化 payload が正常に復号され、単一消費された後に限りログイン目的か ACL 目的かを判定します。消費・検証前に callback query の値などから目的を信用して遷移先を選ぶことはありません。
+- 検証済み payload の復号後、処理中に構成・origin の異常または例外が起きた場合は、その payload で確認済みのフローに対応する固定エラーへ送ります。payload を確認する前の異常は `/?error=auth_expired` です。
+- 失敗時に招待トークンを URL フラグメントへ戻しません。callback の応答はすべて `Cache-Control: no-store`、`Pragma: no-cache`、`Referrer-Policy: no-referrer` を持ち、OAuth binding Cookie を削除します。
+- `auth_expired` は「有効期限切れ」だけでなく「すでに完了・消費済み」の可能性も表します。画面では「手続きの有効期限が切れたか、すでに完了しています。必要ならもう一度操作してください。」と案内します。
+- `/api/auth/login`、`/api/auth/logout`、`/api/auth/me` など callback 以外の API エラーは、各 API の JSON 契約を維持します。
 
 ---
 
@@ -223,7 +240,7 @@ pnpm exec wrangler secret put TOKEN_ENC_KEY --env production
 3. **同意拒否（キャンセル）フローの確認**:
    - ホームの「Google でログイン」をクリック（同一オリジンの `/api/auth/login` 経由で Google 同意画面へ遷移）。
    - Google の同意画面で「キャンセル」（または拒否）を選択。
-   - `http://localhost:5173/?error=access_denied` へ安全にリダイレクトされ、UI 上に日本語のキャンセル通知（「Google ログインがキャンセルされました。」）が表示されることを確認（任意のクエリパラメータやエラー文字列が DOM に露出しないことを確認）。
+   - 通常ログインの同意拒否後は `http://localhost:5173/?error=auth_failed` へ安全にリダイレクトされ、UI に固定の日本語メッセージが表示されることを確認（任意のクエリパラメータやエラー文字列が DOM に露出しないことを確認）。`auth_expired` は期限切れまたは処理済みの状態を案内します。
 4. **ログイン完了とユーザー情報の確認**:
    - 再度「Google でログイン」をクリックし、Google アカウントで同意を完了。
    - `http://localhost:5173/` へ 302 リダイレクトされ、UI にユーザーの表示名（`displayName`）および「ログアウト」ボタンが表示されることを確認（メールアドレスや内部トークン値が不必要に表示されないことを確認）。
@@ -279,7 +296,7 @@ Task 1-4 において、最小権限の原則（Least Privilege）を維持し�
        │    302 Redirect (/onboarding?acl=granted)                                │
        │                                     │                                    │
        │ 6. POST /api/families/:id/invites   │                                    │
-       │────────────────────────────────────>│ 7. acl.acls スコープ確認済み       │
+       │────────────────────────────────────>│ 7. calendar.acls スコープ確認済み  │
        │<────────────────────────────────────│    招待リンク発行                  │
        │    { authorizationRequired: false,  │                                    │
        │      inviteUrl: .../invite#token }  │                                    │
@@ -288,13 +305,14 @@ Task 1-4 において、最小権限の原則（Least Privilege）を維持し�
 ### 1. オーナー向け共有権限の追加認可（`calendar.acls`）
 - **基本スコープの不変性**: 通常ログイン（`GET /api/auth/login`）では `calendar.acls` を要求しません。家族カレンダーの共有（`acl.insert`）を必要とするオーナーが招待リンクを発行する瞬間にのみ追加同意を求めます。
 - **認可パラメータ**: `include_granted_scopes: 'true'` を付与し、既存の 5 スコープを保持したまま `https://www.googleapis.com/auth/calendar.acls` を追加します。
-- **コールバックと復帰**: 同意完了後は `/onboarding?acl=granted` へリダイレクトし、UI 上でユーザーが「招待リンクを発行する」を再度押すことで、実際の招待トークンが発行されます。同意拒否時は `/onboarding?error=acl_denied` へ安全な固定パラメータで戻り、任意のエラー文字列は DOM に反映しません。
+- **コールバックと復帰**: 同意完了後は `/onboarding?acl=granted` へリダイレクトし、UI 上でユーザーが「招待リンクを発行する」を再度押すことで、実際の招待トークンが発行されます。同意拒否を含む ACL フローの失敗時は `/onboarding?error=acl_failed` へ戻り、検証済み Google アカウントが対象アカウントと異なる場合だけ `/onboarding?error=acl_account_mismatch` を使います。任意のエラー文字列は DOM に反映しません。通常ログイン・招待付きログインの失敗先は `/?error=auth_failed` です。
 
 ### 2. 招待付きログイン（`POST /api/auth/login`）
 - **未認証ユーザーの動線**: `/invite#<raw43token>` を開いた未ログインユーザーが「Google でログインして参加」を押すと、同一オリジンからの `POST /api/auth/login`（JSON ペイロード `{ inviteToken: raw43token }`）が送信されます。
 - **暗号化 state への格納**: `oauth_states` テーブルに保存される一時暗号化ペイロード内に `inviteToken` を保持（ブラウザバインディングおよび AES-256-GCM で保護）。
 - **復帰と URL フラグメント**: OAuth コールバック完了時、暗号化 state から `inviteToken` を復元し、302 リダイレクト先として `/invite#<inviteToken>` を指定します。トークンはクエリパラメータ（`?token=...`）や Cookie ではなく、URL フラグメント（`#`）としてブラウザにのみ渡され、サーバーアクセスログやリファラヘッダ（Referrer-Policy: `no-referrer`）への平文漏洩を完全に防止します。
 - **自動参加の禁止（Explicit Confirmation）**: ログイン復帰後、即座に家族参加（`join`）API を自動実行することは固く禁止します。UI 上で家族名を確認し、ユーザー本人が明示的に「この家族に参加する」ボタンを押下して初めて `POST /api/invites/join` が実行されます。
+- **認可開始の多重送信防止と復帰**: ACL 認可と招待付きログインの開始には同期 ref のガードを使い、連打による複数の OAuth フロー開始を防ぎます。遷移開始後は「Google に移動中...」を表示して操作を無効化します。ブラウザの戻る操作などで BFCache からページが復元された場合（`pageshow` の `persisted` が true）はガードを解除し、再試行できる状態に戻します。
 
 ---
 

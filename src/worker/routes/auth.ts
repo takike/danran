@@ -37,6 +37,32 @@ import { bodyLimit } from 'hono/body-limit';
 
 export const authRoute = new Hono<{ Bindings: WorkerEnv }>();
 
+type CallbackFailureDestination =
+  | '/?error=auth_expired'
+  | '/?error=auth_failed'
+  | '/onboarding?error=acl_failed'
+  | '/onboarding?error=acl_account_mismatch';
+
+const callbackFallbacks = new WeakMap<object, CallbackFailureDestination>();
+
+function callbackFailure(
+  c: Parameters<typeof clearOAuthCookie>[0],
+  destination: CallbackFailureDestination,
+) {
+  clearOAuthCookie(c);
+  c.header('Cache-Control', 'no-store');
+  c.header('Pragma', 'no-cache');
+  c.header('Referrer-Policy', 'no-referrer');
+  return c.redirect(destination, 302);
+}
+
+function isCallbackRequest(c: { req: { method: string; path: string } }): boolean {
+  return (
+    c.req.method === 'GET' &&
+    (c.req.path === '/api/auth/callback' || c.req.path === '/auth/callback')
+  );
+}
+
 // Enforce mandatory security headers, auth configuration, and strict origin matching across all /auth/* routes
 authRoute.use('/auth/*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
@@ -48,6 +74,9 @@ authRoute.use('/auth/*', async (c, next) => {
   try {
     config = getAuthConfig(c.env);
   } catch {
+    if (isCallbackRequest(c)) {
+      return callbackFailure(c, '/?error=auth_expired');
+    }
     const errorBody = apiErrorResponseSchema.parse({
       error: 'Auth service unconfigured',
     });
@@ -59,11 +88,17 @@ authRoute.use('/auth/*', async (c, next) => {
   try {
     requestOrigin = new URL(c.req.url).origin;
   } catch {
+    if (isCallbackRequest(c)) {
+      return callbackFailure(c, '/?error=auth_expired');
+    }
     const errorBody = apiErrorResponseSchema.parse({ error: 'Forbidden' });
     return c.json(errorBody, 403);
   }
 
   if (requestOrigin !== config.appOrigin) {
+    if (isCallbackRequest(c)) {
+      return callbackFailure(c, '/?error=auth_expired');
+    }
     const errorBody = apiErrorResponseSchema.parse({ error: 'Forbidden' });
     return c.json(errorBody, 403);
   }
@@ -80,6 +115,10 @@ authRoute.onError((err, c) => {
   c.header('Cache-Control', 'no-store');
   c.header('Pragma', 'no-cache');
   c.header('Referrer-Policy', 'no-referrer');
+
+  if (isCallbackRequest(c)) {
+    return callbackFailure(c, callbackFallbacks.get(c) ?? '/?error=auth_expired');
+  }
 
   if (err instanceof GoogleAuthError) {
     const errorBody = apiErrorResponseSchema.parse({ error: 'Authentication failed' });
@@ -176,59 +215,51 @@ authRoute.post(
  * batches session rotation, and redirects to root.
  */
 authRoute.get('/auth/callback', async (c) => {
+  callbackFallbacks.set(c, '/?error=auth_expired');
   const rawQuery = c.req.query();
   const queryResult = authCallbackQuerySchema.safeParse(rawQuery);
   if (!queryResult.success) {
-    clearOAuthCookie(c);
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Invalid callback parameters',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_expired');
   }
 
   const query: AuthCallbackQuery = queryResult.data;
-  const config = getAuthConfig(c.env);
-  const db = createDb(c.env.DB);
+  let config: AuthConfig;
+  let db: ReturnType<typeof createDb>;
+  try {
+    config = getAuthConfig(c.env);
+    db = createDb(c.env.DB);
+  } catch {
+    return callbackFailure(c, '/?error=auth_expired');
+  }
 
   // Handle user cancellation / error from Google:
   // Must atomically consume matching valid state and browser binding before redirecting
   if (query.error) {
     if (!query.state) {
-      clearOAuthCookie(c);
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Missing state parameter on denial',
-      });
-      return c.json(errorBody, 400);
+      return callbackFailure(c, '/?error=auth_expired');
     }
 
     let consumed: OAuthPayload;
     try {
       consumed = await consumeOAuthFlow(c, db, config, query.state);
     } catch {
-      clearOAuthCookie(c);
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Invalid or expired OAuth state',
-      });
-      return c.json(errorBody, 400);
+      return callbackFailure(c, '/?error=auth_expired');
     }
+
+    callbackFallbacks.set(
+      c,
+      consumed.purpose === 'family-acl' ? '/onboarding?error=acl_failed' : '/?error=auth_failed',
+    );
 
     if (consumed.purpose === 'family-acl') {
-      return c.redirect('/onboarding?error=acl_denied', 302);
+      return c.redirect('/onboarding?error=acl_failed', 302);
     }
 
-    if (consumed.inviteToken) {
-      return c.redirect(`/invite?error=access_denied#${consumed.inviteToken}`, 302);
-    }
-
-    return c.redirect('/?error=access_denied', 302);
+    return c.redirect('/?error=auth_failed', 302);
   }
 
   if (!query.code || !query.state) {
-    clearOAuthCookie(c);
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Missing code or state parameter',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_expired');
   }
 
   // 1. Single-use atomic consumption of OAuth state and browser binding
@@ -236,11 +267,13 @@ authRoute.get('/auth/callback', async (c) => {
   try {
     consumed = await consumeOAuthFlow(c, db, config, query.state);
   } catch {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Invalid or expired OAuth state',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_expired');
   }
+
+  callbackFallbacks.set(
+    c,
+    consumed.purpose === 'family-acl' ? '/onboarding?error=acl_failed' : '/?error=auth_failed',
+  );
 
   const { codeVerifier, nonce } = consumed;
 
@@ -256,10 +289,7 @@ authRoute.get('/auth/callback', async (c) => {
       currentSession.sessionId !== consumed.sessionId ||
       currentSession.user.id !== consumed.userId
     ) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Session invalid or expired',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     const boundFamilies = await db
@@ -275,10 +305,7 @@ authRoute.get('/auth/callback', async (c) => {
 
     const boundFamily = boundFamilies[0];
     if (!boundFamily) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Family not found or not owned',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     const activeMembers = await db
@@ -293,10 +320,7 @@ authRoute.get('/auth/callback', async (c) => {
       );
 
     if (!activeMembers[0]) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Family ownership lost',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     // 2. Token exchange with Google
@@ -321,10 +345,7 @@ authRoute.get('/auth/callback', async (c) => {
 
     // 4. Require claims.sub === initiating current user.googleSub
     if (claims.sub !== currentSession.user.googleSub) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Account mismatch',
-      });
-      return c.json(errorBody, 400);
+      return callbackFailure(c, '/onboarding?error=acl_account_mismatch');
     }
 
     // 5. Require returned scope baseline + FAMILY_ACL_SCOPE (no union with stored scopes)
@@ -346,10 +367,7 @@ authRoute.get('/auth/callback', async (c) => {
       recheckedSession.sessionId !== consumed.sessionId ||
       recheckedSession.user.id !== consumed.userId
     ) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Session invalid or expired',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     const recheckedFamilies = await db
@@ -364,10 +382,7 @@ authRoute.get('/auth/callback', async (c) => {
       );
 
     if (!recheckedFamilies[0]) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Family ownership lost',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     const recheckedMembers = await db
@@ -382,10 +397,7 @@ authRoute.get('/auth/callback', async (c) => {
       );
 
     if (!recheckedMembers[0]) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Family ownership lost',
-      });
-      return c.json(errorBody, 403);
+      return callbackFailure(c, '/onboarding?error=acl_failed');
     }
 
     // 7. Token grant write with atomic WHERE EXISTS guarding session, family, active member, and matching old ciphertext
@@ -489,17 +501,11 @@ authRoute.get('/auth/callback', async (c) => {
   try {
     tokenResponse = await exchangeCodeForTokens(query.code, codeVerifier, config);
   } catch {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Failed to exchange authorization code',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_failed');
   }
 
   if (!tokenResponse.id_token) {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Missing ID token in Google response',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_failed');
   }
 
   // 3. Scope validation
@@ -508,10 +514,7 @@ authRoute.get('/auth/callback', async (c) => {
     const scopeData = validateAndNormalizeScopes(tokenResponse.scope);
     canonicalScopes = scopeData.canonicalScopeString;
   } catch {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Required permissions not granted',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_failed');
   }
 
   // 4. Cryptographic JWT Verification (sub, exp, iat, nonce required)
@@ -519,10 +522,7 @@ authRoute.get('/auth/callback', async (c) => {
   try {
     claims = await verifyGoogleIdToken(tokenResponse.id_token, config.clientId, nonce);
   } catch {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Failed to verify Google identity',
-    });
-    return c.json(errorBody, 400);
+    return callbackFailure(c, '/?error=auth_failed');
   }
 
   // 5. Pre-mutation grant validation: check missing refresh BEFORE any user profile mutation
@@ -531,10 +531,7 @@ authRoute.get('/auth/callback', async (c) => {
 
   if (!tokenResponse.refresh_token) {
     if (!existingUser) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'First-time sign-in requires offline consent',
-      });
-      return c.json(errorBody, 400);
+      return callbackFailure(c, '/?error=auth_failed');
     }
 
     const existingTokenRows = await db
@@ -543,10 +540,7 @@ authRoute.get('/auth/callback', async (c) => {
       .where(eq(googleTokens.userId, existingUser.id));
 
     if (!existingTokenRows[0]) {
-      const errorBody = apiErrorResponseSchema.parse({
-        error: 'Missing Google credentials for user',
-      });
-      return c.json(errorBody, 400);
+      return callbackFailure(c, '/?error=auth_failed');
     }
   }
 
@@ -571,10 +565,7 @@ authRoute.get('/auth/callback', async (c) => {
 
   const upsertedUser = upsertedUsers[0];
   if (!upsertedUser) {
-    const errorBody = apiErrorResponseSchema.parse({
-      error: 'Failed to persist user profile',
-    });
-    return c.json(errorBody, 500);
+    return callbackFailure(c, '/?error=auth_failed');
   }
   const userId = upsertedUser.id;
 
