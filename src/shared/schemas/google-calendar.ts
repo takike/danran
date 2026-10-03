@@ -167,8 +167,10 @@ export type InsertExtendedProperties = z.infer<typeof insertExtendedPropertiesSc
  * Response extendedProperties schema (strips unknown fields).
  */
 export const googleExtendedPropertiesResponseSchema = z.object({
-  private: z.record(z.string()).optional(),
-  shared: z.record(z.string()).optional(),
+  // Google metadata is untrusted input; malformed values should be discarded
+  // by consumers rather than invalidating an otherwise valid event page.
+  private: z.record(z.unknown()).optional(),
+  shared: z.record(z.unknown()).optional(),
 });
 
 export type GoogleExtendedProperties = z.infer<typeof googleExtendedPropertiesResponseSchema>;

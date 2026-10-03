@@ -127,8 +127,10 @@ member_calendars member_id, calendar_id, include_in_busy(bool)          -- free/
 invites          id, family_id, token_hash, expires_at, used_at, claimed_user_id NULL,
                  status(available|claiming|uncertain|used), created_at
 closure_days     id, family_id, date, label, member_ids                -- 保育園の休園日など
-event_meta       id, family_id, calendar_id, event_id, recurring_event_id NULL, original_start NULL,
-                 items_json, assignee_member_id NULL, status, source, import_job_id NULL, updated_at
+event_meta       id PK, family_id FK families CASCADE, calendar_id, event_id,
+                 recurring_event_id NULL, original_start NULL, items_json TEXT NOT NULL DEFAULT '[]',
+                 assignee_member_id NULL FK members SET NULL, status CHECK confirmed|tentative DEFAULT confirmed,
+                 source CHECK manual|import|publish DEFAULT manual, import_job_id NULL (FKなし), updated_at DEFAULT unixepoch()
 routine_settings id, family_id, calendar_id, recurring_event_id, category(lesson|housework|other),
                  skip_holidays(bool), skip_new_year(bool), affects_availability(bool), default_assignee_member_id
 attachments      id, family_id, r2_key, content_type, width, height, created_by, created_at
@@ -163,19 +165,17 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
   - `https://www.googleapis.com/auth/calendar.acls`：**招待リンクを発行するオーナーだけ**に、発行時に追加で同意を求める（incremental authorization）。家族カレンダーの共有設定にのみ使う
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。
 
-### 取得の流れ（Phase 1〜2 はオンデマンド）
+### 週ビューの取得（Phase 1: 家族予定のみ）
 
-週ビューを開いたとき、API `GET /api/week?start=YYYY-MM-DD` がサーバー側で次を並列に実行する。
+週ビュー API は `GET /api/families/:id/week?start=YYYY-MM-DD`。`start` を省略すると `Asia/Tokyo` の今日を含む週を返す。家族カレンダーの Google イベントと D1 の `event_meta`、有効なメンバー、祝日、休園日を読み取り、`shared/domain/dayLayout` で日ごとのレイアウトを決める。完全な入出力契約、境界条件、エラーコードは [15-week-api.md](15-week-api.md) を参照。
 
-1. 家族カレンダーの `events.list`（`singleEvents=true`, `timeMin/timeMax`, `timeZone=Asia/Tokyo`）
-2. 各大人のトークンで `freeBusy.query`（対象カレンダー群）→ `mirrored_blocks` を差し引く
-3. リクエストした本人のトークンで、本人の個人予定の `events.list`（本人の画面用。Phase 2 以降）
-4. D1 から `event_meta`、`tasks`（期限がその週のもの）、`closure_days`、`routine_settings` を取得
-5. `shared/domain/dayLayout` で日ごとの表示サイズを決め、`freeWindows` で共通の空きを計算して返す
+この API は Phase 1 では家族カレンダーだけを読む。リクエストした本人を含め、個人カレンダーの `events.list` と全メンバーの `freeBusy.query` は呼ばず、予定作成・更新・削除も行わない。個人カレンダーの空きや本人だけに見える予定は Phase 2 で追加認可し、Task 2-2 以降で週 API に組み込む予定。週範囲が祝日ライブラリの対応年（1970–2050）を越える場合は、祝日を平日と誤認しないようリクエストを拒否する。
 
-レスポンスはメンバー単位で「その人から見た見え方」に整形済みにする。他人の個人予定は区間のみとする。
+Google の家族カレンダー `events.list` は、リクエストユーザー自身のトークンで `singleEvents=true`、`orderBy=startTime`、`timeZone=Asia/Tokyo`、週の JST 境界、`showDeleted=false` を指定して取得する。最大10ページまで追跡し、ページ上限到達、同じページトークンの再出現、または不完全な取得はエラーとして扱う。イベントの Google metadata と `event_meta` は許可リストに沿ってレスポンスへ整形し、個人カレンダー情報は混ぜない。
 
-後のフェーズでは、`syncToken` による差分取得と `events.watch`（Push 通知 → Worker の webhook）で高速化する。最初はやらない。
+`event_meta` は `(calendar_id,event_id)` の一意制約と、`(family_id,calendar_id)`、`(calendar_id,recurring_event_id,original_start)`、`assignee_member_id` の各検索インデックスを持つ。週 API が読むのは持ち物の `items_json` だけである。`assignee_member_id`、`status`、`source` 列は将来の D1 利用に備えた予約フィールドであり、この API のレスポンス値には使わない。担当・状態・由来は Google の `extendedProperties.private` から検証して導出する。
+
+後のフェーズでは `syncToken` による差分取得と `events.watch`（Push 通知 → Worker の webhook）で高速化する。最初は行わない。
 
 ### 繰り返し予定
 
