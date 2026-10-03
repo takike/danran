@@ -4,7 +4,11 @@ import { type WeekResponse, weekResponseSchema } from '../src/shared/schemas/wee
 import { addCalendarDays, getWeekday } from '../src/shared/time/date';
 import { getWeekRange } from '../src/shared/time/week';
 
-test.use({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+test.use({
+  serviceWorkers: 'block',
+  viewport: { width: 390, height: 844 },
+  timezoneId: 'UTC',
+});
 
 const FAMILY_ID = 'fam_synthetic';
 const BASE_WEEK = '2026-10-05' as DateKey;
@@ -382,7 +386,11 @@ async function triggerVisibilityCycle(page: import('@playwright/test').Page) {
 
 test.describe('Task 1-7: S1 week view', () => {
   test.beforeEach(async ({ page }) => {
-    await page.clock.setFixedTime(new Date('2026-10-07T12:00:00+09:00'));
+    await page.addInitScript(() => {
+      // Keep the native Date constructor intact for timezone-aware subclasses such as TZDate.
+      const fixedNow = Date.parse('2026-10-07T12:00:00+09:00');
+      Date.now = () => fixedNow;
+    });
   });
 
   test('renders synthetic family week, compact routines, expanded events, long weekend, holiday and qualifiers', async ({
