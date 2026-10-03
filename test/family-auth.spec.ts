@@ -77,6 +77,21 @@ function cookieHeaderFromJar(jar: Record<string, string>): string {
     .join('; ');
 }
 
+async function expectCallbackFailure(response: Response, destination: string): Promise<void> {
+  expect(response.status).toBe(302);
+  expect(response.headers.get('Location')).toBe(destination);
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(response.headers.get('Pragma')).toBe('no-cache');
+  expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+  const clearedCookie = response.headers.get('set-cookie') ?? '';
+  expect(clearedCookie).toContain(`${OAUTH_COOKIE_NAME}=`);
+  expect(clearedCookie).toContain('Max-Age=0');
+  expect(clearedCookie).toContain('Path=/');
+  expect(clearedCookie).toContain('HttpOnly');
+  expect(clearedCookie).toContain('Secure');
+  expect(await response.clone().text()).toBe('');
+}
+
 async function computeS256Challenge(verifier: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   return uint8ArrayToBase64Url(new Uint8Array(hash));
@@ -442,7 +457,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
   });
 
   describe('3. Bound Session & Pre-Exchange Verification Gate', () => {
-    it('mismatchedcurrentcookie missing/differentuser/differentsession BEFOREGooglecall: rejects 403 when session cookie missing without Google fetch', async () => {
+    it('mismatchedcurrentcookie missing/differentuser/differentsession redirects when session cookie is missing before Google fetch', async () => {
       const { user, sessionJar } = await performLogin();
       const { familyId } = await setupOwnedFamily(user.id);
 
@@ -456,14 +471,12 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      // Rejects 403 before external fetch
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Session invalid or expired',
-      });
+      // Redirects before any external fetch
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
     });
 
-    it('mismatchedcurrentcookie: rejects 403 when session belongs to a different user without Google fetch', async () => {
+    it('mismatchedcurrentcookie: redirects when session belongs to a different user without Google fetch', async () => {
       const { user: userA, sessionJar: jarA } = await performLogin('sub-a', 'userA@test.com');
       const { sessionJar: jarB } = await performLogin('sub-b', 'userB@test.com');
       const { familyId } = await setupOwnedFamily(userA.id);
@@ -483,13 +496,11 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Session invalid or expired',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
     });
 
-    it('mismatchedcurrentcookie: rejects 403 before Google call when session cookie belongs to same user but different session', async () => {
+    it('mismatchedcurrentcookie: redirects before Google call when session cookie belongs to same user but different session', async () => {
       const {
         user,
         session: session1,
@@ -522,13 +533,11 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       );
 
       // Pre-exchange check detects currentSession.sessionId !== consumed.sessionId
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Session invalid or expired',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
     });
 
-    it('invalidatedoldsession: rejects 403 before Google call when session was deleted or expired', async () => {
+    it('invalidatedoldsession: redirects before Google call when session was deleted or expired', async () => {
       const { user, session, sessionJar } = await performLogin();
       const { familyId } = await setupOwnedFamily(user.id);
 
@@ -554,15 +563,13 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Session invalid or expired',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
     });
   });
 
   describe('4. Token Exchange & Identity Verification', () => {
-    it('wrongGoogleIDsub nevertoken/profile/sessionchange: rejects 400 when Google sub mismatches active user', async () => {
+    it('wrongGoogleIDsub nevertoken/profile/sessionchange: redirects when Google sub mismatches active user', async () => {
       const { user, sessionJar } = await performLogin('owner-google-sub');
       const { familyId } = await setupOwnedFamily(user.id);
 
@@ -593,10 +600,8 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      expect(cbRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Account mismatch',
-      });
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_account_mismatch');
 
       // Assert no grant has been written with ACL scope
       const tokens = await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id));
@@ -702,7 +707,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       );
 
       expect(cancelRes.status).toBe(302);
-      expect(cancelRes.headers.get('Location')).toBe('/onboarding?error=acl_denied');
+      await expectCallbackFailure(cancelRes, '/onboarding?error=acl_denied');
 
       // State is consumed
       const stateRows = await db
@@ -711,7 +716,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         .where(eq(oauthStates.stateHash, stateHash));
       expect(stateRows.length).toBe(0);
 
-      // Replaying consumed state fails 400
+      // Replaying consumed state redirects to the fixed expired-state destination.
       const replayRes = await app.request(
         `http://localhost:5173/api/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,
         {
@@ -727,10 +732,8 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         },
         TEST_AUTH_ENV,
       );
-      expect(replayRes.status).toBe(400);
-      expect(apiErrorResponseSchema.parse(await replayRes.json())).toEqual({
-        error: 'Invalid or expired OAuth state',
-      });
+      expect(replayRes.status).toBe(302);
+      expect(replayRes.headers.get('Location')).toBe('/?error=auth_expired');
     });
   });
 
@@ -901,6 +904,91 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
   });
 
   describe('7. Concurrency & Mid-Exchange Mutations Gate', () => {
+    it('redirects acl_failed on a post-consumption session database exception without Google exchange', async () => {
+      const { user, sessionJar } = await performLogin();
+      const { familyId } = await setupOwnedFamily(user.id);
+      const { authUrl, oauthJar } = await requestFamilyAclUrl(familyId, sessionJar);
+      const state = required(authUrl.searchParams.get('state'), 'State missing');
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const originalPrepare = TEST_AUTH_ENV.DB.prepare.bind(TEST_AUTH_ENV.DB);
+      const prepareSpy = vi.spyOn(TEST_AUTH_ENV.DB, 'prepare').mockImplementation((query) => {
+        if (query.toLowerCase().includes('sessions')) {
+          throw new Error('synthetic session database fault');
+        }
+        return originalPrepare(query);
+      });
+
+      const cbRes = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({
+              ...oauthJar,
+              [SESSION_COOKIE_NAME]: required(sessionJar[SESSION_COOKIE_NAME]),
+            }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(cbRes, '/onboarding?error=acl_failed');
+      expect(prepareSpy).toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      prepareSpy.mockRestore();
+    });
+
+    it('redirects acl_failed on grant write exception and preserves the existing grant', async () => {
+      const { user, sessionJar } = await performLogin();
+      const { familyId } = await setupOwnedFamily(user.id);
+      const { authUrl, oauthJar } = await requestFamilyAclUrl(familyId, sessionJar);
+      const state = required(authUrl.searchParams.get('state'), 'State missing');
+      const nonce = required(authUrl.searchParams.get('nonce'), 'Nonce missing');
+      const validToken = await signTestIdToken({ sub: user.googleSub, nonce });
+      setupGoogleFetchMock({ idToken: validToken, refreshToken: 'replacement-refresh-token' });
+
+      const beforeRows = await db
+        .select()
+        .from(googleTokens)
+        .where(eq(googleTokens.userId, user.id));
+      const beforeGrant = required(beforeRows[0], 'Existing grant missing');
+      const originalPrepare = TEST_AUTH_ENV.DB.prepare.bind(TEST_AUTH_ENV.DB);
+      const prepareSpy = vi.spyOn(TEST_AUTH_ENV.DB, 'prepare').mockImplementation((query) => {
+        if (query.includes('UPDATE google_tokens')) {
+          throw new Error('synthetic grant write fault');
+        }
+        return originalPrepare(query);
+      });
+
+      const cbRes = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({
+              ...oauthJar,
+              [SESSION_COOKIE_NAME]: required(sessionJar[SESSION_COOKIE_NAME]),
+            }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(cbRes, '/onboarding?error=acl_failed');
+      expect(prepareSpy).toHaveBeenCalled();
+      prepareSpy.mockRestore();
+
+      const afterRows = await db
+        .select()
+        .from(googleTokens)
+        .where(eq(googleTokens.userId, user.id));
+      expect(afterRows).toHaveLength(1);
+      expect(required(afterRows[0]).refreshTokenEnc).toBe(beforeGrant.refreshTokenEnc);
+      expect(required(afterRows[0]).scopes).toBe(beforeGrant.scopes);
+      const sessionsAfter = await db.select().from(sessions).where(eq(sessions.userId, user.id));
+      expect(sessionsAfter).toHaveLength(1);
+    });
+
     it('ownerchange/logout DURINGexchangegate finalmutationfailure: rejects when session is deleted during exchange', async () => {
       const { user, session, sessionJar } = await performLogin();
       const { familyId } = await setupOwnedFamily(user.id);
@@ -934,11 +1022,12 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      // Recheck catches deleted session -> 403
-      expect(cbRes.status).toBe(403);
+      // Recheck catches the deleted session and returns the fixed ACL failure redirect.
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
     });
 
-    it('ownershipchange whileexchange inprogress: rejects 403 when ownerUserId changes before recheck', async () => {
+    it('ownershipchange whileexchange inprogress: redirects when ownerUserId changes before recheck', async () => {
       const { user, sessionJar } = await performLogin();
       const { familyId } = await setupOwnedFamily(user.id);
 
@@ -983,11 +1072,9 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      // Recheck step 6 catches ownership loss -> 403
-      expect(cbRes.status).toBe(403);
-      expect(apiErrorResponseSchema.parse(await cbRes.json())).toEqual({
-        error: 'Family ownership lost',
-      });
+      // Recheck step 6 catches ownership loss.
+      expect(cbRes.status).toBe(302);
+      expect(cbRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
 
       const postTokens = await db
         .select()
@@ -1281,6 +1368,36 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
   });
 
   describe('8. Invite Continuation & Security Boundaries', () => {
+    it('invite login denial returns to the validated invite fragment with a fixed cancellation code', async () => {
+      const inviteToken = 'B'.repeat(43);
+      const loginRes = await app.request(
+        'http://localhost:5173/api/auth/login',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            Origin: 'http://localhost:5173',
+          },
+          body: JSON.stringify({ inviteToken }),
+        },
+        TEST_AUTH_ENV,
+      );
+      const authUrl = new URL(
+        authLoginResponseSchema.parse(await loginRes.json()).authorizationUrl,
+      );
+      const state = required(authUrl.searchParams.get('state'), 'State missing');
+
+      const cbRes = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&error_description=private-value&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: cookieHeaderFromJar(extractCookies(loginRes)) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(cbRes, `/invite?error=access_denied#${inviteToken}`);
+      expect(await cbRes.text()).not.toContain('private-value');
+    });
+
     it('invite logincontinuationexplicitfragment: redirects /invite#TOKEN after successful login', async () => {
       const inviteToken = 'B'.repeat(43);
 

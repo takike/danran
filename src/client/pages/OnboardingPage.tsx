@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 
 interface ChildDraft {
@@ -62,6 +63,9 @@ export default function OnboardingPage(): React.ReactElement {
   // Lifecycle generation and AbortController to prevent mutation completion races
   const generationRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const inviteAbortControllerRef = useRef<AbortController | null>(null);
+  const inviteRequestLockedRef = useRef(false);
+  const [isInviteRedirecting, setIsInviteRedirecting] = useState(false);
 
   // Local private state
   const [newFamilyName, setNewFamilyName] = useState('');
@@ -77,10 +81,14 @@ export default function OnboardingPage(): React.ReactElement {
     generationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
+    inviteAbortControllerRef.current?.abort();
+    inviteAbortControllerRef.current = null;
 
     createFamilyMutation.reset();
     updateChildrenMutation.reset();
     issueInviteMutation.reset();
+    inviteRequestLockedRef.current = false;
+    setIsInviteRedirecting(false);
     reconcileFamilyMutation.reset();
 
     await queryClient.cancelQueries({ queryKey: SESSION_QUERY_KEY });
@@ -116,10 +124,14 @@ export default function OnboardingPage(): React.ReactElement {
       generationRef.current += 1;
       abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
+      inviteAbortControllerRef.current?.abort();
+      inviteAbortControllerRef.current = null;
 
       createFamilyMutation.reset();
       updateChildrenMutation.reset();
       issueInviteMutation.reset();
+      inviteRequestLockedRef.current = false;
+      setIsInviteRedirecting(false);
       reconcileFamilyMutation.reset();
 
       setInviteUrl(null);
@@ -145,8 +157,24 @@ export default function OnboardingPage(): React.ReactElement {
     return () => {
       generationRef.current += 1;
       abortControllerRef.current?.abort();
+      inviteAbortControllerRef.current?.abort();
     };
   }, []);
+
+  // A bfcache-restored page can retry the interrupted authorization flow.
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      generationRef.current += 1;
+      inviteAbortControllerRef.current?.abort();
+      inviteAbortControllerRef.current = null;
+      inviteRequestLockedRef.current = false;
+      setIsInviteRedirecting(false);
+      issueInviteMutation.reset();
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [issueInviteMutation.reset]);
 
   const family = families && families.length > 0 ? families[0] : null;
 
@@ -168,8 +196,8 @@ export default function OnboardingPage(): React.ReactElement {
     const currentUserId = user?.id;
     if (!currentUserId || !newFamilyName.trim()) return;
 
-    abortControllerRef.current?.abort();
     const controller = new AbortController();
+    abortControllerRef.current?.abort();
     abortControllerRef.current = controller;
 
     try {
@@ -381,17 +409,22 @@ export default function OnboardingPage(): React.ReactElement {
 
   // Issue invite link
   const handleIssueInvite = async () => {
+    if (inviteRequestLockedRef.current) return;
+    inviteRequestLockedRef.current = true;
     const currentGen = generationRef.current;
     const currentUserId = user?.id;
-    if (!currentUserId || !family) return;
+    if (!currentUserId || !family) {
+      inviteRequestLockedRef.current = false;
+      return;
+    }
 
     setInviteUrl(null);
     setCopied(false);
     setCopyFailed(false);
 
-    abortControllerRef.current?.abort();
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    inviteAbortControllerRef.current?.abort();
+    inviteAbortControllerRef.current = controller;
 
     try {
       const res = await issueInviteMutation.mutateAsync({
@@ -407,9 +440,16 @@ export default function OnboardingPage(): React.ReactElement {
       }
 
       if (res.authorizationRequired) {
-        window.location.assign(res.authorizationUrl);
+        flushSync(() => setIsInviteRedirecting(true));
+        try {
+          window.location.assign(res.authorizationUrl);
+        } catch {
+          inviteRequestLockedRef.current = false;
+          setIsInviteRedirecting(false);
+        }
       } else {
         setInviteUrl(res.inviteUrl);
+        inviteRequestLockedRef.current = false;
       }
     } catch (err: unknown) {
       if (
@@ -422,6 +462,9 @@ export default function OnboardingPage(): React.ReactElement {
       const errorObj = err as { status?: number; code?: string };
       if (errorObj?.status === 401 || errorObj?.code === 'UNAUTHORIZED') {
         await handleAuthRevocation();
+      } else {
+        inviteRequestLockedRef.current = false;
+        setIsInviteRedirecting(false);
       }
     }
   };
@@ -518,11 +561,36 @@ export default function OnboardingPage(): React.ReactElement {
               aria-hidden="true"
             />
             <div>
-              <strong className="block font-semibold">共有権限の追加がキャンセルされました</strong>
+              <strong className="block font-semibold">
+                {errorParam === 'acl_failed'
+                  ? '共有権限を追加できませんでした'
+                  : '共有権限の追加がキャンセルされました'}
+              </strong>
               <span>
-                Google
-                カレンダー共有権限の追加がキャンセルまたは失敗しました。招待リンクを発行するには共有管理権限の許可が必要です。
+                {errorParam === 'acl_failed'
+                  ? 'Google カレンダー共有権限を確認できませんでした。招待リンクを発行するには、Google の許可画面でカレンダー共有の項目にチェックを入れて許可してください。'
+                  : '招待リンクを発行するには、Google の許可画面でカレンダー共有の項目にチェックを入れて許可する必要があります。'}
               </span>
+            </div>
+          </div>
+        )}
+
+        {errorParam === 'acl_account_mismatch' && (
+          <div
+            data-testid="acl-account-mismatch-message"
+            role="alert"
+            className="mt-[var(--spacing-md)] p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20"
+          >
+            <AlertCircle
+              size={18}
+              className="shrink-0 mt-[var(--spacing-2xs)]"
+              aria-hidden="true"
+            />
+            <div>
+              <strong className="block font-semibold">
+                別の Google アカウントでログインしています
+              </strong>
+              <span>招待リンクを発行したアカウントに切り替えて、もう一度お試しください。</span>
             </div>
           </div>
         )}
@@ -950,12 +1018,17 @@ export default function OnboardingPage(): React.ReactElement {
                       <button
                         type="button"
                         data-testid="issue-invite-button"
-                        disabled={issueInviteMutation.isPending}
+                        disabled={issueInviteMutation.isPending || isInviteRedirecting}
+                        aria-busy={issueInviteMutation.isPending || isInviteRedirecting}
                         onClick={handleIssueInvite}
                         className="w-full min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-sm)] bg-accent text-surface rounded-[var(--radius-md)] text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center justify-center gap-[var(--spacing-sm)] cursor-pointer"
                       >
                         <span>
-                          {issueInviteMutation.isPending ? '発行中...' : '招待リンクを発行する'}
+                          {isInviteRedirecting
+                            ? 'Google に移動中...'
+                            : issueInviteMutation.isPending
+                              ? '発行中...'
+                              : '招待リンクを発行する'}
                         </span>
                       </button>
 

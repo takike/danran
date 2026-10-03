@@ -21,6 +21,8 @@ export default function HomePage(): React.ReactElement {
   const [searchParams] = useSearchParams();
   const rawError = searchParams.get('error');
   const isAccessDenied = rawError === 'access_denied';
+  const isAuthExpired = rawError === 'auth_expired';
+  const isAuthFailed = rawError === 'auth_failed';
 
   const { data: user, isLoading, isError, refetch } = useSessionQuery();
   const logoutMutation = useLogoutMutation();
@@ -37,6 +39,47 @@ export default function HomePage(): React.ReactElement {
             ルーティンは背景に、週末は前景に。家族の時間を守るカレンダー。
           </p>
         </header>
+
+        {isAccessDenied && (
+          <output
+            data-testid="access-denied-message"
+            className="mt-[var(--spacing-md)] p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20 block"
+          >
+            <AlertCircle
+              size={18}
+              className="shrink-0 mt-[var(--spacing-2xs)]"
+              aria-hidden="true"
+            />
+            <div>
+              <strong className="block font-semibold">ログインが中断されました</strong>
+              <span>Google ログインがキャンセルされました。</span>
+            </div>
+          </output>
+        )}
+
+        {(isAuthExpired || isAuthFailed) && (
+          <div
+            data-testid={isAuthExpired ? 'auth-expired-message' : 'auth-failed-message'}
+            role="alert"
+            className="mt-[var(--spacing-md)] p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20"
+          >
+            <AlertCircle
+              size={18}
+              className="shrink-0 mt-[var(--spacing-2xs)]"
+              aria-hidden="true"
+            />
+            <div>
+              <strong className="block font-semibold">
+                {isAuthExpired ? '認証手続きを確認してください' : 'ログインを完了できませんでした'}
+              </strong>
+              <span>
+                {isAuthExpired
+                  ? '手続きの有効期限が切れたか、すでに完了しています。必要ならもう一度操作してください。'
+                  : 'Google ログインに失敗しました。許可画面の項目にチェックが入っているか確認してください。時間をおいて、もう一度お試しください。'}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 1. Loading State */}
         {isLoading && (
@@ -131,23 +174,6 @@ export default function HomePage(): React.ReactElement {
         {/* 4. Logged-out State */}
         {!isLoading && !isError && !user && (
           <section className="mt-[var(--spacing-xl)] space-y-[var(--spacing-md)]">
-            {isAccessDenied && (
-              <output
-                data-testid="access-denied-message"
-                className="p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20 block"
-              >
-                <AlertCircle
-                  size={18}
-                  className="shrink-0 mt-[var(--spacing-2xs)]"
-                  aria-hidden="true"
-                />
-                <div>
-                  <strong className="block font-semibold">ログインが中断されました</strong>
-                  <span>Google ログインがキャンセルされました。</span>
-                </div>
-              </output>
-            )}
-
             <Card className="bg-surface border border-line rounded-[var(--radius-md)] p-[var(--spacing-md)]">
               <h2 className="text-base font-semibold text-ink m-0 mb-[var(--spacing-xs)]">
                 家族の予定をひとつに

@@ -15,11 +15,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ArrowLeft, CheckCircle2, LogIn, RefreshCw, Users } from 'lucide-react';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 
 export default function InviteJoinPage(): React.ReactElement {
   const location = useLocation();
   const queryClient = useQueryClient();
+  const callbackError = new URLSearchParams(location.search).get('error');
 
   // Extract and validate token strictly from location.hash or window.location.hash
   const [token, setToken] = useState<string | null>(() =>
@@ -62,6 +64,9 @@ export default function InviteJoinPage(): React.ReactElement {
   // Lifecycle generation and AbortController to prevent mutation completion races
   const generationRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const loginAbortControllerRef = useRef<AbortController | null>(null);
+  const loginRequestLockedRef = useRef(false);
+  const [isLoginRedirecting, setIsLoginRedirecting] = useState(false);
 
   const joinFamilyMutation = useJoinFamilyMutation();
   const loginWithInviteMutation = useLoginWithInviteMutation();
@@ -79,8 +84,12 @@ export default function InviteJoinPage(): React.ReactElement {
       generationRef.current += 1;
       abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
+      loginAbortControllerRef.current?.abort();
+      loginAbortControllerRef.current = null;
       joinFamilyMutation.reset();
       loginWithInviteMutation.reset();
+      loginRequestLockedRef.current = false;
+      setIsLoginRedirecting(false);
       setJoinedState(null);
     }
   }, [userId, token, isUserError, joinFamilyMutation.reset, loginWithInviteMutation.reset]);
@@ -89,8 +98,24 @@ export default function InviteJoinPage(): React.ReactElement {
     return () => {
       generationRef.current += 1;
       abortControllerRef.current?.abort();
+      loginAbortControllerRef.current?.abort();
     };
   }, []);
+
+  // A bfcache-restored page can retry the interrupted authorization flow.
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      generationRef.current += 1;
+      loginAbortControllerRef.current?.abort();
+      loginAbortControllerRef.current = null;
+      loginRequestLockedRef.current = false;
+      setIsLoginRedirecting(false);
+      loginWithInviteMutation.reset();
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [loginWithInviteMutation.reset]);
 
   const isAuthenticated = !isUserLoading && !isUserError && !!user;
   const inspectQuery = useInspectInviteQuery(
@@ -103,9 +128,13 @@ export default function InviteJoinPage(): React.ReactElement {
     generationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
+    loginAbortControllerRef.current?.abort();
+    loginAbortControllerRef.current = null;
 
     joinFamilyMutation.reset();
     loginWithInviteMutation.reset();
+    loginRequestLockedRef.current = false;
+    setIsLoginRedirecting(false);
 
     await queryClient.cancelQueries({ queryKey: SESSION_QUERY_KEY });
     queryClient.setQueryData(SESSION_QUERY_KEY, null);
@@ -131,13 +160,18 @@ export default function InviteJoinPage(): React.ReactElement {
   }, [inspectQuery.isError, inspectQuery.error, handleAuthRevocation]);
 
   const handleLoginWithInvite = async () => {
+    if (loginRequestLockedRef.current) return;
+    loginRequestLockedRef.current = true;
     const currentGen = generationRef.current;
     const currentToken = token;
-    if (!currentToken) return;
+    if (!currentToken) {
+      loginRequestLockedRef.current = false;
+      return;
+    }
 
-    abortControllerRef.current?.abort();
+    loginAbortControllerRef.current?.abort();
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    loginAbortControllerRef.current = controller;
 
     try {
       const authUrl = await loginWithInviteMutation.mutateAsync({
@@ -151,6 +185,7 @@ export default function InviteJoinPage(): React.ReactElement {
       ) {
         return;
       }
+      flushSync(() => setIsLoginRedirecting(true));
       // Validated accounts.google.com URL
       window.location.assign(authUrl);
     } catch {
@@ -161,6 +196,8 @@ export default function InviteJoinPage(): React.ReactElement {
       ) {
         return;
       }
+      loginRequestLockedRef.current = false;
+      setIsLoginRedirecting(false);
       // Handled by mutation error state
     }
   };
@@ -246,6 +283,36 @@ export default function InviteJoinPage(): React.ReactElement {
             <ArrowLeft size={20} aria-hidden="true" />
           </Link>
         </header>
+
+        {token && (callbackError === 'access_denied' || callbackError === 'auth_failed') && (
+          <div
+            data-testid={
+              callbackError === 'access_denied'
+                ? 'invite-access-denied-message'
+                : 'invite-auth-failed-message'
+            }
+            role="alert"
+            className="mt-[var(--spacing-md)] p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20"
+          >
+            <AlertCircle
+              size={18}
+              className="shrink-0 mt-[var(--spacing-2xs)]"
+              aria-hidden="true"
+            />
+            <div>
+              <strong className="block font-semibold">
+                {callbackError === 'access_denied'
+                  ? 'ログインが中断されました'
+                  : 'ログインを完了できませんでした'}
+              </strong>
+              <span>
+                {callbackError === 'access_denied'
+                  ? 'Google ログインがキャンセルされました。招待リンクから、いつでも再試行できます。'
+                  : 'Google ログインに失敗しました。許可画面の項目にチェックが入っているか確認し、もう一度お試しください。'}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 1. Malformed / Missing Token: Fixed error and NO API calls */}
         {!token && (
@@ -339,15 +406,18 @@ export default function InviteJoinPage(): React.ReactElement {
               <button
                 type="button"
                 data-testid="login-with-invite-button"
-                disabled={loginWithInviteMutation.isPending}
+                disabled={loginWithInviteMutation.isPending || isLoginRedirecting}
+                aria-busy={loginWithInviteMutation.isPending || isLoginRedirecting}
                 onClick={handleLoginWithInvite}
                 className="w-full min-h-[var(--tap-target-min)] px-[var(--spacing-md)] py-[var(--spacing-sm)] bg-accent text-surface rounded-[var(--radius-md)] text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus flex items-center justify-center gap-[var(--spacing-sm)] text-center box-border cursor-pointer"
               >
                 <LogIn size={18} aria-hidden="true" />
                 <span>
-                  {loginWithInviteMutation.isPending
-                    ? 'ログイン準備中...'
-                    : 'Google でログインして参加'}
+                  {isLoginRedirecting
+                    ? 'Google に移動中...'
+                    : loginWithInviteMutation.isPending
+                      ? 'ログイン準備中...'
+                      : 'Google でログインして参加'}
                 </span>
               </button>
             </Card>
