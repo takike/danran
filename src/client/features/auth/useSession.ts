@@ -34,11 +34,27 @@ export function useSessionQuery() {
 export function useLogoutMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return useMutation<void, Error, void, { userId?: string }>({
     mutationFn: logout,
-    onSuccess: async () => {
+    onMutate: () => ({ userId: queryClient.getQueryData<AuthUser | null>(SESSION_QUERY_KEY)?.id }),
+    onSuccess: async (_data, _variables, context) => {
+      const userId = context?.userId;
+      if (!userId) return;
+
+      await queryClient.cancelQueries({ queryKey: ['week', userId] });
+      await queryClient.cancelQueries({ queryKey: ['families', userId] });
+      if (queryClient.getQueryData<AuthUser | null>(SESSION_QUERY_KEY)?.id !== userId) {
+        queryClient.removeQueries({ queryKey: ['week', userId] });
+        queryClient.removeQueries({ queryKey: ['families', userId] });
+        return;
+      }
+
       await queryClient.cancelQueries({ queryKey: SESSION_QUERY_KEY });
-      queryClient.setQueryData(SESSION_QUERY_KEY, null);
+      if (queryClient.getQueryData<AuthUser | null>(SESSION_QUERY_KEY)?.id === userId) {
+        queryClient.setQueryData(SESSION_QUERY_KEY, null);
+      }
+      queryClient.removeQueries({ queryKey: ['week', userId] });
+      queryClient.removeQueries({ queryKey: ['families', userId] });
     },
   });
 }

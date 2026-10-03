@@ -1,0 +1,44 @@
+import { AlertCircle } from 'lucide-react';
+import type React from 'react';
+import { useSearchParams } from 'react-router-dom';
+
+/** Renders only allowlisted OAuth callback states; query text is never echoed. */
+export function OAuthNotices(): React.ReactElement | null {
+  const [searchParams] = useSearchParams();
+  const rawError = searchParams.get('error');
+  const content =
+    rawError === 'access_denied'
+      ? { title: 'ログインが中断されました', body: 'Google ログインがキャンセルされました。' }
+      : rawError === 'auth_expired'
+        ? {
+            title: '認証手続きを確認してください',
+            body: '手続きの有効期限が切れたか、すでに完了しています。必要ならもう一度操作してください。',
+          }
+        : rawError === 'auth_failed'
+          ? {
+              title: 'ログインを完了できませんでした',
+              body: 'Google ログインに失敗しました。許可画面の項目にチェックが入っているか確認してください。時間をおいて、もう一度お試しください。',
+            }
+          : null;
+
+  if (!content) return null;
+  return (
+    <div
+      data-testid={
+        rawError === 'access_denied'
+          ? 'access-denied-message'
+          : rawError === 'auth_expired'
+            ? 'auth-expired-message'
+            : 'auth-failed-message'
+      }
+      role={rawError === 'access_denied' ? undefined : 'alert'}
+      className="mb-[var(--spacing-md)] flex items-start gap-[var(--spacing-sm)] rounded-[var(--radius-md)] border border-accent/20 bg-accent-tint p-[var(--spacing-md)] text-accent"
+    >
+      <AlertCircle size={18} aria-hidden="true" className="mt-[var(--spacing-2xs)] shrink-0" />
+      <div className="text-xs leading-relaxed">
+        <strong className="block font-semibold">{content.title}</strong>
+        <span>{content.body}</span>
+      </div>
+    </div>
+  );
+}
