@@ -707,7 +707,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       );
 
       expect(cancelRes.status).toBe(302);
-      expect(cancelRes.headers.get('Location')).toBe('/onboarding?error=acl_failed');
+      await expectCallbackFailure(cancelRes, '/onboarding?error=acl_denied');
 
       // State is consumed
       const stateRows = await db
@@ -1368,7 +1368,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
   });
 
   describe('8. Invite Continuation & Security Boundaries', () => {
-    it('invite login denial redirects to fixed login failure without returning invite token', async () => {
+    it('invite login denial returns to the validated invite fragment with a fixed cancellation code', async () => {
       const inviteToken = 'B'.repeat(43);
       const loginRes = await app.request(
         'http://localhost:5173/api/auth/login',
@@ -1394,8 +1394,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         TEST_AUTH_ENV,
       );
 
-      await expectCallbackFailure(cbRes, '/?error=auth_failed');
-      expect(cbRes.headers.get('Location')).not.toContain(inviteToken);
+      await expectCallbackFailure(cbRes, `/invite?error=access_denied#${inviteToken}`);
       expect(await cbRes.text()).not.toContain('private-value');
     });
 

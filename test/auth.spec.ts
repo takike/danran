@@ -263,6 +263,31 @@ async function initiateLogin(appInstance = app, envOverride: WorkerEnv = TEST_AU
   };
 }
 
+async function initiateInviteLogin(inviteToken: string) {
+  const response = await app.request(
+    'http://localhost:5173/api/auth/login',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        Origin: TEST_AUTH_ENV.APP_ORIGIN,
+      },
+      body: JSON.stringify({ inviteToken }),
+    },
+    TEST_AUTH_ENV,
+  );
+  expect(response.status).toBe(200);
+  const jar = extractCookies(response);
+  const body = (await response.json()) as { authorizationUrl: string };
+  const authorizationUrl = new URL(body.authorizationUrl);
+  return {
+    jar,
+    state: required(authorizationUrl.searchParams.get('state')),
+    nonce: required(authorizationUrl.searchParams.get('nonce')),
+  };
+}
+
 describe('Task 1-1: Google OAuth & Authentication', () => {
   const db = createDb(env.DB);
 
@@ -587,9 +612,11 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
   });
 
   describe('3. Callback Denial & State Consumption', () => {
-    it('consumes matching valid state and browser binding on OAuth denial, redirects to root with sanitized error, and clears cookie with HttpOnly', async () => {
+    it('consumes matching valid state and browser binding on OAuth denial, restores access_denied, and clears cookie', async () => {
       const { jar, state } = await initiateLogin();
       const stateHash = await sha256Hex(state);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
 
       // Denial callback with valid state and valid cookie
       const cancelRes = await app.request(
@@ -601,7 +628,7 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       );
 
       expect(cancelRes.status).toBe(302);
-      expect(cancelRes.headers.get('Location')).toBe('/?error=auth_failed');
+      expect(cancelRes.headers.get('Location')).toBe('/?error=access_denied');
       expect(cancelRes.headers.get('Cache-Control')).toBe('no-store');
       expect(cancelRes.headers.get('Pragma')).toBe('no-cache');
       expect(cancelRes.headers.get('Referrer-Policy')).toBe('no-referrer');
@@ -610,6 +637,7 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       expect(cancelRes.headers.get('set-cookie')).toContain('HttpOnly');
       expect(cancelRes.headers.get('set-cookie')).toContain('Secure');
       expect(await cancelRes.text()).not.toContain('User denied consent');
+      expect(fetchSpy).not.toHaveBeenCalled();
 
       // Ensure cookie is cleared with HttpOnly
       const cancelSetCookie = cancelRes.headers.get('set-cookie') ?? '';
@@ -624,7 +652,7 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
         .where(eq(oauthStates.stateHash, stateHash));
       expect(stateRowsAfter.length).toBe(0);
 
-      // Replaying the same denial must fail 400 because state was already consumed
+      // Replaying the same denial cannot reuse the consumed flow.
       const replayRes = await app.request(
         `http://localhost:5173/api/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,
         {
@@ -634,6 +662,176 @@ describe('Task 1-1: Google OAuth & Authentication', () => {
       );
       expect(replayRes.status).toBe(302);
       expect(replayRes.headers.get('Location')).toBe('/?error=auth_expired');
+      await expectCallbackFailure(replayRes, '/?error=auth_expired');
+    });
+
+    it('returns invite cancellation to the validated fragment and ignores forged callback destinations', async () => {
+      const inviteToken = 'A'.repeat(43);
+      const { jar, state } = await initiateInviteLogin(inviteToken);
+      const stateHash = await sha256Hex(state);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&error_description=${encodeURIComponent('untrusted-google-detail')}&state=${encodeURIComponent(state)}&inviteToken=${'Z'.repeat(43)}&token=${'Y'.repeat(43)}&returnUrl=https%3A%2F%2Fevil.example`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(callback, `/invite?error=access_denied#${inviteToken}`);
+      expect(await callback.text()).not.toContain('untrusted-google-detail');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        (await db.select().from(oauthStates).where(eq(oauthStates.stateHash, stateHash))).length,
+      ).toBe(0);
+      expect(await db.select().from(users)).toHaveLength(0);
+      expect(await db.select().from(googleTokens)).toHaveLength(0);
+      expect(await db.select().from(sessions)).toHaveLength(0);
+
+      const replay = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&state=${encodeURIComponent(state)}&inviteToken=${inviteToken}&token=${inviteToken}`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(replay, '/?error=auth_expired');
+      expect(replay.headers.get('Location')).not.toContain('#');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await db.select().from(users)).toHaveLength(0);
+      expect(await db.select().from(googleTokens)).toHaveLength(0);
+      expect(await db.select().from(sessions)).toHaveLength(0);
+    });
+
+    it.each(['missing', 'mismatched'] as const)(
+      'rejects invite callback with %s browser binding without consuming state or restoring token',
+      async (bindingCase) => {
+        const inviteToken = 'E'.repeat(43);
+        const first = await initiateInviteLogin(inviteToken);
+        const second = await initiateInviteLogin('F'.repeat(43));
+        const firstHash = await sha256Hex(first.state);
+        const fetchSpy = vi.fn();
+        vi.stubGlobal('fetch', fetchSpy);
+
+        const cookie = bindingCase === 'missing' ? undefined : cookieHeaderFromJar(second.jar);
+        const callback = await app.request(
+          `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(first.state)}&token=${inviteToken}&inviteToken=${inviteToken}`,
+          { headers: cookie ? { Cookie: cookie } : {} },
+          TEST_AUTH_ENV,
+        );
+        await expectCallbackFailure(callback, '/?error=auth_expired');
+        expect(callback.headers.get('Location')).not.toContain(inviteToken);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(
+          await db.select().from(oauthStates).where(eq(oauthStates.stateHash, firstHash)),
+        ).toHaveLength(1);
+        expect(await db.select().from(users)).toHaveLength(0);
+        expect(await db.select().from(googleTokens)).toHaveLength(0);
+        expect(await db.select().from(sessions)).toHaveLength(0);
+
+        const legitimateDenial = await app.request(
+          `http://localhost:5173/api/auth/callback?error=access_denied&state=${encodeURIComponent(first.state)}`,
+          { headers: { Cookie: cookieHeaderFromJar(first.jar) } },
+          TEST_AUTH_ENV,
+        );
+        await expectCallbackFailure(legitimateDenial, `/invite?error=access_denied#${inviteToken}`);
+        expect(
+          await db.select().from(oauthStates).where(eq(oauthStates.stateHash, firstHash)),
+        ).toHaveLength(0);
+        expect(fetchSpy).not.toHaveBeenCalled();
+      },
+    );
+
+    it('does not restore an invite token when state validation fails before consumption', async () => {
+      const inviteToken = 'D'.repeat(43);
+      const { jar, state } = await initiateInviteLogin(inviteToken);
+      const stateHash = await sha256Hex(state);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&state=forged-state&inviteToken=${inviteToken}&token=${inviteToken}&returnUrl=https%3A%2F%2Fevil.example`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(callback, '/?error=auth_expired');
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        await db.select().from(oauthStates).where(eq(oauthStates.stateHash, stateHash)),
+      ).toHaveLength(1);
+      expect(await db.select().from(users)).toHaveLength(0);
+    });
+
+    it.each([
+      ['token exchange', () => ({ tokenStatus: 400, tokenBody: { error: 'invalid_grant' } })],
+      [
+        'missing ID token',
+        () => ({
+          tokenBody: {
+            access_token: 'mock-access-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+            scope: PHASE1_SCOPES.join(' '),
+            refresh_token: 'mock-refresh',
+          },
+        }),
+      ],
+      ['ID token validation', () => ({ idToken: 'not-a-valid-jwt' })],
+      [
+        'partial scopes',
+        async (nonce: string) => ({
+          tokenBody: {
+            access_token: 'mock-access-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+            scope: 'openid email',
+            id_token: await signTestIdToken({ nonce }),
+            refresh_token: 'mock-refresh',
+          },
+        }),
+      ],
+      [
+        'missing refresh token',
+        async (nonce: string) => ({
+          idToken: await signTestIdToken({ nonce }),
+          refreshToken: null,
+        }),
+      ],
+    ])('returns invite continuation after %s failure', async (_label, makeGoogleOptions) => {
+      const inviteToken = 'B'.repeat(43);
+      const { jar, state, nonce } = await initiateInviteLogin(inviteToken);
+      setupGoogleFetchMock(await makeGoogleOptions(nonce));
+
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}&inviteToken=${'Z'.repeat(43)}&returnUrl=https%3A%2F%2Fevil.example`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(callback, `/invite?error=auth_failed#${inviteToken}`);
+      expect(await db.select().from(users)).toHaveLength(0);
+      expect(await db.select().from(googleTokens)).toHaveLength(0);
+      expect(await db.select().from(sessions)).toHaveLength(0);
+    });
+
+    it('returns invite auth_failed when an unexpected post-consumption database failure escapes', async () => {
+      const inviteToken = 'C'.repeat(43);
+      const { jar, state, nonce } = await initiateInviteLogin(inviteToken);
+      setupGoogleFetchMock({ idToken: await signTestIdToken({ nonce }) });
+
+      const originalPrepare = TEST_AUTH_ENV.DB.prepare.bind(TEST_AUTH_ENV.DB);
+      const prepareSpy = vi.spyOn(TEST_AUTH_ENV.DB, 'prepare').mockImplementation((query) => {
+        if (/sessions/i.test(query)) throw new Error('synthetic session lookup fault');
+        return originalPrepare(query);
+      });
+
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mock-code&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: cookieHeaderFromJar(jar) } },
+        TEST_AUTH_ENV,
+      );
+
+      await expectCallbackFailure(callback, `/invite?error=auth_failed#${inviteToken}`);
+      expect(prepareSpy).toHaveBeenCalled();
+      prepareSpy.mockRestore();
     });
 
     it('rejects OAuth denial callback when state is missing, without touching Google or DB', async () => {

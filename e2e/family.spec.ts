@@ -2527,7 +2527,18 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     await expect(page.locator('[data-testid="acl-error-message"]')).toContainText(
       '共有権限を追加できませんでした',
     );
+    await expect(page.locator('[data-testid="acl-error-message"]')).toContainText(
+      'カレンダー共有の項目にチェックを入れて許可',
+    );
     await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+
+    await page.goto('/onboarding?error=acl_denied');
+    await expect(page.locator('[data-testid="acl-error-message"]')).toContainText(
+      '追加がキャンセルされました',
+    );
+    await expect(page.locator('[data-testid="acl-error-message"]')).toContainText(
+      'カレンダー共有の項目にチェックを入れて許可',
+    );
 
     await page.goto('/onboarding?error=acl_account_mismatch');
     await expect(page.locator('[data-testid="acl-account-mismatch-message"]')).toContainText(
@@ -2536,6 +2547,100 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
 
     await page.goto('/onboarding?error=unknown_private_value');
     expect(await page.locator('body').innerText()).not.toContain('unknown_private_value');
+  });
+
+  test('Invite callback notices retain token for login retry and ignore unknown errors', async ({
+    page,
+  }) => {
+    let inviteInspectCount = 0;
+    let inviteJoinCount = 0;
+    await page.route('**/api/auth/me', (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      }),
+    );
+    await page.route('**/api/invites/inspect', async (route) => {
+      inviteInspectCount++;
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      });
+    });
+    await page.route('**/api/invites/join', async (route) => {
+      inviteJoinCount++;
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      });
+    });
+
+    const loginTokens: string[] = [];
+    await page.route('**/api/auth/login', async (route) => {
+      loginTokens.push(route.request().postDataJSON().inviteToken);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=mock',
+        }),
+      });
+    });
+    await page.route('https://accounts.google.com/**', (route) => route.abort('aborted'));
+
+    await page.goto(`/invite?error=access_denied#${VALID_TOKEN}`);
+    const accessRetry = page.locator('[data-testid="login-with-invite-button"]');
+    await expect(accessRetry).toBeVisible();
+    await expect(accessRetry).toBeEnabled();
+    await expect(page).toHaveURL(new RegExp(`#${VALID_TOKEN}$`));
+    await expect(page.locator('[data-testid="invite-access-denied-message"]')).toContainText(
+      'Google ログインがキャンセルされました。',
+    );
+    expect(inviteInspectCount).toBe(0);
+    expect(inviteJoinCount).toBe(0);
+    const accessFailure = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    await accessRetry.click();
+    await accessFailure;
+    expect(loginTokens).toEqual([VALID_TOKEN]);
+    expect(inviteInspectCount).toBe(0);
+    expect(inviteJoinCount).toBe(0);
+
+    await page.goto(`/invite?error=auth_failed#${VALID_TOKEN}`);
+    const failedRetry = page.locator('[data-testid="login-with-invite-button"]');
+    await expect(failedRetry).toBeVisible();
+    await expect(failedRetry).toBeEnabled();
+    await expect(page).toHaveURL(new RegExp(`#${VALID_TOKEN}$`));
+    await expect(page.locator('[data-testid="invite-auth-failed-message"]')).toContainText(
+      '許可画面の項目にチェックが入っているか確認',
+    );
+    expect(inviteInspectCount).toBe(0);
+    expect(inviteJoinCount).toBe(0);
+    const failedRequest = page.waitForEvent('requestfailed', (request) =>
+      request.url().startsWith('https://accounts.google.com/'),
+    );
+    await failedRetry.click();
+    await failedRequest;
+    expect(loginTokens).toEqual([VALID_TOKEN, VALID_TOKEN]);
+    await expect(page.locator('[data-testid="join-family-button"]')).toHaveCount(0);
+    expect(inviteInspectCount).toBe(0);
+    expect(inviteJoinCount).toBe(0);
+    await expect(page).toHaveURL(new RegExp(`#${VALID_TOKEN}$`));
+
+    await page.goto(
+      `/invite?error=${encodeURIComponent('<script>private</script>')}#${VALID_TOKEN}`,
+    );
+    const settledRetry = page.locator('[data-testid="login-with-invite-button"]');
+    await expect(settledRetry).toBeVisible();
+    await expect(settledRetry).toBeEnabled();
+    expect(inviteInspectCount).toBe(0);
+    expect(inviteJoinCount).toBe(0);
+    expect(await page.locator('body').innerText()).not.toContain('<script>private</script>');
+    expect(await page.locator('body').innerText()).not.toContain('private');
   });
 
   test('Saving children does not cancel or duplicate a pending invite, and invite can be retried', async ({

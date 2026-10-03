@@ -21,6 +21,7 @@ import { Link, useLocation } from 'react-router-dom';
 export default function InviteJoinPage(): React.ReactElement {
   const location = useLocation();
   const queryClient = useQueryClient();
+  const callbackError = new URLSearchParams(location.search).get('error');
 
   // Extract and validate token strictly from location.hash or window.location.hash
   const [token, setToken] = useState<string | null>(() =>
@@ -282,6 +283,36 @@ export default function InviteJoinPage(): React.ReactElement {
             <ArrowLeft size={20} aria-hidden="true" />
           </Link>
         </header>
+
+        {token && (callbackError === 'access_denied' || callbackError === 'auth_failed') && (
+          <div
+            data-testid={
+              callbackError === 'access_denied'
+                ? 'invite-access-denied-message'
+                : 'invite-auth-failed-message'
+            }
+            role="alert"
+            className="mt-[var(--spacing-md)] p-[var(--spacing-md)] bg-accent-tint text-accent rounded-[var(--radius-md)] text-xs flex items-start gap-[var(--spacing-sm)] border border-accent/20"
+          >
+            <AlertCircle
+              size={18}
+              className="shrink-0 mt-[var(--spacing-2xs)]"
+              aria-hidden="true"
+            />
+            <div>
+              <strong className="block font-semibold">
+                {callbackError === 'access_denied'
+                  ? 'ログインが中断されました'
+                  : 'ログインを完了できませんでした'}
+              </strong>
+              <span>
+                {callbackError === 'access_denied'
+                  ? 'Google ログインがキャンセルされました。招待リンクから、いつでも再試行できます。'
+                  : 'Google ログインに失敗しました。許可画面の項目にチェックが入っているか確認し、もう一度お試しください。'}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 1. Malformed / Missing Token: Fixed error and NO API calls */}
         {!token && (

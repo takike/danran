@@ -568,8 +568,8 @@ export default function OnboardingPage(): React.ReactElement {
               </strong>
               <span>
                 {errorParam === 'acl_failed'
-                  ? 'Google カレンダー共有権限を確認できませんでした。時間をおいて再度お試しください。'
-                  : 'Google カレンダー共有権限の追加がキャンセルされました。招待リンクを発行するには共有管理権限の許可が必要です。'}
+                  ? 'Google カレンダー共有権限を確認できませんでした。招待リンクを発行するには、Google の許可画面でカレンダー共有の項目にチェックを入れて許可してください。'
+                  : '招待リンクを発行するには、Google の許可画面でカレンダー共有の項目にチェックを入れて許可する必要があります。'}
               </span>
             </div>
           </div>

@@ -555,6 +555,9 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     await expect(page.locator('[data-testid="auth-failed-message"]')).toContainText(
       'もう一度お試しください',
     );
+    await expect(page.locator('[data-testid="auth-failed-message"]')).toContainText(
+      '許可画面の項目にチェックが入っているか確認',
+    );
 
     loggedIn = true;
     await page.goto('/?error=auth_expired');

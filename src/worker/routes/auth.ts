@@ -40,8 +40,30 @@ export const authRoute = new Hono<{ Bindings: WorkerEnv }>();
 type CallbackFailureDestination =
   | '/?error=auth_expired'
   | '/?error=auth_failed'
+  | '/?error=access_denied'
   | '/onboarding?error=acl_failed'
-  | '/onboarding?error=acl_account_mismatch';
+  | '/onboarding?error=acl_account_mismatch'
+  | '/onboarding?error=acl_denied'
+  | { kind: 'invite'; error: 'auth_failed' | 'access_denied'; inviteToken: string };
+
+function callbackDestination(
+  payload: OAuthPayload,
+  outcome: 'cancelled' | 'failed',
+): CallbackFailureDestination {
+  if (payload.purpose === 'family-acl') {
+    return outcome === 'cancelled'
+      ? '/onboarding?error=acl_denied'
+      : '/onboarding?error=acl_failed';
+  }
+
+  if (payload.inviteToken) {
+    return outcome === 'cancelled'
+      ? { kind: 'invite', error: 'access_denied', inviteToken: payload.inviteToken }
+      : { kind: 'invite', error: 'auth_failed', inviteToken: payload.inviteToken };
+  }
+
+  return outcome === 'cancelled' ? '/?error=access_denied' : '/?error=auth_failed';
+}
 
 const callbackFallbacks = new WeakMap<object, CallbackFailureDestination>();
 
@@ -53,7 +75,11 @@ function callbackFailure(
   c.header('Cache-Control', 'no-store');
   c.header('Pragma', 'no-cache');
   c.header('Referrer-Policy', 'no-referrer');
-  return c.redirect(destination, 302);
+  const location =
+    typeof destination === 'string'
+      ? destination
+      : `/invite?error=${destination.error}#${destination.inviteToken}`;
+  return c.redirect(location, 302);
 }
 
 function isCallbackRequest(c: { req: { method: string; path: string } }): boolean {
@@ -246,16 +272,9 @@ authRoute.get('/auth/callback', async (c) => {
       return callbackFailure(c, '/?error=auth_expired');
     }
 
-    callbackFallbacks.set(
-      c,
-      consumed.purpose === 'family-acl' ? '/onboarding?error=acl_failed' : '/?error=auth_failed',
-    );
-
-    if (consumed.purpose === 'family-acl') {
-      return c.redirect('/onboarding?error=acl_failed', 302);
-    }
-
-    return c.redirect('/?error=auth_failed', 302);
+    const cancellationDestination = callbackDestination(consumed, 'cancelled');
+    callbackFallbacks.set(c, callbackDestination(consumed, 'failed'));
+    return callbackFailure(c, cancellationDestination);
   }
 
   if (!query.code || !query.state) {
@@ -270,10 +289,8 @@ authRoute.get('/auth/callback', async (c) => {
     return callbackFailure(c, '/?error=auth_expired');
   }
 
-  callbackFallbacks.set(
-    c,
-    consumed.purpose === 'family-acl' ? '/onboarding?error=acl_failed' : '/?error=auth_failed',
-  );
+  const loginFailureDestination = callbackDestination(consumed, 'failed');
+  callbackFallbacks.set(c, loginFailureDestination);
 
   const { codeVerifier, nonce } = consumed;
 
@@ -501,11 +518,11 @@ authRoute.get('/auth/callback', async (c) => {
   try {
     tokenResponse = await exchangeCodeForTokens(query.code, codeVerifier, config);
   } catch {
-    return callbackFailure(c, '/?error=auth_failed');
+    return callbackFailure(c, loginFailureDestination);
   }
 
   if (!tokenResponse.id_token) {
-    return callbackFailure(c, '/?error=auth_failed');
+    return callbackFailure(c, loginFailureDestination);
   }
 
   // 3. Scope validation
@@ -514,7 +531,7 @@ authRoute.get('/auth/callback', async (c) => {
     const scopeData = validateAndNormalizeScopes(tokenResponse.scope);
     canonicalScopes = scopeData.canonicalScopeString;
   } catch {
-    return callbackFailure(c, '/?error=auth_failed');
+    return callbackFailure(c, loginFailureDestination);
   }
 
   // 4. Cryptographic JWT Verification (sub, exp, iat, nonce required)
@@ -522,7 +539,7 @@ authRoute.get('/auth/callback', async (c) => {
   try {
     claims = await verifyGoogleIdToken(tokenResponse.id_token, config.clientId, nonce);
   } catch {
-    return callbackFailure(c, '/?error=auth_failed');
+    return callbackFailure(c, loginFailureDestination);
   }
 
   // 5. Pre-mutation grant validation: check missing refresh BEFORE any user profile mutation
@@ -531,7 +548,7 @@ authRoute.get('/auth/callback', async (c) => {
 
   if (!tokenResponse.refresh_token) {
     if (!existingUser) {
-      return callbackFailure(c, '/?error=auth_failed');
+      return callbackFailure(c, loginFailureDestination);
     }
 
     const existingTokenRows = await db
@@ -540,7 +557,7 @@ authRoute.get('/auth/callback', async (c) => {
       .where(eq(googleTokens.userId, existingUser.id));
 
     if (!existingTokenRows[0]) {
-      return callbackFailure(c, '/?error=auth_failed');
+      return callbackFailure(c, loginFailureDestination);
     }
   }
 
@@ -565,7 +582,7 @@ authRoute.get('/auth/callback', async (c) => {
 
   const upsertedUser = upsertedUsers[0];
   if (!upsertedUser) {
-    return callbackFailure(c, '/?error=auth_failed');
+    return callbackFailure(c, loginFailureDestination);
   }
   const userId = upsertedUser.id;
 
