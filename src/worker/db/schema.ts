@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Initial database scaffold containing the foundational users table for authentication/sessions.
@@ -212,3 +212,49 @@ export const closureDays = sqliteTable(
 
 export type ClosureDayRecord = typeof closureDays.$inferSelect;
 export type NewClosureDayRecord = typeof closureDays.$inferInsert;
+
+/**
+ * App-owned metadata attached to an event on a family's shared Google Calendar.
+ * Google Calendar remains the source of truth for event times and titles.
+ */
+export const eventMeta = sqliteTable(
+  'event_meta',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id')
+      .notNull()
+      .references(() => families.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    eventId: text('event_id').notNull(),
+    recurringEventId: text('recurring_event_id'),
+    originalStart: text('original_start'),
+    // Kept as raw text so malformed legacy rows can be safely ignored at read time.
+    itemsJson: text('items_json').notNull().default('[]'),
+    assigneeMemberId: text('assignee_member_id').references(() => members.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status', { enum: ['confirmed', 'tentative'] })
+      .notNull()
+      .default('confirmed'),
+    source: text('source', { enum: ['manual', 'import', 'publish'] })
+      .notNull()
+      .default('manual'),
+    importJobId: text('import_job_id'),
+    updatedAt: integer('updated_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('event_meta_family_calendar_idx').on(table.familyId, table.calendarId),
+    index('event_meta_recurring_lookup_idx').on(
+      table.calendarId,
+      table.recurringEventId,
+      table.originalStart,
+    ),
+    index('event_meta_assignee_member_idx').on(table.assigneeMemberId),
+    check('event_meta_status_check', sql`status IN ('confirmed', 'tentative')`),
+    check('event_meta_source_check', sql`source IN ('manual', 'import', 'publish')`),
+    uniqueIndex('event_meta_calendar_event_unique').on(table.calendarId, table.eventId),
+  ],
+);
+
+export type EventMetaRecord = typeof eventMeta.$inferSelect;
+export type NewEventMetaRecord = typeof eventMeta.$inferInsert;

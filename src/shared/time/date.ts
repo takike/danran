@@ -62,6 +62,37 @@ export function toTokyoDateKey(input: Date | number | string): DateKey {
 }
 
 /**
+ * Converts an instant to an ISO timestamp with the fixed Asia/Tokyo offset.
+ * Milliseconds are included only when non-zero, preserving the instant's precision.
+ */
+export function toTokyoIsoString(input: Date | number | string): string {
+  let timestamp: number;
+  if (typeof input === 'string') {
+    isoInstantStringSchema.parse(input);
+    timestamp = Date.parse(input);
+  } else if (typeof input === 'number') {
+    timestamp = input;
+  } else {
+    timestamp = input.getTime();
+  }
+
+  if (!Number.isFinite(timestamp) || Math.abs(timestamp) > MAX_DATE_TIMESTAMP) {
+    throw new TypeError('Invalid instant');
+  }
+
+  const tzDate = new TZDate(timestamp, TOKYO_TIMEZONE);
+  const dateKey = formatTZDateToDateKey(tzDate);
+  const hours = String(tzDate.getHours()).padStart(2, '0');
+  const minutes = String(tzDate.getMinutes()).padStart(2, '0');
+  const seconds = String(tzDate.getSeconds()).padStart(2, '0');
+  const milliseconds = tzDate.getMilliseconds();
+  const fractional = milliseconds === 0 ? '' : `.${String(milliseconds).padStart(3, '0')}`;
+  return isoInstantStringSchema.parse(
+    `${dateKey}T${hours}:${minutes}:${seconds}${fractional}+09:00`,
+  );
+}
+
+/**
  * Returns a TZDate at 00:00:00.000 in Asia/Tokyo for the given DateKey.
  */
 export function toTokyoTZDate(dateKey: DateKey): TZDate {

@@ -6,6 +6,7 @@ import {
   getTodayDateKey,
   getWeekday,
   toTokyoDateKey,
+  toTokyoIsoString,
   toTokyoTZDate,
 } from '@shared/time/date';
 import { describe, expect, it } from 'vitest';
@@ -68,6 +69,22 @@ describe('src/shared/time/date', () => {
       expect(() => toTokyoDateKey(new Date('invalid'))).toThrow(TypeError);
       expect(() => toTokyoDateKey('2026-10-05T00:00:00')).toThrow();
       expect(() => toTokyoDateKey('2026-02-30')).toThrow();
+    });
+  });
+
+  describe('toTokyoIsoString', () => {
+    it('converts instants to +09:00 while preserving milliseconds', () => {
+      expect(toTokyoIsoString('2026-10-04T15:00:00Z')).toBe('2026-10-05T00:00:00+09:00');
+      expect(toTokyoIsoString('2026-10-04T15:00:00.123Z')).toBe('2026-10-05T00:00:00.123+09:00');
+      expect(toTokyoIsoString(Date.parse('2026-10-04T15:00:00.456Z'))).toBe(
+        '2026-10-05T00:00:00.456+09:00',
+      );
+    });
+
+    it('rejects invalid inputs and timezone-less strings', () => {
+      expect(() => toTokyoIsoString(Number.NaN)).toThrow(TypeError);
+      expect(() => toTokyoIsoString(new Date('invalid'))).toThrow(TypeError);
+      expect(() => toTokyoIsoString('2026-10-05T00:00:00')).toThrow();
     });
   });
 

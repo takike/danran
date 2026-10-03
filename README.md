@@ -40,6 +40,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/12-time-and-layout.md](docs/12-time-and-layout.md) | 日時・祝日・週レイアウト仕様（Asia/Tokyo 日付計算、連休延長、dayLayout、休園日） |
 | [docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md) | カレンダー共有スパイク仕様書（staging A/B 実機検証プロトコル、記録枠、権限境界） |
 | [docs/14-family-onboarding.md](docs/14-family-onboarding.md) | 家族作成・招待オンボーディング仕様（データモデル、段階的認可、招待URL、手動検証手順） |
+| [docs/15-week-api.md](docs/15-week-api.md) | 週ビュー API 契約（Task 1-6、入出力・認可・祝日範囲・Google ページング） |
 
 ## 前提条件
 
@@ -126,4 +127,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 1-3（スパイク：家族カレンダー共有方法）**: 実機検証完了、Q1 解決済み（[docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md)）。Q1(a) 403 不可、Q1(b) 読み書き可能を確認し、オーナーへの段階的認可（`calendar.acls`）および共有通知メールからのカレンダー追加方式を採用。スパイク用ツールは Task 1-4 で削除済みです。
   - **タスク 1-4（家族の作成・参加）**: 実装完了（[docs/14-family-onboarding.md](docs/14-family-onboarding.md)）。オンボーディング画面（`/onboarding`）、招待参加画面（`/invite`）、8色メンバーパレット、曖昧な Google 操作結果の安全な照合・明示的再開、API クライアント、Playwright E2E テスト（`e2e/family.spec.ts`）、段階的認可連携を配備。2つの実 Google アカウントを使った staging の通し動線を人間が 2026-10-02 に確認済み。OAuth コールバック堅牢化の追加実装済み（自動テストで検証。Android 実機の回帰再確認は別途必要）。
   - **タスク 1-5（時間・祝日・レイアウトのドメインロジック）**: 実装完了（[docs/12-time-and-layout.md](docs/12-time-and-layout.md)）。Asia/Tokyo 固定の日付計算、@holiday-jp/holiday_jp による祝日判定（1970–2050）、月曜起点・祝日連続延長週範囲、dayLayout（週末カード/展開平日/畳み込み平日）、および休園日（`closure_days`、タスク 1-4 にて families への外部キー制約を追加）Drizzle スキーマ・Zod バリデーション・テストを配備。ローカルマイグレーション適用および 4 つのホストタイムゾーン（UTC, Asia/Tokyo, America/New_York, Pacific/Auckland）検証を通過。
-  - **次のタスク**: タスク 1-6（`GET /api/families/:id/week` 週表示 API）。
+  - **タスク 1-6（`GET /api/families/:id/week` 週表示 API）**: 実装完了（[docs/15-week-api.md](docs/15-week-api.md)）。ログイン中の active メンバーに対し、家族カレンダーの予定・D1 付加情報・祝日・休園日・日ごとのレイアウトを返します。認可、共有スキーマ、日付範囲、プライバシー、ページング・エラー条件の API テストを追加。実 Google アカウントや staging での週データ取得は未確認です。
+  - **次のタスク**: タスク 1-7（S1 週ビュー、家族予定版）。

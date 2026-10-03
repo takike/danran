@@ -26,6 +26,7 @@ import {
   reconcileFamilyResponseSchema,
 } from '@shared/schemas/family';
 import type { GoogleCalendarListEntry } from '@shared/schemas/google-calendar';
+import { weekErrorResponseSchema } from '@shared/schemas/week';
 import { type AuthConfig, FAMILY_ACL_SCOPE, getAuthConfig } from '@worker/auth/config';
 import { generateRandomToken, sha256Hex } from '@worker/auth/crypto';
 import { type InitiateOAuthContext, initiateOAuthFlow } from '@worker/auth/oauth';
@@ -42,6 +43,7 @@ import {
 import type { WorkerEnv } from '@worker/env';
 import { GoogleCalendarError, createGoogleCalendarClient } from '@worker/google/calendar';
 import { ReauthNeededError } from '@worker/google/oauth';
+import { getFamilyWeek } from '@worker/routes/week';
 import { and, eq, gt, sql } from 'drizzle-orm';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -111,6 +113,9 @@ const securityMiddleware: MiddlewareHandler<{ Bindings: WorkerEnv }> = async (c,
 
   const url = new URL(c.req.url);
   if (url.origin !== config.appOrigin) {
+    if (c.req.path.endsWith('/week')) {
+      return c.json(weekErrorResponseSchema.parse({ error: 'Forbidden', code: 'FORBIDDEN' }), 403);
+    }
     return c.json(
       familyErrorResponseSchema.parse({
         error: 'Forbidden',
@@ -139,6 +144,8 @@ const securityMiddleware: MiddlewareHandler<{ Bindings: WorkerEnv }> = async (c,
 
 familiesRoute.use('*', securityMiddleware);
 invitesRoute.use('*', securityMiddleware);
+
+familiesRoute.get('/:id/week', getFamilyWeek);
 
 function mapFamilyPublic(fam: Family, activeMembers: Member[]) {
   return {
