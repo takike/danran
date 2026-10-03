@@ -30,7 +30,7 @@ export function Chip({
 
   return (
     <span
-      className={`inline-flex items-center gap-[var(--spacing-xs)] px-[var(--spacing-sm)] py-[var(--spacing-2xs)] text-xs font-medium rounded-[var(--radius-full)] border ${variantStyles[variant]} ${className}`.trim()}
+      className={`inline-flex min-w-0 max-w-full items-center gap-[var(--spacing-xs)] px-[var(--spacing-sm)] py-[var(--spacing-2xs)] text-xs font-medium rounded-[var(--radius-full)] border ${variantStyles[variant]} ${className}`.trim()}
       {...props}
     >
       {Icon && (
@@ -40,7 +40,9 @@ export function Chip({
           size={14}
         />
       )}
-      {content !== undefined && content !== null && <span>{content}</span>}
+      {content !== undefined && content !== null && (
+        <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">{content}</span>
+      )}
     </span>
   );
 }

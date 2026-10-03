@@ -14,7 +14,7 @@ export default defineConfig({
   projects: [
     {
       name: 'production',
-      testMatch: ['**/pwa.spec.ts', '**/auth.spec.ts', '**/family.spec.ts'],
+      testMatch: ['**/pwa.spec.ts', '**/auth.spec.ts', '**/family.spec.ts', '**/week.spec.ts'],
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 390, height: 844 },

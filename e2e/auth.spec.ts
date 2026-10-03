@@ -22,6 +22,16 @@ async function triggerVisibilityCycle(page: import('@playwright/test').Page) {
 }
 
 test.describe('Task 1-1: Browser Authentication and Session Management', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/families', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ families: [] }),
+      });
+    });
+  });
+
   test('401 session initiates login via same-origin /api/auth/login navigation on Space keyboard press without external Google call', async ({
     page,
   }) => {
@@ -81,14 +91,14 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/family');
 
-    await expect(page.locator('[data-testid="home-screen"]')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '家族' })).toBeVisible();
     const displayName = page.locator('[data-testid="user-display-name"]');
     await expect(displayName).toBeVisible();
     await expect(displayName).toContainText(mockUser.displayName);
 
-    // Invariant: Home shows only display name and logout; never expose user email
+    // Invariant: Family settings shows only display name and logout; never expose user email
     const pageText = await page.innerText('body');
     expect(pageText).not.toContain('private.user@example.test');
 
@@ -146,12 +156,10 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/family');
 
-    // Privacy link must be available while logged in
     const privacyLinkLoggedIn = page.locator('[data-testid="privacy-link"]');
     await expect(privacyLinkLoggedIn).toBeVisible();
-
     const logoutButton = page.locator('[data-testid="logout-button"]');
     await expect(logoutButton).toBeVisible();
     await logoutButton.click();
@@ -161,10 +169,10 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     expect(xRequestedWithHeader).toBe('XMLHttpRequest');
 
     // Transitions to logged out view
-    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveCount(0);
 
-    // Privacy link must remain available while logged out
+    await expect(page.getByText('続けるには Google でログインしてください。')).toBeVisible();
     const privacyLinkLoggedOut = page.locator('[data-testid="privacy-link"]');
     await expect(privacyLinkLoggedOut).toBeVisible();
   });
@@ -204,7 +212,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/family');
 
     const logoutButton = page.locator('[data-testid="logout-button"]');
     await expect(logoutButton).toBeVisible();
@@ -258,7 +266,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     await logoutButton.click();
 
     // Now logged out
-    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
   });
 
   test('Session refetch on visibility change invalidates logged out user to login view immediately', async ({
@@ -284,7 +292,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       }
     });
 
-    await page.goto('/');
+    await page.goto('/family');
     await expect(page.locator('[data-testid="user-display-name"]')).toContainText('他タブ太郎');
 
     // Simulate session ending in another tab: server now returns 401
@@ -297,7 +305,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     ]);
 
     // UI immediately updates to login view without displaying stale profile
-    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveCount(0);
   });
 
@@ -351,7 +359,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/family');
     await expect(page.locator('[data-testid="user-display-name"]')).toContainText('競合花子');
 
     // Trigger background /me refetch via visibility change
@@ -372,7 +380,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       await logoutButton.click();
 
       // Logged-out view is rendered
-      await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
     } finally {
       // Unconditionally release gate
       releaseSecondMeGate();
@@ -383,7 +391,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     expect(failedRequest.failure()?.errorText).toContain('ERR_ABORTED');
 
     // Invariant: Stale async response must not restore / resurrect the signed-out user
-    await expect(page.locator('[data-testid="login-button"]')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Google でログイン' })).toBeVisible();
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveCount(0);
   });
 
@@ -410,7 +418,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       }
     });
 
-    await page.goto('/');
+    await page.goto('/family');
     await expect(page.locator('[data-testid="user-display-name"]')).toContainText('有効ユーザー');
 
     // Simulate backend outage on refetch
@@ -421,7 +429,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       triggerVisibilityCycle(page),
     ]);
 
-    // Invariant: Stale authenticated data is NOT displayed as valid during error state
+    // Invariant: Stale account data is NOT displayed as valid during error state
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveCount(0);
     await expect(page.getByText('認証サービスに接続できませんでした')).toBeVisible();
     await expect(page.locator('[data-testid="retry-button"]')).toBeVisible();
@@ -562,6 +570,9 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     loggedIn = true;
     await page.goto('/?error=auth_expired');
     await expect(page.locator('[data-testid="auth-expired-message"]')).toContainText(expiredText);
+    await expect(page.locator('[data-testid="user-display-name"]')).toHaveCount(0);
+    await page.goto('/family?error=auth_expired');
+    await expect(page.locator('[data-testid="auth-expired-message"]')).toContainText(expiredText);
     await expect(page.locator('[data-testid="user-display-name"]')).toContainText('利用者');
 
     await page.goto('/?error=unknown_sensitive_value');
@@ -650,7 +661,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       });
     });
 
-    await page.reload();
+    await page.goto('/family');
 
     const logoutButton = page.locator('[data-testid="logout-button"]');
     const logoutBox = await logoutButton.boundingBox();

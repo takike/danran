@@ -9,6 +9,7 @@ export interface TabBarProps {
   onCapture?: () => void;
   className?: string;
   links?: Partial<Record<TabId, string>>;
+  showPreparingLabels?: boolean;
 }
 
 interface NavItem {
@@ -28,7 +29,13 @@ const navItemsAfterCapture: NavItem[] = [
   { id: 'family', label: '家族', icon: Users, defaultHref: '/family' },
 ];
 
-export function TabBar({ activeTab, onCapture, className = '', links = {} }: TabBarProps) {
+export function TabBar({
+  activeTab,
+  onCapture,
+  className = '',
+  links = {},
+  showPreparingLabels = false,
+}: TabBarProps) {
   const renderNavLink = (item: NavItem) => {
     const isActive = activeTab === item.id;
     const href = links[item.id] ?? item.defaultHref;
@@ -49,6 +56,11 @@ export function TabBar({ activeTab, onCapture, className = '', links = {} }: Tab
           size={20}
         />
         <span>{item.label}</span>
+        {showPreparingLabels && (item.id === 'routines' || item.id === 'tasks') && (
+          <span className="text-[length:var(--nav-caption-size)] leading-tight text-muted">
+            準備中
+          </span>
+        )}
       </Link>
     );
   };
@@ -62,13 +74,20 @@ export function TabBar({ activeTab, onCapture, className = '', links = {} }: Tab
         {navItemsBeforeCapture.map(renderNavLink)}
 
         <div className="flex items-center justify-center px-[var(--spacing-xs)] shrink-0 -mt-[var(--spacing-md)]">
-          <IconButton
-            label="プリントを撮影"
-            icon={Camera}
-            variant="accent"
-            size="capture"
-            onClick={onCapture}
-          />
+          <div className="relative flex flex-col items-center">
+            <IconButton
+              label="プリントを撮影"
+              icon={Camera}
+              variant="accent"
+              size="capture"
+              onClick={onCapture}
+            />
+            {showPreparingLabels && (
+              <span className="mt-[var(--spacing-2xs)] whitespace-nowrap text-[length:var(--nav-caption-size)] leading-tight text-muted">
+                準備中
+              </span>
+            )}
+          </div>
         </div>
 
         {navItemsAfterCapture.map(renderNavLink)}

@@ -26,6 +26,13 @@
   /* accessibility & control sizing tokens */
   --tap-target-min: 44px;
   --capture-button-size: 56px;
+  --tab-bar-clearance: calc(100px + env(safe-area-inset-bottom, 0px));
+  --nav-shadow: 0 -4px 16px rgba(31, 29, 26, 0.06);
+  --week-date-column: 52px;
+  --event-time-column: 72px;
+  --week-chip-min-height: 32px;
+  --week-card-shadow: 0 2px 10px rgba(31, 29, 26, 0.05);
+  --nav-caption-size: 10px;
   --member-dot-size: 10px;
   --icon-size-sm: 14px;
   --icon-size-md: 20px;
