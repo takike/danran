@@ -2682,36 +2682,24 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     );
 
     let inviteCount = 0;
-    let enterFirstInvite: () => void = () => {};
+    let firstInviteEntered = false;
+    let firstInviteFinished = false;
+    let secondInviteEntered = false;
+    let secondInviteFinished = false;
     let releaseFirstInvite: () => void = () => {};
-    let finishFirstInvite: () => void = () => {};
     let firstInviteRequest: import('@playwright/test').Request | null = null;
-    const firstInviteEntered = new Promise<void>((resolve) => {
-      enterFirstInvite = resolve;
-    });
     const firstInviteGate = new Promise<void>((resolve) => {
       releaseFirstInvite = resolve;
     });
-    const firstInviteFinished = new Promise<void>((resolve) => {
-      finishFirstInvite = resolve;
-    });
-    let enterSecondInvite: () => void = () => {};
     let releaseSecondInvite: () => void = () => {};
-    let finishSecondInvite: () => void = () => {};
-    const secondInviteEntered = new Promise<void>((resolve) => {
-      enterSecondInvite = resolve;
-    });
     const secondInviteGate = new Promise<void>((resolve) => {
       releaseSecondInvite = resolve;
-    });
-    const secondInviteFinished = new Promise<void>((resolve) => {
-      finishSecondInvite = resolve;
     });
     await page.route('**/api/families/fam_owner/invites', async (route) => {
       inviteCount++;
       if (inviteCount === 1) {
+        firstInviteEntered = true;
         firstInviteRequest = route.request();
-        enterFirstInvite();
         try {
           await firstInviteGate;
           await route.fulfill({
@@ -2726,10 +2714,10 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
         } catch {
           // The aborted original fetch can no longer receive the delayed response.
         } finally {
-          finishFirstInvite();
+          firstInviteFinished = true;
         }
       } else {
-        enterSecondInvite();
+        secondInviteEntered = true;
         try {
           await secondInviteGate;
           await route.fulfill({
@@ -2742,7 +2730,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
             }),
           });
         } finally {
-          finishSecondInvite();
+          secondInviteFinished = true;
         }
       }
     });
@@ -2755,45 +2743,33 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     await page.goto('/onboarding');
     const inviteButton = page.locator('[data-testid="issue-invite-button"]');
     await inviteButton.click();
-    await firstInviteEntered;
+    await expect.poll(() => firstInviteEntered).toBe(true);
     if (!firstInviteRequest) throw new Error('First invite request was not captured');
     const firstInviteFailed = page.waitForEvent(
       'requestfailed',
       (request) => request === firstInviteRequest,
     );
-    const cdp = await page.context().newCDPSession(page);
     try {
-      await cdp.send('Runtime.evaluate', {
-        expression:
-          "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))",
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
       });
-      await cdp.send('Runtime.evaluate', {
-        expression: 'document.querySelector(\'[data-testid="issue-invite-button"]\').click()',
-      });
-      await secondInviteEntered;
+      await expect(inviteButton).toBeEnabled();
+      await inviteButton.click();
+      await expect.poll(() => secondInviteEntered).toBe(true);
 
       // The obsolete request settles while the newer request remains pending.
       releaseFirstInvite();
-      await firstInviteFinished;
+      await expect.poll(() => firstInviteFinished).toBe(true);
       await firstInviteFailed;
       await waitForTwoRafs(page);
-      const readButton = async () => {
-        const result = await cdp.send('Runtime.evaluate', {
-          expression:
-            '({ text: document.querySelector(\'[data-testid=\\"issue-invite-button\\"]\')?.innerText, disabled: document.querySelector(\'[data-testid=\\"issue-invite-button\\"]\')?.disabled })',
-          returnByValue: true,
-        });
-        return result.result.value as { text?: string; disabled?: boolean };
-      };
-      await expect.poll(readButton).toEqual({ text: '発行中...', disabled: true });
+      await expect(inviteButton).toHaveText('発行中...');
+      await expect(inviteButton).toBeDisabled();
       expect(inviteCount).toBe(2);
-      await cdp.send('Runtime.evaluate', {
-        expression: 'document.querySelector(\'[data-testid="issue-invite-button"]\').click()',
-      });
+      await inviteButton.click({ force: true });
       expect(inviteCount).toBe(2);
 
       releaseSecondInvite();
-      await secondInviteFinished;
+      await expect.poll(() => secondInviteFinished).toBe(true);
       await expect(page.locator('[data-testid="invite-url-input"]')).toHaveValue(
         `http://127.0.0.1:4173/invite#${VALID_TOKEN}`,
       );
@@ -2801,9 +2777,8 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     } finally {
       releaseFirstInvite();
       releaseSecondInvite();
-      await firstInviteFinished;
-      await secondInviteFinished;
-      await cdp.detach();
+      if (firstInviteEntered) await expect.poll(() => firstInviteFinished).toBe(true);
+      if (secondInviteEntered) await expect.poll(() => secondInviteFinished).toBe(true);
     }
   });
 });
