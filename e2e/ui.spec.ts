@@ -21,7 +21,7 @@ test.describe('Dev UI Component Showcase (/dev/ui)', () => {
 
     // 3. MemberDot palette
     const memberDotShowcase = page.locator('section[aria-labelledby="heading-member-dot"]');
-    for (const colorName of ['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', '石板']) {
+    for (const colorName of ['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', 'グレー']) {
       await expect(memberDotShowcase.getByText(colorName)).toBeVisible();
     }
 

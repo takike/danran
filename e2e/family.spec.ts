@@ -194,7 +194,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     const colorOptions = await page.locator('[data-testid="child-color-0"] option').all();
     expect(colorOptions).toHaveLength(8);
     const optionTexts = await Promise.all(colorOptions.map((opt) => opt.textContent()));
-    expect(optionTexts).toEqual(['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', '石板']);
+    expect(optionTexts).toEqual(['藍', '深緑', '黄土', '紫', '珊瑚', '青緑', '薔薇', 'グレー']);
     const optionValues = await Promise.all(colorOptions.map((opt) => opt.getAttribute('value')));
     expect(optionValues).toEqual([
       'indigo',

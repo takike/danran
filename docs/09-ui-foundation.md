@@ -27,7 +27,7 @@ CSS カスタムプロパティを単一の真実源（Single Source of Truth）
 | `--member-coral` | `#c05646` | メンバー固有色（珊瑚） | `bg-member-coral` |
 | `--member-teal` | `#2b6e70` | メンバー固有色（青緑） | `bg-member-teal` |
 | `--member-rose` | `#a23b5d` | メンバー固有色（薔薇） | `bg-member-rose` |
-| `--member-slate` | `#4f5d6b` | メンバー固有色（石板） | `bg-member-slate` |
+| `--member-slate` | `#4f5d6b` | メンバー固有色（グレー） | `bg-member-slate` |
 | `--tap-target-min` | `44px` | アクセシビリティ最小タップ領域（44px） | `w-[var(--tap-target-min)]` |
 | `--app-max-width` | `480px` | 共通画面とタブバー内側の最大幅 | `max-w-[var(--app-max-width)]` |
 | `--capture-button-size`| `56px` | タブバー中央の撮影ボタンサイズ | `w-[var(--capture-button-size)]` |

@@ -95,7 +95,7 @@ export default function DevUiPage() {
           <MemberDot name="珊瑚" color="var(--member-coral)" />
           <MemberDot name="青緑" color="var(--member-teal)" />
           <MemberDot name="薔薇" color="var(--member-rose)" />
-          <MemberDot name="石板" color="var(--member-slate)" />
+          <MemberDot name="グレー" color="var(--member-slate)" />
         </div>
       </section>
 

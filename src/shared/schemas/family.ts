@@ -21,7 +21,7 @@ export const MEMBER_COLOR_LABELS: Record<MemberColor, string> = {
   coral: '珊瑚',
   teal: '青緑',
   rose: '薔薇',
-  slate: '石板',
+  slate: 'グレー',
 } as const;
 
 export const MEMBER_STATUSES = ['pending', 'active'] as const;

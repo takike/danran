@@ -96,7 +96,7 @@ describe('PR-11: Neutral Member Palette, Schema Validation & Database Constraint
       expect(MEMBER_COLOR_LABELS.coral).toBe('珊瑚');
       expect(MEMBER_COLOR_LABELS.teal).toBe('青緑');
       expect(MEMBER_COLOR_LABELS.rose).toBe('薔薇');
-      expect(MEMBER_COLOR_LABELS.slate).toBe('石板');
+      expect(MEMBER_COLOR_LABELS.slate).toBe('グレー');
       expect(Object.keys(MEMBER_COLOR_LABELS).length).toBe(8);
     });
 

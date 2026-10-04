@@ -888,6 +888,45 @@ describe('Task 1-6: family week API', () => {
     });
   });
 
+  it('reflects a closure created through settings as a weekend card in the family week', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-04T15:00:00Z'));
+    const fixture = await seedFamily();
+    const before = await requestWeek(
+      `/api/families/${fixture.familyId}/week?start=2026-10-05`,
+      fixture.cookie,
+    );
+    expect(
+      weekResponseSchema.parse(await before.json()).days.find((day) => day.date === '2026-10-08'),
+    ).toMatchObject({ layout: 'compact', closures: [] });
+    const create = await app.request(
+      `${TEST_ORIGIN}/api/families/${fixture.familyId}/closures`,
+      {
+        method: 'POST',
+        headers: {
+          Cookie: fixture.cookie,
+          Origin: TEST_ORIGIN,
+          'X-Requested-With': 'XMLHttpRequest',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ startDate: '2026-10-08', label: '運動会の振替休園', memberIds: [] }),
+      },
+      TEST_ENV,
+    );
+    expect(create.status).toBe(201);
+
+    const response = await requestWeek(
+      `/api/families/${fixture.familyId}/week?start=2026-10-05`,
+      fixture.cookie,
+    );
+    expect(response.status).toBe(200);
+    const body = weekResponseSchema.parse(await response.json());
+    expect(body.days.find((day) => day.date === '2026-10-08')).toMatchObject({
+      layout: 'weekend-card',
+      closures: [{ label: '運動会の振替休園', memberIds: [] }],
+    });
+  });
+
   it('reacquires an access token after Google returns 401 and validates the retry response', async () => {
     const fixture = await seedFamily();
     let requestCount = 0;

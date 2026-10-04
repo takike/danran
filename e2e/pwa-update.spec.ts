@@ -535,6 +535,35 @@ test.describe('PWA update handover with a real Service Worker', () => {
     }
   });
 
+  test('an edited family member setting protects its unsaved name during a PWA update', async ({
+    page,
+  }) => {
+    const fixture = await createPwaFixtureServer();
+    try {
+      const family = makeFamily();
+      await mockOnboardingApis(page, family);
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/closures`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ closures: [], hasMore: false }),
+        });
+      });
+      await page.goto(`${fixture.origin}/family`);
+      const memberName = page.getByTestId('member-name-mem_pwa_owner');
+      await expect(memberName).toHaveValue('テスト利用者');
+      await waitForActiveController(page);
+      await memberName.fill('更新前に守る名前');
+
+      await triggerReplacementAndExpectBanner(page, fixture);
+      await expect(memberName).toHaveValue('更新前に守る名前');
+      await expect(page.getByRole('button', { name: '更新', exact: true })).toBeEnabled();
+      expect(await navigationCount(page)).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test('untouched saved child drafts do not block an automatic update', async ({ page }) => {
     const fixture = await createPwaFixtureServer();
     try {
