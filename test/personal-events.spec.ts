@@ -338,7 +338,7 @@ describe('personal calendar APIs', () => {
     });
     if (aCalendars.status !== 'ready') throw new Error('Expected ready calendar list');
     expect(aCalendars.calendars.map(({ id, selected }) => ({ id, selected }))).toEqual([
-      { id: 'calendar-a-primary', selected: true },
+      { id: 'calendar-a-primary', selected: false },
       { id: 'calendar-secondary', selected: false },
       { id: 'coworker@example.test', selected: false },
     ]);
@@ -368,6 +368,11 @@ describe('personal calendar APIs', () => {
       expect(savedResponse.calendars.find(({ id }) => id === 'calendar-a-primary')?.selected).toBe(
         true,
       );
+      expect(
+        savedResponse.calendars
+          .filter(({ id }) => id !== 'calendar-a-primary')
+          .every(({ selected }) => !selected),
+      ).toBe(true);
     }
     expect(
       await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberA)),
@@ -624,7 +629,7 @@ describe('personal calendar APIs', () => {
       `/api/families/${familyId}/personal-calendars`,
       cookieA,
       'PUT',
-      { calendarIds: ['calendar-a-primary'] },
+      { calendarIds: ['calendar-secondary'] },
     );
     expect(initialSave.status).toBe(200);
     const initialPutResult = updatePersonalCalendarsResponseSchema.parse(await initialSave.json());
@@ -639,6 +644,17 @@ describe('personal calendar APIs', () => {
       await (await request(`/api/families/${familyId}/personal-calendars`, cookieA)).json(),
     );
     expect(initiallySavedList).toMatchObject({ status: 'ready', hasSavedSelection: true });
+    if (initiallySavedList.status === 'ready') {
+      expect(
+        initiallySavedList.calendars.find((calendar) => calendar.id === 'calendar-secondary')
+          ?.selected,
+      ).toBe(true);
+      expect(
+        initiallySavedList.calendars
+          .filter((calendar) => calendar.id !== 'calendar-secondary')
+          .every((calendar) => !calendar.selected),
+      ).toBe(true);
+    }
 
     const saved = await request(`/api/families/${familyId}/personal-calendars`, cookieA, 'PUT', {
       calendarIds: [],
@@ -655,25 +671,14 @@ describe('personal calendar APIs', () => {
     const putResult = updatePersonalCalendarsResponseSchema.parse(await saved.json());
     expect(putResult).toMatchObject({ authorizationRequired: false, hasSavedSelection: false });
     if (!putResult.authorizationRequired) {
-      expect(putResult.calendars.find((calendar) => calendar.isPrimary)?.selected).toBe(true);
-      expect(
-        putResult.calendars
-          .filter((calendar) => !calendar.isPrimary)
-          .every((calendar) => !calendar.selected),
-      ).toBe(true);
+      expect(putResult.calendars.every((calendar) => !calendar.selected)).toBe(true);
     }
     const calendars = personalCalendarListResponseSchema.parse(
       await (await request(`/api/families/${familyId}/personal-calendars`, cookieA)).json(),
     );
     expect(calendars).toMatchObject({ status: 'ready', hasSavedSelection: false });
-    if (calendars.status === 'ready') {
-      expect(calendars.calendars.find((calendar) => calendar.isPrimary)?.selected).toBe(true);
-      expect(
-        calendars.calendars
-          .filter((calendar) => !calendar.isPrimary)
-          .every((calendar) => !calendar.selected),
-      ).toBe(true);
-    }
+    if (calendars.status === 'ready')
+      expect(calendars.calendars.every((calendar) => !calendar.selected)).toBe(true);
     const personalWeek = personalWeekResponseSchema.parse(
       await (await request(`/api/families/${familyId}/week/personal`, cookieA)).json(),
     );
