@@ -9,6 +9,11 @@ import {
 } from './format';
 
 describe('week presentation date formatting', () => {
+  it('omits the repeated year for month ranges within the same year', () => {
+    expect(formatMonthHeading('2026-09-28', '2026-10-04')).toBe('2026年9月〜10月');
+    expect(formatMonthHeading('2026-10-05', '2026-10-11')).toBe('2026年10月');
+  });
+
   it('formats the heading and period across a year boundary', () => {
     expect(formatMonthHeading('2026-12-28', '2027-01-03')).toBe('2026年12月〜2027年1月');
     expect(formatWeekPeriod('2026-12-28', '2027-01-03')).toBe('12/28 – 1/3');

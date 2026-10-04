@@ -613,7 +613,7 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     expect(new URL(page.url()).pathname).toBe('/');
   });
 
-  test('All interactive controls meet >= 44px tap target and page has no horizontal overflow at 390px', async ({
+  test('All interactive controls meet >= 44px tap target and auth pages have no horizontal overflow at 390px and 445px', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -649,6 +649,13 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       () => document.documentElement.scrollWidth > window.innerWidth,
     );
     expect(homeOverflow).toBe(false);
+
+    await page.setViewportSize({ width: 445, height: 844 });
+    const loginOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(loginOverflow).toBe(false);
+    await page.setViewportSize({ width: 390, height: 844 });
 
     // 2. Check logged-in controls
     await page.route('**/api/auth/me', async (route) => {
@@ -691,5 +698,14 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
       () => document.documentElement.scrollWidth > window.innerWidth,
     );
     expect(privacyOverflow).toBe(false);
+
+    await page.setViewportSize({ width: 445, height: 844 });
+    for (const path of ['/privacy', '/family']) {
+      await page.goto(path);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > window.innerWidth,
+      );
+      expect(overflow, `${path} should fit at 445px`).toBe(false);
+    }
   });
 });

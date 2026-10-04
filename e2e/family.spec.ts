@@ -2184,6 +2184,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
   test('80-char names do not overflow horizontally and touch targets meet 44px minimum', async ({
     page,
   }) => {
+    await page.setViewportSize({ width: 445, height: 844 });
     const longName = 'A'.repeat(80);
     const longChildName = 'B'.repeat(80);
 
@@ -2244,13 +2245,31 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
     const memberLegend = page.locator('[data-testid="member-legend"]');
     await expect(memberLegend).toBeVisible();
 
-    // Check no horizontal overflow beyond container / viewport (390px mobile view)
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      const overflowing = await page.evaluate(() => {
+        const screen = document.querySelector('[data-testid="onboarding-screen"]');
+        return (
+          !screen ||
+          screen.scrollWidth > screen.clientWidth ||
+          document.documentElement.scrollWidth > window.innerWidth
+        );
+      });
+      expect(overflowing, `onboarding should fit at ${width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 445, height: 844 });
+
+    // Check no horizontal overflow beyond the container and viewport.
     const isOverflowing = await page.evaluate(() => {
       const screen = document.querySelector('[data-testid="onboarding-screen"]');
       if (!screen) return true;
       return screen.scrollWidth > screen.clientWidth;
     });
     expect(isOverflowing).toBe(false);
+    const viewportOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(viewportOverflow).toBe(false);
 
     // Touch targets meet 44px minimum
     const interactiveSelectors = [
@@ -2275,6 +2294,7 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
   test('Token hashchange updates invite UI and discards prior inspection state', async ({
     page,
   }) => {
+    await page.setViewportSize({ width: 445, height: 844 });
     await page.route('**/api/auth/me', async (route) => {
       await route.fulfill({
         status: 200,
@@ -2315,6 +2335,9 @@ test.describe('Task 1-4: Family Onboarding and Invite/Join UI', () => {
 
     await page.goto(`/invite#${TOKEN_A}`);
     await expect(page.locator('[data-testid="inspect-family-name"]')).toContainText('家族A');
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
 
     // Change hash to TOKEN_B via window.location.hash
     await page.evaluate((tok) => {

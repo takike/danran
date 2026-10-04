@@ -12,6 +12,7 @@
   --accent-tint: #f7e6e1;
   --deadline: #8a5a12;
   --deadline-tint: #f3e9d6;
+  --app-max-width: 480px;
 
   /* Member palette colors (indigo, green, ochre, purple, coral, teal, rose, slate) */
   --member-indigo: #2e4b73;

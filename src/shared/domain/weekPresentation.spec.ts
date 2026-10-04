@@ -1,6 +1,6 @@
 import type { WeekDay, WeekEvent } from '@shared/schemas/week';
 import { describe, expect, it } from 'vitest';
-import { getLongWeekendBadges, getVisibleDayEvents } from './weekPresentation';
+import { getLongWeekendBadges, getVisibleDayEvents, getVisibleDayLayout } from './weekPresentation';
 
 function day(date: string, layout: WeekDay['layout'], closures: WeekDay['closures'] = []): WeekDay {
   return {
@@ -67,7 +67,7 @@ describe('week presentation helpers', () => {
     ).toEqual([]);
   });
 
-  it('keeps API layout authoritative while omitting published and optional routine events', () => {
+  it('keeps published events visible while optionally omitting routines', () => {
     const events = [
       event('routine', true),
       event('single', false),
@@ -81,13 +81,24 @@ describe('week presentation helpers', () => {
 
     expect(getVisibleDayEvents(expandedDay, events, true).map(({ id }) => id)).toEqual([
       'single',
+      'published',
       'external',
     ]);
-    expect(expandedDay.layout).toBe('expanded');
     expect(getVisibleDayEvents(expandedDay, events, false).map(({ id }) => id)).toEqual([
       'routine',
       'single',
+      'published',
       'external',
     ]);
+  });
+
+  it('uses compact layout only when an expanded day has no visible events', () => {
+    const expanded = day('2026-10-05', 'expanded');
+    const compact = day('2026-10-06', 'compact');
+    const weekend = day('2026-10-10', 'weekend-card');
+    expect(getVisibleDayLayout(expanded, [])).toBe('compact');
+    expect(getVisibleDayLayout(expanded, [event('visible', false)])).toBe('expanded');
+    expect(getVisibleDayLayout(compact, [])).toBe('compact');
+    expect(getVisibleDayLayout(weekend, [])).toBe('weekend-card');
   });
 });

@@ -417,6 +417,15 @@ test.describe('PWA update handover with a real Service Worker', () => {
       await expect(page.getByRole('button', { name: '更新', exact: true })).toBeEnabled();
       await expectNoHorizontalOverflow(page);
       await expectVisibleButtonAtLeast44px(page, '更新');
+      await page.setViewportSize({ width: 445, height: 844 });
+      const banner445 = await page.getByTestId('pwa-update-banner').boundingBox();
+      expect(banner445?.width).toBe(445);
+      expect(banner445?.x).toBe(0);
+      await page.setViewportSize({ width: 1024, height: 844 });
+      const bannerWide = await page.getByTestId('pwa-update-banner').boundingBox();
+      expect(bannerWide?.width).toBe(480);
+      expect(bannerWide?.x).toBe(272);
+      await page.setViewportSize({ width: 390, height: 844 });
       if (process.env.DANRAN_SCREENSHOTS === '1') {
         await page.screenshot({ path: 'docs/screenshots/pwa-update.png' });
       }

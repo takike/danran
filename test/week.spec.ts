@@ -94,6 +94,7 @@ describe('Task 1-6: family week API', () => {
     const suffix = `week_${fixtureNumber}`;
     const ownerId = `usr_owner_${suffix}`;
     const callerId = `usr_caller_${suffix}`;
+    const pendingAdultId = `usr_pending_${suffix}`;
     const familyId = `fam_${suffix}`;
     const ownerMemberId = `mem_owner_${suffix}`;
     const callerMemberId = `mem_caller_${suffix}`;
@@ -101,6 +102,12 @@ describe('Task 1-6: family week API', () => {
       options?.calendarId === undefined ? `calendar_${suffix}` : options.calendarId;
     await seedUser(ownerId, `owner-refresh-${suffix}`);
     await seedUser(callerId, `caller-refresh-${suffix}`);
+    await db.insert(users).values({
+      id: pendingAdultId,
+      googleSub: `sub_${pendingAdultId}`,
+      email: `${pendingAdultId}@example.test`,
+      displayName: pendingAdultId,
+    });
     await db.insert(families).values({
       id: familyId,
       name: 'テスト家族',
@@ -129,7 +136,7 @@ describe('Task 1-6: family week API', () => {
         kind: 'adult',
         name: 'Caller',
         color: 'teal',
-        sortOrder: 1,
+        sortOrder: 0,
         status: 'active',
       },
       {
@@ -139,10 +146,20 @@ describe('Task 1-6: family week API', () => {
         kind: 'child',
         name: 'Child',
         color: 'ochre',
-        sortOrder: 2,
+        sortOrder: 0,
         status: 'active',
       },
     ]);
+    await db.insert(members).values({
+      id: `mem_pending_${suffix}`,
+      familyId,
+      userId: pendingAdultId,
+      kind: 'adult',
+      name: 'Pending',
+      color: 'green',
+      sortOrder: 9,
+      status: 'pending',
+    });
     const session = await createSession(db, callerId);
     return {
       familyId,
@@ -305,8 +322,8 @@ describe('Task 1-6: family week API', () => {
     const body = weekResponseSchema.parse(json);
     expect(body.family).toEqual({ id: fixture.familyId, name: 'テスト家族' });
     expect(body.members.map(({ id }) => id)).toEqual([
-      `mem_owner_week_${fixtureNumber}`,
       fixture.callerMemberId,
+      `mem_owner_week_${fixtureNumber}`,
       `mem_child_week_${fixtureNumber}`,
     ]);
     expect(body.members[0]).not.toHaveProperty('userId');

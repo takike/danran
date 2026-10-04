@@ -15,6 +15,11 @@ export function useWeekQuery(userId?: string, familyId?: string, start?: string)
       return fetchWeek(familyId, start, signal);
     },
     enabled: Boolean(userId && familyId),
+    placeholderData: (previousData, previousQuery) => {
+      const previousUserId = previousQuery?.queryKey[1];
+      const previousFamilyId = previousQuery?.queryKey[2];
+      return previousUserId === userId && previousFamilyId === familyId ? previousData : undefined;
+    },
     staleTime: 0,
     refetchOnWindowFocus: true,
     retry: false,

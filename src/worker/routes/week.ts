@@ -1,3 +1,4 @@
+import { compareFamilyMembers } from '@shared/domain/memberOrder';
 import { buildWeekDays } from '@shared/domain/week';
 import { type ClosureDay, closureDaySchema } from '@shared/schemas/closure';
 import { familyIdSchema } from '@shared/schemas/family';
@@ -355,7 +356,7 @@ async function handleFamilyWeek(c: WeekContext) {
     .select()
     .from(members)
     .where(and(eq(members.familyId, familyId), eq(members.status, 'active')));
-  activeMembers.sort((a, b) => a.sortOrder - b.sortOrder);
+  activeMembers.sort(compareFamilyMembers);
   const activeMemberIds = new Set(activeMembers.map((member) => member.id));
 
   const metaRows = await db

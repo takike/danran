@@ -3,6 +3,7 @@ import {
   buildFamilyCalendarSummary,
   matchFamilyCalendar,
 } from '@shared/domain/familyCalendar';
+import { compareFamilyMembers } from '@shared/domain/memberOrder';
 import {
   FAMILY_ERROR_REASONS,
   type FamilyCreationStatus,
@@ -154,7 +155,7 @@ function mapFamilyPublic(fam: Family, activeMembers: Member[]) {
     familyCalendarId: fam.familyCalendarId,
     ownerUserId: fam.ownerUserId,
     creationStatus: fam.creationStatus as FamilyCreationStatus,
-    members: activeMembers.map((m) => ({
+    members: [...activeMembers].sort(compareFamilyMembers).map((m) => ({
       id: m.id,
       userId: m.userId,
       kind: m.kind as MemberKind,
@@ -1897,7 +1898,10 @@ invitesRoute.post('/join', bodyLimit16KiB, async (c) => {
             kind: sql<MemberKind>`'adult'`.as('kind'),
             name: sql<string>`${joinerName}`.as('name'),
             color: sql<MemberColor>`'green'`.as('color'),
-            sortOrder: sql<number>`1`.as('sortOrder'),
+            sortOrder:
+              sql<number>`COALESCE((SELECT MAX(sort_order) FROM members WHERE family_id = ${fam.id}), -1) + 1`.as(
+                'sortOrder',
+              ),
             status: sql<'pending' | 'active'>`'pending'`.as('status'),
           })
           .from(invites)

@@ -21,7 +21,7 @@ export function AuthenticatedShell({
     <div className="min-h-screen bg-bg text-ink">
       <main
         data-testid={mainTestId}
-        className={`mx-auto min-h-screen w-full max-w-[390px] px-[var(--spacing-md)] pt-[var(--spacing-lg)] pb-[var(--tab-bar-clearance)] ${className}`.trim()}
+        className={`mx-auto min-h-screen w-full max-w-[var(--app-max-width)] px-[var(--spacing-md)] pt-[var(--spacing-lg)] pb-[var(--tab-bar-clearance)] ${className}`.trim()}
       >
         {children}
       </main>

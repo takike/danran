@@ -74,7 +74,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
           },
           {
             id: 'evt_published_personal',
-            title: '非表示の公開予定サンプル',
+            title: '公開済みの予定サンプル',
             time: {
               kind: 'timed',
               start: `${addCalendarDays(anchor, 3)}T13:00:00+09:00`,
@@ -417,6 +417,22 @@ test.describe('Task 1-7: S1 week view', () => {
       .locator('[data-testid="week-day"][data-layout="compact"]')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-date')));
     expect(compactDates).toEqual([...compactDates].sort());
+    const emptyTuesday = page.locator('[data-testid="week-day"][data-date="2026-10-06"]');
+    await expect(emptyTuesday).toHaveAttribute('data-layout', 'compact');
+    await expect(emptyTuesday.locator('h3').getByText('6', { exact: true })).toBeVisible();
+    const emptyDescription = emptyTuesday.getByText('予定なし', { exact: true });
+    await expect(emptyDescription).toHaveClass(/sr-only/);
+    const emptyDescriptionBox = await emptyDescription.boundingBox();
+    expect(emptyDescriptionBox?.width).toBeLessThanOrEqual(1);
+    expect(emptyDescriptionBox?.height).toBeLessThanOrEqual(1);
+    const mondayRowHeight = (
+      await page.locator('[data-testid="week-day"][data-date="2026-10-05"]').boundingBox()
+    )?.height;
+    const emptyRowHeight = (await emptyTuesday.boundingBox())?.height;
+    expect(mondayRowHeight).toBeDefined();
+    expect(emptyRowHeight).toBeDefined();
+    if (mondayRowHeight !== undefined && emptyRowHeight !== undefined)
+      expect(emptyRowHeight).toBeLessThan(mondayRowHeight);
     const weekendDates = await page
       .locator('[data-testid="week-day"][data-layout="weekend-card"]')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-date')));
@@ -424,7 +440,7 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('朝の支度')).toBeVisible();
     await expect(page.getByText('朝の支度').locator('..')).toHaveClass(/bg-chip/);
     await expect(page.getByText('公園ピクニック')).toBeVisible();
-    await expect(page.getByText('非表示の公開予定サンプル')).toHaveCount(0);
+    await expect(page.getByText('公開済みの予定サンプル')).toBeVisible();
     await expect(page.getByText('取り込み予定')).toBeVisible();
     await expect(page.getByText('水筒')).toBeVisible();
     await expect(page.getByText('敷物')).toBeVisible();
@@ -487,6 +503,84 @@ test.describe('Task 1-7: S1 week view', () => {
     await expectControlsAtLeast44px(page);
   });
 
+  test('uses viewport width at 445px and centers the shared max width on a wide viewport', async ({
+    page,
+  }) => {
+    await mockWeekApis(page);
+    await page.setViewportSize({ width: 445, height: 844 });
+    await page.goto('/?week=2026-10-05');
+
+    const main = page.getByRole('main');
+    await expect(page.getByRole('heading', { name: '10/5 – 10/12' })).toBeVisible();
+    await expect(main).toBeVisible();
+    const main445 = await main.boundingBox();
+    expect(main445).not.toBeNull();
+    if (main445) {
+      expect(main445.x).toBe(0);
+      expect(main445.width).toBe(445);
+    }
+    const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    const nav445 = await navigation.boundingBox();
+    expect(nav445).not.toBeNull();
+    if (nav445) {
+      expect(nav445.x).toBe(0);
+      expect(nav445.width).toBe(445);
+    }
+    const navInner = navigation.locator('div.mx-auto');
+    const navInner445 = await navInner.boundingBox();
+    expect(navInner445?.width).toBe(445);
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 1024, height: 844 });
+    const mainWide = await main.boundingBox();
+    expect(mainWide).not.toBeNull();
+    if (mainWide) {
+      expect(mainWide.width).toBe(480);
+      expect(mainWide.x).toBe(272);
+    }
+    const navWide = await navigation.boundingBox();
+    expect(navWide).not.toBeNull();
+    if (navWide) {
+      expect(navWide.x).toBe(0);
+      expect(navWide.width).toBe(1024);
+    }
+    const navInnerWide = await navInner.boundingBox();
+    expect(navInnerWide?.width).toBe(480);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test('formats month headings across months and years', async ({ page }) => {
+    await mockWeekApis(page);
+    await page.goto('/?week=2026-09-28');
+    await expect(page.getByText('2026年9月〜10月', { exact: true })).toBeVisible();
+    await page.goto('/?week=2026-12-28');
+    await expect(page.getByText('2026年12月〜2027年1月', { exact: true })).toBeVisible();
+  });
+
+  test('falls back to a compact row when an expanded day has no visible events', async ({
+    page,
+  }) => {
+    await mockWeekApis(page);
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const requested = new URL(route.request().url()).searchParams.get('start') as DateKey | null;
+      const week = buildWeek(requested ?? BASE_WEEK);
+      const date = addCalendarDays(week.week.start, 1);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...week,
+          days: week.days.map((day) => (day.date === date ? { ...day, layout: 'expanded' } : day)),
+        }),
+      });
+    });
+    await page.goto('/?week=2026-10-05');
+    const expandedEmpty = page.locator('[data-testid="week-day"][data-date="2026-10-06"]');
+    await expect(expandedEmpty).toHaveAttribute('data-layout', 'compact');
+    await expect(expandedEmpty.getByText('予定なし', { exact: true })).toHaveClass(/sr-only/);
+    await expect(expandedEmpty.getByText('いつもと違う日')).toHaveCount(0);
+  });
+
   test('hide-routine toggle filters events without changing day layout, and navigation is history-aware', async ({
     page,
   }) => {
@@ -516,6 +610,89 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByRole('button', { name: /今週へ/ })).toHaveCount(0);
     await page.getByRole('button', { name: /前の週/ }).click();
     await expect(page).toHaveURL(/week=2026-09-28/);
+  });
+
+  test('keeps the prior week while loading and advances repeated navigation from the URL target', async ({
+    page,
+  }) => {
+    await mockWeekApis(page);
+    await page.goto('/?week=2026-10-05');
+    await expect(page.getByText('公園ピクニック')).toBeVisible();
+
+    await page.unroute(`**/api/families/${FAMILY_ID}/week**`);
+    const pending: Array<{ start: DateKey; release: () => void; fulfilled: Promise<void> }> = [];
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const url = new URL(route.request().url());
+      const start = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
+      let release!: () => void;
+      let markFulfilled!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fulfilled = new Promise<void>((resolve) => {
+        markFulfilled = resolve;
+      });
+      pending.push({ start, release, fulfilled });
+      await gate;
+      try {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(buildWeek(start)),
+        });
+      } finally {
+        markFulfilled();
+      }
+    });
+
+    try {
+      const nextButton = page.getByRole('button', { name: /次の週/ });
+      await nextButton.click();
+      await expect(page).toHaveURL(/week=2026-10-12/);
+      await expect(page.getByTestId('week-updating')).toHaveText('更新中...');
+      await expect(page.getByText('公園ピクニック')).toBeVisible();
+      await expect(nextButton).toBeEnabled();
+      await expect(page.getByRole('button', { name: /前の週/ })).toBeEnabled();
+
+      await nextButton.click();
+      await expect(page).toHaveURL(/week=2026-10-19/);
+      await expect.poll(() => pending.some((request) => request.start === '2026-10-19')).toBe(true);
+      expect(pending.map((request) => request.start)).toContain('2026-10-12');
+      const latest = pending.find((request) => request.start === '2026-10-19');
+      const earlier = pending.find((request) => request.start === '2026-10-12');
+      latest?.release();
+      if (latest) await latest.fulfilled;
+      await expect(page.getByTestId('week-updating')).toHaveCount(0);
+      await expect(page.locator('[data-testid="week-day"][data-date="2026-10-19"]')).toBeVisible();
+      earlier?.release();
+      if (earlier) await earlier.fulfilled;
+      await expect(page.locator('[data-testid="week-day"][data-date="2026-10-19"]')).toBeVisible();
+      await expect(page.getByText('公園ピクニック')).toHaveCount(0);
+    } finally {
+      for (const request of pending) request.release();
+    }
+  });
+
+  test('clears the prior week after a week navigation error', async ({ page }) => {
+    await mockWeekApis(page);
+    await page.goto('/?week=2026-10-05');
+    await expect(page.getByText('公園ピクニック')).toBeVisible();
+    await page.unroute(`**/api/families/${FAMILY_ID}/week**`);
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'GOOGLE_ERROR', error: 'synthetic private response' }),
+      }),
+    );
+
+    await page.getByRole('button', { name: /次の週/ }).click();
+    await expect(
+      page.getByRole('heading', { name: '週の予定を取得できませんでした' }),
+    ).toBeVisible();
+    await expect(page.getByText('公園ピクニック')).toHaveCount(0);
+    await expect(page.locator('[data-testid="week-day"]')).toHaveCount(0);
+    expect(await page.locator('body').innerText()).not.toContain('synthetic private response');
   });
 
   test('canonicalizes missing and non-Monday anchors with replace while preserving fixed OAuth notices', async ({
@@ -689,11 +866,14 @@ test.describe('Task 1-7: S1 week view', () => {
   test('unimplemented tabs open preparation screens from the actual tab bar', async ({ page }) => {
     await mockWeekApis(page);
     await page.goto('/?week=2026-10-05');
+    await page.setViewportSize({ width: 445, height: 844 });
+    await expectNoHorizontalOverflow(page);
 
     await page.getByRole('link', { name: /繰り返し/ }).click();
     await expect(page).toHaveURL(/\/routines$/);
     await expect(page.getByRole('heading', { name: '繰り返し予定' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
 
     const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
     await navigation.getByRole('link', { name: '週', exact: true }).click();
@@ -702,11 +882,13 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page).toHaveURL(/\/tasks$/);
     await expect(page.getByRole('heading', { name: 'やること' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
 
     await page.getByRole('button', { name: 'プリントを撮影' }).click();
     await expect(page).toHaveURL(/\/import$/);
     await expect(page.getByRole('heading', { name: 'プリント取り込み' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   });
 
   test('session expiry removes the previously loaded private family week', async ({ page }) => {

@@ -44,7 +44,7 @@ export default function DevUiPage() {
   return (
     <main
       data-testid="dev-ui-screen"
-      className="max-w-[390px] mx-auto min-h-screen px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border"
+      className="mx-auto min-h-screen w-full max-w-[var(--app-max-width)] px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border"
     >
       <header className="border-b border-line pb-[var(--spacing-md)] mb-[var(--spacing-lg)]">
         <h1 className="text-xl font-bold text-ink">部品一覧</h1>

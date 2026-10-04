@@ -27,9 +27,14 @@ function formatClock(instant: string): string {
 }
 
 export function formatMonthHeading(start: DateKey, endInclusive: DateKey): string {
-  const startMonth = formatMonth(start);
-  const endMonth = formatMonth(endInclusive);
-  return startMonth === endMonth ? startMonth : `${startMonth}〜${endMonth}`;
+  const startParts = dateParts(start);
+  const endParts = dateParts(endInclusive);
+  if (startParts.year === endParts.year) {
+    return startParts.month === endParts.month
+      ? formatMonth(start)
+      : `${startParts.year}年${startParts.month}月〜${endParts.month}月`;
+  }
+  return `${formatMonth(start)}〜${formatMonth(endInclusive)}`;
 }
 
 export function formatWeekPeriod(start: DateKey, endInclusive: DateKey): string {

@@ -15,7 +15,7 @@ function PageFrame({ children }: { children: React.ReactNode }): React.ReactElem
   return (
     <main
       data-testid="home-screen"
-      className="mx-auto flex min-h-screen w-full max-w-[390px] flex-col justify-between bg-bg px-[var(--spacing-md)] py-[var(--spacing-lg)] text-ink"
+      className="mx-auto flex min-h-screen w-full max-w-[var(--app-max-width)] flex-col justify-between bg-bg px-[var(--spacing-md)] py-[var(--spacing-lg)] text-ink"
     >
       <div>
         <header className="border-b border-line pb-[var(--spacing-md)]">
