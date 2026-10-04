@@ -493,6 +493,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       const { familyId } = await setupOwnedFamily(user.id);
       const { authUrl, oauthJar } = await requestPersonalAuthorization(familyId, sessionJar);
       expect(authUrl.searchParams.get('include_granted_scopes')).toBe('true');
+      expect(authUrl.searchParams.get('login_hint')).toBe(user.googleSub);
       expect(authUrl.searchParams.get('scope')?.split(' ')).toEqual(
         expect.arrayContaining([...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE]),
       );

@@ -610,6 +610,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
           body: JSON.stringify({
             status: 'ready',
             memberId: 'mem_pwa_owner',
+            hasSavedSelection: true,
             calendars: [
               { id: 'primary', name: '自分のカレンダー', isPrimary: true, selected: true },
               { id: 'calendar-secondary', name: '仕事', isPrimary: false, selected: false },

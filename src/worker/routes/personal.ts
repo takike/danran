@@ -187,14 +187,14 @@ function makeCalendarList(
   savedRows: Array<typeof memberCalendars.$inferSelect>,
 ) {
   const savedSelection = new Map(savedRows.map((row) => [row.calendarId, row.displayEnabled]));
+  const hasSavedSelection = savedRows.some((row) => row.displayEnabled);
   return entries
     .filter((entry) => entry.id !== familyCalendarId)
     .map((entry) => ({
       id: entry.id,
       name: entry.summary?.trim() || '（名前のないカレンダー）',
       isPrimary: entry.primary === true,
-      selected:
-        savedRows.length > 0 ? savedSelection.get(entry.id) === true : entry.primary === true,
+      selected: hasSavedSelection ? savedSelection.get(entry.id) === true : entry.primary === true,
     }));
 }
 
@@ -228,7 +228,10 @@ async function googleCalendarsFor(
     fetchCalendarList(client),
     auth.db.select().from(memberCalendars).where(eq(memberCalendars.memberId, auth.member.id)),
   ]);
-  return makeCalendarList(entries, auth.family.familyCalendarId, savedRows);
+  return {
+    calendars: makeCalendarList(entries, auth.family.familyCalendarId, savedRows),
+    hasSavedSelection: savedRows.some((row) => row.displayEnabled),
+  };
 }
 
 personalRoute.get('/:id/personal-calendars', async (c) => {
@@ -245,11 +248,12 @@ personalRoute.get('/:id/personal-calendars', async (c) => {
     );
   }
   try {
-    const calendars = await googleCalendarsFor(c, auth);
+    const { calendars, hasSavedSelection } = await googleCalendarsFor(c, auth);
     return c.json(
       personalCalendarListResponseSchema.parse({
         status: 'ready',
         memberId: auth.member.id,
+        hasSavedSelection,
         calendars,
       }),
       200,
@@ -273,6 +277,7 @@ personalRoute.put('/:id/personal-calendars', bodyLimit16KiB, async (c) => {
         sessionId: auth.session.sessionId,
         familyId: auth.family.id,
         memberId: auth.member.id,
+        loginHint: auth.session.user.googleSub,
       });
       return c.json(
         updatePersonalCalendarsResponseSchema.parse({
@@ -311,21 +316,22 @@ personalRoute.put('/:id/personal-calendars', bodyLimit16KiB, async (c) => {
     const deleteStatement = auth.db
       .delete(memberCalendars)
       .where(and(eq(memberCalendars.memberId, memberId), writeGuard));
-    const eligibleChunks: (typeof eligible)[] = [];
-    for (let index = 0; index < eligible.length; index += 30) {
-      eligibleChunks.push(eligible.slice(index, index + 30));
-    }
-    const insertStatements = eligibleChunks.map((chunk) => {
-      const rowQueries = chunk.map((entry, index) =>
-        index === 0
-          ? sql`SELECT ${memberId}, ${entry.id}, ${requestedIds.has(entry.id) ? 1 : 0}`
-          : sql`UNION ALL SELECT ${memberId}, ${entry.id}, ${requestedIds.has(entry.id) ? 1 : 0}`,
-      );
-      const rows = sql.join(rowQueries, sql` `);
-      return auth.db
-        .insert(memberCalendars)
-        .select(sql`SELECT * FROM (${rows}) AS incoming WHERE (${writeGuard})`);
-    });
+    const selectedEntries = eligible.filter((entry) => requestedIds.has(entry.id));
+    const selectedRowQueries = selectedEntries.map((entry, index) =>
+      index === 0
+        ? sql`SELECT ${memberId}, ${entry.id}, 1`
+        : sql`UNION ALL SELECT ${memberId}, ${entry.id}, 1`,
+    );
+    const insertStatements =
+      selectedEntries.length === 0
+        ? []
+        : [
+            auth.db
+              .insert(memberCalendars)
+              .select(
+                sql`SELECT * FROM (${sql.join(selectedRowQueries, sql` `)}) AS incoming WHERE (${writeGuard})`,
+              ),
+          ];
 
     const currentSession = await getSessionUser(c, auth.db, auth.config.sessionSecret);
     if (
@@ -384,6 +390,7 @@ personalRoute.put('/:id/personal-calendars', bodyLimit16KiB, async (c) => {
         authorizationRequired: false,
         status: 'ready',
         memberId,
+        hasSavedSelection: savedRows.some((row) => row.displayEnabled),
         calendars,
       }),
       200,

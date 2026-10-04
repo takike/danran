@@ -96,7 +96,7 @@ danran/
 ### ① 個人カレンダー（本人の画面）
 
 - Task 2-1 では、本人が段階的認可に同意し、本人が選択した個人カレンダーだけを本人のトークンで読む。予定の内容を返すのはその本人への `/week/personal` 応答だけであり、家族用 `/week` API や他のメンバーの API には混ぜない。
-- `member_calendars` は大人のメンバーと本人の Google カレンダー ID、および `display_enabled` を保持する。カレンダー名や個人予定の中身は保存しない。保存行のない初回は `/family` の選択下書きとして primary だけを選び、保存までは personal-week を `unselected` とする。全カレンダーを外して保存した状態は明示的な未選択として保持する。この本人表示設定は将来の free/busy 共有選択・同意とは独立する。
+- `member_calendars` は本人が選択したカレンダー ID だけを最大10行まで保持し、行の `display_enabled` は常に `true` とする。選択していない ID の行は作らず、全解除を保存すると行は0件になる。0件では初回と全解除後を区別できないため、カレンダー一覧の `hasSavedSelection` は0件なら `false`。その場合 `selected` は primary だけが選択済みの下書きで、画面には個人予定を表示していない旨を案内する。personal-week は下書きを保存するまで `unselected` とする。この本人表示設定は将来の free/busy 共有選択・同意とは独立する。
 - 個人予定は D1、キャッシュ、ログに保存しない。選択カレンダーのいずれかが取得に失敗した場合、部分的なイベント一覧を返さず個人予定 API 全体を失敗させる。家族予定 API と画面は独立して表示を続ける。
 
 ### ② 家族カレンダー
@@ -168,6 +168,7 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
   - `https://www.googleapis.com/auth/calendar.app.created`：家族カレンダーの作成と、その上の予定の読み書き
   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：free/busy 対象カレンダーの選択
   - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events.readonly`（本人の個人予定の読み取り）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。読み取り専用のため `calendar.events` は要求しない。
+  - Task 2-1 の `personal-events` 追加認可 URL は、現在ログイン中の Google `sub` を `login_hint` に指定する。callback の既存アカウント照合と不一致時の安全処理は維持する。
   - `https://www.googleapis.com/auth/calendar.acls`：**招待リンクを発行するオーナーだけ**に、発行時に追加で同意を求める（incremental authorization）。家族カレンダーの共有設定にのみ使う
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。
 

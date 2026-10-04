@@ -214,6 +214,7 @@ describe('personal calendar APIs', () => {
                   primary: true,
                 },
                 { id: 'calendar-secondary', summary: 'Secondary', primary: false },
+                { id: 'coworker@example.test', summary: 'Subscribed calendar', primary: false },
                 { id: 'family-calendar-private', summary: 'Danran family', primary: false },
               ],
         });
@@ -330,23 +331,44 @@ describe('personal calendar APIs', () => {
     );
     const aCalendars = personalCalendarListResponseSchema.parse(await aCalendarsResponse.json());
     expect(aCalendarsResponse.status).toBe(200);
-    expect(aCalendars).toMatchObject({ status: 'ready', memberId: memberA });
+    expect(aCalendars).toMatchObject({
+      status: 'ready',
+      memberId: memberA,
+      hasSavedSelection: false,
+    });
     if (aCalendars.status !== 'ready') throw new Error('Expected ready calendar list');
     expect(aCalendars.calendars.map(({ id, selected }) => ({ id, selected }))).toEqual([
       { id: 'calendar-a-primary', selected: true },
       { id: 'calendar-secondary', selected: false },
+      { id: 'coworker@example.test', selected: false },
     ]);
     expect(JSON.stringify(aCalendars)).not.toContain('family-calendar-private');
 
+    await db.insert(memberCalendars).values({
+      memberId: memberB,
+      calendarId: 'calendar-b-primary',
+      displayEnabled: true,
+    });
+    const memberBRowsBeforeSave = await db
+      .select()
+      .from(memberCalendars)
+      .where(eq(memberCalendars.memberId, memberB));
     const save = await request(`/api/families/${familyId}/personal-calendars`, cookieA, 'PUT', {
       calendarIds: ['calendar-a-primary'],
     });
     expect(save.status).toBe(200);
-    expect(updatePersonalCalendarsResponseSchema.parse(await save.json())).toMatchObject({
+    const savedResponse = updatePersonalCalendarsResponseSchema.parse(await save.json());
+    expect(savedResponse).toMatchObject({
       authorizationRequired: false,
       status: 'ready',
       memberId: memberA,
+      hasSavedSelection: true,
     });
+    if (!savedResponse.authorizationRequired) {
+      expect(savedResponse.calendars.find(({ id }) => id === 'calendar-a-primary')?.selected).toBe(
+        true,
+      );
+    }
     expect(
       await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberA)),
     ).toEqual([
@@ -355,12 +377,16 @@ describe('personal calendar APIs', () => {
         calendarId: 'calendar-a-primary',
         displayEnabled: true,
       }),
-      expect.objectContaining({
-        memberId: memberA,
-        calendarId: 'calendar-secondary',
-        displayEnabled: false,
-      }),
     ]);
+    expect(
+      await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberB)),
+    ).toEqual(memberBRowsBeforeSave);
+    await db.delete(memberCalendars).where(eq(memberCalendars.memberId, memberB));
+    expect(
+      JSON.stringify(
+        await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberA)),
+      ),
+    ).not.toContain('coworker@example.test');
 
     const week = await request(`/api/families/${familyId}/week/personal?start=2026-10-02`, cookieA);
     expect(week.status).toBe(200);
@@ -448,7 +474,7 @@ describe('personal calendar APIs', () => {
     expect(tokenRefreshes).toContain('refresh-b');
   });
 
-  it('returns authorization-required without Google calls when scope is missing and preserves explicit all-off selection', async () => {
+  it('requests incremental authorization without Google calls when personal scope is missing', async () => {
     await db
       .update(googleTokens)
       .set({ scopes: PHASE1_SCOPES.join(' ') })
@@ -566,7 +592,7 @@ describe('personal calendar APIs', () => {
     expect(await partial.text()).not.toContain('Page two');
   });
 
-  it('rejects invalid and unknown calendar selections and treats full-off as saved unselected state', async () => {
+  it('rejects invalid selections and clears saved calendar rows when all are turned off', async () => {
     const invalidBodies = [
       { calendarIds: Array.from({ length: 11 }, (_, index) => `calendar-${index}`) },
       { calendarIds: ['calendar-a-primary', 'calendar-a-primary'] },
@@ -585,6 +611,35 @@ describe('personal calendar APIs', () => {
     }
     expect(await db.select().from(memberCalendars)).toHaveLength(0);
 
+    await db.insert(memberCalendars).values({
+      memberId: memberB,
+      calendarId: 'calendar-b-primary',
+      displayEnabled: true,
+    });
+    const memberBRowsBeforeSave = await db
+      .select()
+      .from(memberCalendars)
+      .where(eq(memberCalendars.memberId, memberB));
+    const initialSave = await request(
+      `/api/families/${familyId}/personal-calendars`,
+      cookieA,
+      'PUT',
+      { calendarIds: ['calendar-a-primary'] },
+    );
+    expect(initialSave.status).toBe(200);
+    const initialPutResult = updatePersonalCalendarsResponseSchema.parse(await initialSave.json());
+    expect(initialPutResult).toMatchObject({
+      authorizationRequired: false,
+      hasSavedSelection: true,
+    });
+    expect(
+      await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberA)),
+    ).toHaveLength(1);
+    const initiallySavedList = personalCalendarListResponseSchema.parse(
+      await (await request(`/api/families/${familyId}/personal-calendars`, cookieA)).json(),
+    );
+    expect(initiallySavedList).toMatchObject({ status: 'ready', hasSavedSelection: true });
+
     const saved = await request(`/api/families/${familyId}/personal-calendars`, cookieA, 'PUT', {
       calendarIds: [],
     });
@@ -593,14 +648,32 @@ describe('personal calendar APIs', () => {
       .select()
       .from(memberCalendars)
       .where(eq(memberCalendars.memberId, memberA));
-    expect(rows).toHaveLength(2);
-    expect(rows.every((row) => !row.displayEnabled)).toBe(true);
+    expect(rows).toHaveLength(0);
+    expect(
+      await db.select().from(memberCalendars).where(eq(memberCalendars.memberId, memberB)),
+    ).toEqual(memberBRowsBeforeSave);
+    const putResult = updatePersonalCalendarsResponseSchema.parse(await saved.json());
+    expect(putResult).toMatchObject({ authorizationRequired: false, hasSavedSelection: false });
+    if (!putResult.authorizationRequired) {
+      expect(putResult.calendars.find((calendar) => calendar.isPrimary)?.selected).toBe(true);
+      expect(
+        putResult.calendars
+          .filter((calendar) => !calendar.isPrimary)
+          .every((calendar) => !calendar.selected),
+      ).toBe(true);
+    }
     const calendars = personalCalendarListResponseSchema.parse(
       await (await request(`/api/families/${familyId}/personal-calendars`, cookieA)).json(),
     );
-    expect(calendars.status).toBe('ready');
-    if (calendars.status === 'ready')
-      expect(calendars.calendars.every((calendar) => !calendar.selected)).toBe(true);
+    expect(calendars).toMatchObject({ status: 'ready', hasSavedSelection: false });
+    if (calendars.status === 'ready') {
+      expect(calendars.calendars.find((calendar) => calendar.isPrimary)?.selected).toBe(true);
+      expect(
+        calendars.calendars
+          .filter((calendar) => !calendar.isPrimary)
+          .every((calendar) => !calendar.selected),
+      ).toBe(true);
+    }
     const personalWeek = personalWeekResponseSchema.parse(
       await (await request(`/api/families/${familyId}/week/personal`, cookieA)).json(),
     );

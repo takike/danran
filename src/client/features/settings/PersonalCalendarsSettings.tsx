@@ -166,6 +166,7 @@ export function PersonalCalendarsSettings({
       queryClient.setQueryData(queryKey, {
         status: 'ready',
         memberId: result.memberId,
+        hasSavedSelection: result.hasSavedSelection,
         calendars: result.calendars,
       });
       setSelectionDraft(null);
@@ -269,6 +270,14 @@ export function PersonalCalendarsSettings({
         </div>
       ) : calendarsQuery.data?.status === 'ready' ? (
         <>
+          {!calendarsQuery.data.hasSavedSelection && (
+            <output
+              data-testid="personal-calendar-not-displaying"
+              className="mt-[var(--spacing-md)] mb-0 block rounded-[var(--radius-md)] border border-line bg-chip p-[var(--spacing-sm)] text-sm leading-relaxed text-ink"
+            >
+              現在、自分の予定は表示していません。カレンダーを選んで保存すると表示が始まります。
+            </output>
+          )}
           <p className="mt-[var(--spacing-md)] mb-0 text-sm leading-relaxed text-muted">
             週ビューに表示するカレンダーを選んで保存してください。すべて外すと表示を停止できます。
           </p>

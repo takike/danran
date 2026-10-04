@@ -194,6 +194,7 @@ function calendarList(
   memberId: string,
   status: PersonalCalendarListResponse['status'],
   selected: string[],
+  hasSavedSelection = selected.length > 0,
 ): PersonalCalendarListResponse {
   if (status === 'authorization_required') {
     return { status, memberId, calendars: [] };
@@ -201,6 +202,7 @@ function calendarList(
   return {
     status: 'ready',
     memberId,
+    hasSavedSelection,
     calendars: [
       {
         id: PRIMARY_ID,
@@ -226,7 +228,7 @@ async function mockPersonalApis(
   let currentFamily = structuredClone(familyA);
   let authorized = options.preauthorized ?? false;
   let savedCalendarIds = options.selected ?? [];
-  let hasSavedSelection = options.selected !== undefined;
+  let hasSavedSelection = savedCalendarIds.length > 0;
   let personalWeekFailureStatus = options.failPersonalWeek ? 503 : null;
   const personalPutBodies: Array<{ calendarIds: string[] }> = [];
   let personalPutCount = 0;
@@ -287,6 +289,7 @@ async function mockPersonalApis(
             currentFamily.members.find((member) => member.userId === currentUserId)?.id ?? MEMBER_A,
             authorized ? 'ready' : 'authorization_required',
             hasSavedSelection ? savedCalendarIds : [PRIMARY_ID],
+            hasSavedSelection,
           ),
         ),
       });
@@ -311,13 +314,13 @@ async function mockPersonalApis(
         body: JSON.stringify({
           authorizationRequired: true,
           authorizationUrl:
-            'https://accounts.google.com/o/oauth2/v2/auth?scope=openid%20email%20profile%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.events.readonly&include_granted_scopes=true&state=synthetic',
+            'https://accounts.google.com/o/oauth2/v2/auth?scope=openid%20email%20profile%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.events.readonly&include_granted_scopes=true&login_hint=synthetic-user&state=synthetic',
         }),
       });
       return;
     }
     savedCalendarIds = body.calendarIds;
-    hasSavedSelection = true;
+    hasSavedSelection = savedCalendarIds.length > 0;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -326,7 +329,8 @@ async function mockPersonalApis(
         ...calendarList(
           currentFamily.members.find((member) => member.userId === currentUserId)?.id ?? MEMBER_A,
           'ready',
-          savedCalendarIds,
+          hasSavedSelection ? savedCalendarIds : [PRIMARY_ID],
+          hasSavedSelection,
         ),
       }),
     });
@@ -394,7 +398,7 @@ async function mockPersonalApis(
     },
     setSelection: (calendarIds: string[]) => {
       savedCalendarIds = calendarIds;
-      hasSavedSelection = true;
+      hasSavedSelection = savedCalendarIds.length > 0;
     },
     setPersonalWeekFailureStatus: (status: number | null) => {
       personalWeekFailureStatus = status;
@@ -467,6 +471,7 @@ test.describe('Task 2-1: personal calendar events', () => {
       'https://www.googleapis.com/auth/calendar.events.readonly',
     );
     expect(consentUrl.searchParams.get('scope')).not.toContain('calendar.events ');
+    expect(consentUrl.searchParams.get('login_hint')).toBe('synthetic-user');
 
     await page.goBack();
     await page.evaluate(() => {
@@ -480,18 +485,14 @@ test.describe('Task 2-1: personal calendar events', () => {
     const work = page.getByTestId(`personal-calendar-${WORK_ID}`);
     await expect(primary).toBeChecked();
     await expect(work).not.toBeChecked();
-    const save = page.getByTestId('save-personal-calendars');
-    await expect(save).toBeEnabled();
-    await save.click();
-    expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [PRIMARY_ID] });
-    await work.check();
-    await save.click();
-    await expect(primary).toBeChecked();
-    await expect(work).toBeChecked();
-    expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [PRIMARY_ID, WORK_ID] });
+    const notDisplayingNotice = page.getByTestId('personal-calendar-not-displaying');
+    await expect(notDisplayingNotice).toHaveText(
+      '現在、自分の予定は表示していません。カレンダーを選んで保存すると表示が始まります。',
+    );
 
     if (process.env.DANRAN_SCREENSHOTS === '1') {
       await page.goto('/family');
+      await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
       await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).toBeChecked();
       const original = page.viewportSize();
       const fullHeight = await page.evaluate(() =>
@@ -502,13 +503,34 @@ test.describe('Task 2-1: personal calendar events', () => {
       if (original) await page.setViewportSize(original);
     }
 
+    const save = page.getByTestId('save-personal-calendars');
+    await expect(save).toBeEnabled();
+    await save.click();
+    expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [PRIMARY_ID] });
+    await expect(notDisplayingNotice).toHaveCount(0);
+    await work.check();
+    await save.click();
+    await expect(primary).toBeChecked();
+    await expect(work).toBeChecked();
+    expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [PRIMARY_ID, WORK_ID] });
+
     await primary.uncheck();
     await work.uncheck();
     await page.getByTestId('save-personal-calendars').click();
     expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [] });
+    await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
+    await expect(primary).toBeChecked();
+    await expect(work).not.toBeChecked();
     await page.reload();
-    await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).not.toBeChecked();
+    await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
+    await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).toBeChecked();
     await expect(page.getByTestId(`personal-calendar-${WORK_ID}`)).not.toBeChecked();
+    await page.goto(`/?week=${BASE_WEEK}`);
+    await expect(page.getByTestId('personal-events-status')).toContainText(
+      '表示する個人カレンダーを家族ページで選んでください。',
+    );
+    await expect(page.getByText('歯科の予約')).toHaveCount(0);
+    await expect(page.getByTestId('edit-event-family-wednesday')).toBeVisible();
   });
 
   test('shows read-only self-only personal events in compact, expanded and weekend layouts', async ({

@@ -15,6 +15,7 @@ const personalCalendarListReadySchema = z
   .object({
     status: z.literal('ready'),
     memberId: z.string().min(1),
+    hasSavedSelection: z.boolean(),
     calendars: z.array(personalCalendarSchema),
   })
   .strict();
@@ -54,6 +55,7 @@ export const updatePersonalCalendarsResponseSchema = z.discriminatedUnion('autho
       authorizationRequired: z.literal(false),
       status: z.literal('ready'),
       memberId: z.string().min(1),
+      hasSavedSelection: z.boolean(),
       calendars: z.array(personalCalendarSchema),
     })
     .strict(),
