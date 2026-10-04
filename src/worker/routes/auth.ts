@@ -11,6 +11,7 @@ import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import {
   type AuthConfig,
   FAMILY_ACL_SCOPE,
+  PERSONAL_EVENTS_SCOPE,
   SESSION_TTL_SECONDS,
   getAuthConfig,
 } from '@worker/auth/config';
@@ -44,6 +45,10 @@ type CallbackFailureDestination =
   | '/onboarding?error=acl_failed'
   | '/onboarding?error=acl_account_mismatch'
   | '/onboarding?error=acl_denied'
+  | '/family?error=personal_failed'
+  | '/family?error=personal_denied'
+  | '/family?error=personal_account_mismatch'
+  | '/family?personal=granted'
   | { kind: 'invite'; error: 'auth_failed' | 'access_denied'; inviteToken: string };
 
 function callbackDestination(
@@ -54,6 +59,12 @@ function callbackDestination(
     return outcome === 'cancelled'
       ? '/onboarding?error=acl_denied'
       : '/onboarding?error=acl_failed';
+  }
+
+  if (payload.purpose === 'personal-events') {
+    return outcome === 'cancelled'
+      ? '/family?error=personal_denied'
+      : '/family?error=personal_failed';
   }
 
   if (payload.inviteToken) {
@@ -508,6 +519,119 @@ authRoute.get('/auth/callback', async (c) => {
 
     // 8. No normal login upsert, no session rotation, no invite issued in callback
     return c.redirect('/onboarding?acl=granted', 302);
+  }
+
+  if (consumed.purpose === 'personal-events') {
+    const personalFailure = '/family?error=personal_failed' as const;
+    try {
+      const currentSession = await getSessionUser(c, db, config.sessionSecret);
+      if (
+        !currentSession ||
+        currentSession.sessionId !== consumed.sessionId ||
+        currentSession.user.id !== consumed.userId
+      ) {
+        return callbackFailure(c, personalFailure);
+      }
+
+      const eligibleMember = and(
+        eq(members.id, consumed.memberId),
+        eq(members.familyId, consumed.familyId),
+        eq(members.userId, consumed.userId),
+        eq(members.kind, 'adult'),
+        eq(members.status, 'active'),
+      );
+      const [boundFamily, boundMember] = await Promise.all([
+        db.select().from(families).where(eq(families.id, consumed.familyId)),
+        db.select().from(members).where(eligibleMember),
+      ]);
+      if (!boundFamily[0] || !boundMember[0]) return callbackFailure(c, personalFailure);
+
+      let tokenResponse: Awaited<ReturnType<typeof exchangeCodeForTokens>>;
+      try {
+        tokenResponse = await exchangeCodeForTokens(query.code, codeVerifier, config);
+      } catch {
+        return callbackFailure(c, personalFailure);
+      }
+      if (!tokenResponse.id_token) return callbackFailure(c, personalFailure);
+
+      let claims: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
+      try {
+        claims = await verifyGoogleIdToken(tokenResponse.id_token, config.clientId, nonce);
+      } catch {
+        return callbackFailure(c, personalFailure);
+      }
+      if (claims.sub !== currentSession.user.googleSub) {
+        return callbackFailure(c, '/family?error=personal_account_mismatch');
+      }
+
+      let canonicalScopes: string;
+      try {
+        const scopeData = validateAndNormalizeScopes(tokenResponse.scope);
+        if (!scopeData.normalizedScopes.includes(PERSONAL_EVENTS_SCOPE)) {
+          return callbackFailure(c, personalFailure);
+        }
+        canonicalScopes = scopeData.canonicalScopeString;
+      } catch {
+        return callbackFailure(c, personalFailure);
+      }
+
+      const recheckedSession = await getSessionUser(c, db, config.sessionSecret);
+      if (
+        !recheckedSession ||
+        recheckedSession.sessionId !== consumed.sessionId ||
+        recheckedSession.user.id !== consumed.userId
+      ) {
+        return callbackFailure(c, personalFailure);
+      }
+      const existingTokenRows = await db
+        .select()
+        .from(googleTokens)
+        .where(eq(googleTokens.userId, consumed.userId));
+      const existingToken = existingTokenRows[0];
+      let encryptedRefresh: string | undefined;
+      if (tokenResponse.refresh_token) {
+        encryptedRefresh = await encryptAesGcm(
+          tokenResponse.refresh_token,
+          config.tokenEncKey,
+          `google-refresh:${consumed.userId}`,
+        );
+      }
+      if (!encryptedRefresh && !existingToken) return callbackFailure(c, personalFailure);
+
+      const now = Math.floor(Date.now() / 1000);
+      const guard = sql`EXISTS (
+      SELECT 1 FROM sessions WHERE id = ${consumed.sessionId}
+        AND user_id = ${consumed.userId} AND expires_at > unixepoch()
+    ) AND EXISTS (
+      SELECT 1 FROM families WHERE id = ${consumed.familyId}
+    ) AND EXISTS (
+      SELECT 1 FROM members WHERE id = ${consumed.memberId}
+        AND family_id = ${consumed.familyId} AND user_id = ${consumed.userId}
+        AND kind = 'adult' AND status = 'active'
+    )`;
+
+      if (existingToken) {
+        const updated = await db.all<{ user_id: string }>(sql`UPDATE google_tokens
+        SET refresh_token_enc = ${encryptedRefresh ?? existingToken.refreshTokenEnc},
+            scopes = ${canonicalScopes}, updated_at = ${now}
+        WHERE user_id = ${consumed.userId}
+          AND refresh_token_enc = ${existingToken.refreshTokenEnc}
+          AND (${guard}) RETURNING user_id`);
+        if (!updated || updated.length !== 1) return callbackFailure(c, personalFailure);
+      } else if (encryptedRefresh) {
+        const inserted = await db.all<{ user_id: string }>(sql`INSERT INTO google_tokens
+        (user_id, refresh_token_enc, scopes, updated_at)
+        SELECT ${consumed.userId}, ${encryptedRefresh}, ${canonicalScopes}, ${now}
+        WHERE (${guard}) AND NOT EXISTS (
+          SELECT 1 FROM google_tokens WHERE user_id = ${consumed.userId}
+        ) RETURNING user_id`);
+        if (!inserted || inserted.length !== 1) return callbackFailure(c, personalFailure);
+      }
+
+      return c.redirect('/family?personal=granted', 302);
+    } catch {
+      return callbackFailure(c, personalFailure);
+    }
   }
 
   // -------------------------------------------------------------

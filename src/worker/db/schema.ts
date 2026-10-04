@@ -1,5 +1,13 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 /**
  * Initial database scaffold containing the foundational users table for authentication/sessions.
@@ -153,6 +161,25 @@ export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
 export type MemberRecord = Member;
 export type NewMemberRecord = NewMember;
+
+/** Calendar IDs and selection state only; personal event data is never stored. */
+export const memberCalendars = sqliteTable(
+  'member_calendars',
+  {
+    memberId: text('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    displayEnabled: integer('display_enabled', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => [
+    primaryKey({ columns: [table.memberId, table.calendarId] }),
+    index('member_calendars_member_id_idx').on(table.memberId),
+  ],
+);
+
+export type MemberCalendar = typeof memberCalendars.$inferSelect;
+export type NewMemberCalendar = typeof memberCalendars.$inferInsert;
 
 /**
  * Family invitations.

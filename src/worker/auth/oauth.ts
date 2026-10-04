@@ -2,6 +2,7 @@ import {
   type OAuthFamilyAclPayload,
   type OAuthLoginPayload,
   type OAuthPayload,
+  type OAuthPersonalEventsPayload,
   oauthPayloadSchema,
 } from '@shared/schemas/auth';
 import type { Database } from '@worker/db';
@@ -15,6 +16,7 @@ import {
   GOOGLE_AUTH_ENDPOINT,
   OAUTH_COOKIE_NAME,
   OAUTH_STATE_TTL_SECONDS,
+  PERSONAL_EVENTS_SCOPE,
   PHASE1_SCOPES,
 } from './config';
 import {
@@ -43,6 +45,14 @@ export type InitiateOAuthContext =
       userId: string;
       sessionId: string;
       familyId: string;
+      loginHint?: string;
+    }
+  | {
+      purpose: 'personal-events';
+      userId: string;
+      sessionId: string;
+      familyId: string;
+      memberId: string;
       loginHint?: string;
     };
 
@@ -95,6 +105,17 @@ export async function initiateOAuthFlow(
       familyId: context.familyId,
     };
     payload = JSON.stringify(aclPayload);
+  } else if (context?.purpose === 'personal-events') {
+    const personalPayload: OAuthPersonalEventsPayload = {
+      purpose: 'personal-events',
+      codeVerifier,
+      nonce,
+      userId: context.userId,
+      sessionId: context.sessionId,
+      familyId: context.familyId,
+      memberId: context.memberId,
+    };
+    payload = JSON.stringify(personalPayload);
   } else if (context?.inviteToken) {
     const loginPayload: OAuthLoginPayload = {
       purpose: 'login',
@@ -131,12 +152,17 @@ export async function initiateOAuthFlow(
 
   const redirectUri = `${config.appOrigin}/api/auth/callback`;
   const isFamilyAcl = context?.purpose === 'family-acl';
+  const isPersonalEvents = context?.purpose === 'personal-events';
 
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: isFamilyAcl ? [...PHASE1_SCOPES, FAMILY_ACL_SCOPE].join(' ') : PHASE1_SCOPES.join(' '),
+    scope: isFamilyAcl
+      ? [...PHASE1_SCOPES, FAMILY_ACL_SCOPE].join(' ')
+      : isPersonalEvents
+        ? [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE].join(' ')
+        : PHASE1_SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     state,
@@ -145,11 +171,9 @@ export async function initiateOAuthFlow(
     code_challenge_method: 'S256',
   });
 
-  if (isFamilyAcl) {
-    params.set('include_granted_scopes', 'true');
-    if (context.loginHint) {
-      params.set('login_hint', context.loginHint);
-    }
+  params.set('include_granted_scopes', 'true');
+  if ((isFamilyAcl || isPersonalEvents) && context.loginHint) {
+    params.set('login_hint', context.loginHint);
   }
 
   const authUrl = `${GOOGLE_AUTH_ENDPOINT}?${params.toString()}`;

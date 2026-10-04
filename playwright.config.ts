@@ -22,6 +22,7 @@ export default defineConfig({
         '**/week.spec.ts',
         '**/events.spec.ts',
         '**/settings.spec.ts',
+        '**/personal.spec.ts',
       ],
       use: {
         ...devices['Desktop Chrome'],

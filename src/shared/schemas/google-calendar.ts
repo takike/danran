@@ -222,6 +222,47 @@ export const googleEventResponseSchema = z
 
 export type GoogleEvent = z.infer<typeof googleEventResponseSchema>;
 
+/** Minimal personal-event boundary: attendee email addresses and all unrelated fields are stripped. */
+export const googlePersonalEventResponseSchema = z
+  .object({
+    id: z.string().min(1),
+    status: z.enum(['confirmed', 'tentative', 'cancelled']).optional(),
+    summary: z.string().optional(),
+    start: googleEventDateTimeResponseSchema.optional(),
+    end: googleEventDateTimeResponseSchema.optional(),
+    recurrence: z.array(z.string()).optional(),
+    recurringEventId: z.string().optional(),
+    attendees: z
+      .array(
+        z.object({
+          self: z.boolean().optional(),
+          responseStatus: z.enum(['needsAction', 'declined', 'tentative', 'accepted']).optional(),
+        }),
+      )
+      .optional(),
+  })
+  .superRefine((event, ctx) => {
+    if (event.status !== 'cancelled') {
+      if (!event.start)
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['start'], message: 'Missing start' });
+      if (!event.end)
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['end'], message: 'Missing end' });
+      if (event.start && event.end) validateStartEndOrder(event.start, event.end, ctx);
+    }
+  })
+  .transform(({ attendees, ...event }) => ({
+    ...event,
+    selfResponseStatus: attendees?.find((attendee) => attendee.self === true)?.responseStatus,
+  }));
+
+export type GooglePersonalEvent = z.infer<typeof googlePersonalEventResponseSchema>;
+
+export const googlePersonalEventsPageResponseSchema = z.object({
+  items: z.array(googlePersonalEventResponseSchema).default([]),
+  nextPageToken: z.string().optional(),
+});
+export type GooglePersonalEventsPage = z.infer<typeof googlePersonalEventsPageResponseSchema>;
+
 /**
  * Insert Event input schema (strict).
  */
@@ -648,6 +689,22 @@ export const googleCalendarListPageResponseSchema = z.object({
 });
 
 export type GoogleCalendarListPage = z.infer<typeof googleCalendarListPageResponseSchema>;
+
+/** Calendar-list fields needed by the private personal-calendar picker only. */
+export const googlePersonalCalendarListEntrySchema = z.object({
+  id: z.string().min(1),
+  summary: z.string().optional(),
+  primary: z.boolean().optional(),
+});
+export type GooglePersonalCalendarListEntry = z.infer<typeof googlePersonalCalendarListEntrySchema>;
+
+export const googlePersonalCalendarListPageResponseSchema = z.object({
+  items: z.array(googlePersonalCalendarListEntrySchema).default([]),
+  nextPageToken: z.string().optional(),
+});
+export type GooglePersonalCalendarListPage = z.infer<
+  typeof googlePersonalCalendarListPageResponseSchema
+>;
 
 /**
  * FreeBusy item input schema (strict).

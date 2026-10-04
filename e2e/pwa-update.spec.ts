@@ -451,6 +451,21 @@ test.describe('PWA update handover with a real Service Worker', () => {
         events: [],
       };
       await page.route(`**/api/families/${TEST_FAMILY_ID}/week**`, async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname.endsWith('/week/personal')) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              family: { id: TEST_FAMILY_ID },
+              memberId: 'mem_pwa_owner',
+              week: week.week,
+              status: 'authorization_required',
+              events: [],
+            }),
+          });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -549,6 +564,17 @@ test.describe('PWA update handover with a real Service Worker', () => {
           body: JSON.stringify({ closures: [], hasMore: false }),
         });
       });
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/personal-calendars`, async (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            status: 'authorization_required',
+            memberId: 'mem_pwa_owner',
+            calendars: [],
+          }),
+        }),
+      );
       await page.goto(`${fixture.origin}/family`);
       const memberName = page.getByTestId('member-name-mem_pwa_owner');
       await expect(memberName).toHaveValue('テスト利用者');
@@ -557,6 +583,49 @@ test.describe('PWA update handover with a real Service Worker', () => {
 
       await triggerReplacementAndExpectBanner(page, fixture);
       await expect(memberName).toHaveValue('更新前に守る名前');
+      await expect(page.getByRole('button', { name: '更新', exact: true })).toBeEnabled();
+      expect(await navigationCount(page)).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test('an unsaved personal calendar selection protects the screen during a PWA update', async ({
+    page,
+  }) => {
+    const fixture = await createPwaFixtureServer();
+    try {
+      await mockOnboardingApis(page, makeFamily());
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/closures`, async (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ closures: [], hasMore: false }),
+        }),
+      );
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/personal-calendars`, async (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            status: 'ready',
+            memberId: 'mem_pwa_owner',
+            hasSavedSelection: true,
+            calendars: [
+              { id: 'primary', name: '自分のカレンダー', isPrimary: true, selected: true },
+              { id: 'calendar-secondary', name: '仕事', isPrimary: false, selected: false },
+            ],
+          }),
+        }),
+      );
+      await page.goto(`${fixture.origin}/family`);
+      const primary = page.getByTestId('personal-calendar-primary');
+      await expect(primary).toBeChecked();
+      await waitForActiveController(page);
+      await primary.uncheck();
+
+      await triggerReplacementAndExpectBanner(page, fixture);
+      await expect(primary).not.toBeChecked();
       await expect(page.getByRole('button', { name: '更新', exact: true })).toBeEnabled();
       expect(await navigationCount(page)).toBe(1);
     } finally {

@@ -17,6 +17,8 @@ import {
   type GoogleCalendarListPage,
   type GoogleEvent,
   type GoogleEventsPage,
+  type GooglePersonalCalendarListPage,
+  type GooglePersonalEventsPage,
   type InsertAclRuleInput,
   type InsertCalendarInput,
   type InsertCalendarListEntryInput,
@@ -41,6 +43,8 @@ import {
   googleCalendarResponseSchema,
   googleEventResponseSchema,
   googleEventsPageResponseSchema,
+  googlePersonalCalendarListPageResponseSchema,
+  googlePersonalEventsPageResponseSchema,
   insertAclRuleInputSchema,
   insertCalendarInputSchema,
   insertCalendarListEntryInputSchema,
@@ -200,7 +204,7 @@ interface BaseRequestOptions {
 }
 
 interface JsonRequestOptions<T> extends BaseRequestOptions {
-  responseSchema: z.ZodType<T>;
+  responseSchema: Pick<z.ZodType<T>, 'safeParse'>;
 }
 
 type VoidRequestOptions = BaseRequestOptions;
@@ -550,6 +554,10 @@ export interface GoogleCalendarClient {
   };
   events: {
     list(calendarId: string, options?: EventsListOptions): Promise<GoogleEventsPage>;
+    listPersonal(
+      calendarId: string,
+      options?: EventsListOptions,
+    ): Promise<GooglePersonalEventsPage>;
     get(calendarId: string, eventId: string, options?: EventsGetOptions): Promise<GoogleEvent>;
     insert(
       calendarId: string,
@@ -571,6 +579,7 @@ export interface GoogleCalendarClient {
   };
   calendarList: {
     list(options?: CalendarListListOptions): Promise<GoogleCalendarListPage>;
+    listPersonal(options?: CalendarListListOptions): Promise<GooglePersonalCalendarListPage>;
     insert(input: InsertCalendarListEntryInput): Promise<GoogleCalendarListEntry>;
   };
   freeBusy: {
@@ -718,6 +727,43 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
           path: `/calendars/${encodedCalendarId}/events`,
           queryParams,
           responseSchema: googleEventsPageResponseSchema,
+        });
+      },
+
+      async listPersonal(
+        calendarId: string,
+        options?: EventsListOptions,
+      ): Promise<GooglePersonalEventsPage> {
+        const encodedCalendarId = validatePathSegment('calendarId', calendarId);
+        const validatedOptions = eventsListOptionsSchema.safeParse(options ?? {});
+        if (!validatedOptions.success) {
+          throw new GoogleCalendarError({
+            message: 'Invalid request arguments for Google Calendar API',
+            code: 'INVALID_INPUT',
+            status: 400,
+          });
+        }
+
+        const queryParams: Record<string, unknown> = {};
+        const opts = validatedOptions.data;
+        if (opts.timeMin !== undefined) queryParams.timeMin = opts.timeMin;
+        if (opts.timeMax !== undefined) queryParams.timeMax = opts.timeMax;
+        if (opts.singleEvents !== undefined) queryParams.singleEvents = opts.singleEvents;
+        if (opts.orderBy !== undefined) queryParams.orderBy = opts.orderBy;
+        if (opts.showDeleted !== undefined) queryParams.showDeleted = opts.showDeleted;
+        if (opts.maxResults !== undefined) queryParams.maxResults = opts.maxResults;
+        if (opts.pageToken !== undefined) queryParams.pageToken = opts.pageToken;
+        queryParams.timeZone = opts.timeZone;
+        queryParams.fields =
+          'nextPageToken,items(id,summary,status,start,end,recurringEventId,attendees(self,responseStatus))';
+
+        return await executeJsonRequest<GooglePersonalEventsPage>({
+          env,
+          userId,
+          method: 'GET',
+          path: `/calendars/${encodedCalendarId}/events`,
+          queryParams,
+          responseSchema: googlePersonalEventsPageResponseSchema,
         });
       },
 
@@ -932,6 +978,37 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
           path: '/users/me/calendarList',
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
           responseSchema: googleCalendarListPageResponseSchema,
+        });
+      },
+
+      async listPersonal(
+        options?: CalendarListListOptions,
+      ): Promise<GooglePersonalCalendarListPage> {
+        const validatedOptions = calendarListListOptionsSchema.safeParse(options ?? {});
+        if (!validatedOptions.success) {
+          throw new GoogleCalendarError({
+            message: 'Invalid request arguments for Google Calendar API',
+            code: 'INVALID_INPUT',
+            status: 400,
+          });
+        }
+
+        const queryParams: Record<string, unknown> = {
+          fields: 'nextPageToken,items(id,summary,primary)',
+        };
+        const opts = validatedOptions.data;
+        if (opts.maxResults !== undefined) queryParams.maxResults = opts.maxResults;
+        if (opts.pageToken !== undefined) queryParams.pageToken = opts.pageToken;
+        if (opts.showDeleted !== undefined) queryParams.showDeleted = opts.showDeleted;
+        if (opts.showHidden !== undefined) queryParams.showHidden = opts.showHidden;
+
+        return await executeJsonRequest<GooglePersonalCalendarListPage>({
+          env,
+          userId,
+          method: 'GET',
+          path: '/users/me/calendarList',
+          queryParams,
+          responseSchema: googlePersonalCalendarListPageResponseSchema,
         });
       },
 

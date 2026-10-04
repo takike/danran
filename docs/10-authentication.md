@@ -6,7 +6,7 @@ Danran の Google OAuth 2.0 認証、セッション管理、リフレッシュ�
 
 ## 1. 概要とアーキテクチャ
 
-Danran では、家族のプライバシー保護と Google カレンダー連携の両立のため、サーバーサイド Authorization Code フロー（PKCE S256 併用）および自律セッション管理を採用しています。
+Danran では、家族のプライバシー保護と Google カレンダー連携の両立のため、サーバーサイド Authorization Code フロー（PKCE S256 併用）および自律セッション管理を採用しています。追加権限が必要な場合は、用途が発生した操作の時点で段階的認可し、認可 URL に `include_granted_scopes=true` を付けて既存同意を維持します。
 
 ```
 [ブラウザ]                           [Danran Worker]                      [Google OAuth / API]
@@ -84,7 +84,7 @@ Danran では最小権限の原則（Least Privilege）を遵守し、Phase 1 �
 - `https://www.googleapis.com/auth/calendar.app.created`: 家族共有カレンダーの作成および作成カレンダー上の予定の読み書き
 - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`: カレンダー一覧の読み取り（Phase 1-4/2-1 向け）
 
-※ 空き時間取得用の `calendar.freebusy` や個人カレンダー読み取り用の `calendar.events` は、Phase 1 では要求せず、**Phase 2 以降で追加の同意を求める段階的認可（Incremental Authorization）**とします。
+※ 空き時間取得用の `calendar.freebusy` や本人の個人予定読み取り用の `calendar.events.readonly` は、Phase 1 では要求せず、**Phase 2 以降で追加の同意を求める段階的認可（Incremental Authorization）**とします。`calendar.events` の書き込み権限は要求しません。
 
 ---
 
@@ -130,7 +130,7 @@ RETURNING payload_enc;
 
 ### Callback の失敗応答契約
 
-`GET /api/auth/callback` の成功時は従来どおり、通常ログインを `/`、招待付きログインを `/invite#<token>`、家族カレンダー ACL の追加認可を `/onboarding?acl=granted` にリダイレクトします。失敗時に使用できるコードは `auth_expired`、`access_denied`、`auth_failed`、`acl_denied`、`acl_failed`、`acl_account_mismatch` の6つです。招待付きログインの2経路だけは、暗号化 payload から復元した検証済み招待トークンを `/invite` のフラグメントへ付けます。
+`GET /api/auth/callback` の成功時は通常ログインを `/`、招待付きログインを `/invite#<token>`、家族カレンダー ACL の追加認可を `/onboarding?acl=granted`、本人個人予定の追加認可を `/family?personal=granted` にリダイレクトします。失敗時に使用できるコードは `auth_expired`、`access_denied`、`auth_failed`、`acl_denied`、`acl_failed`、`acl_account_mismatch`、`personal_denied`、`personal_failed`、`personal_account_mismatch` です。招待付きログインだけは、暗号化 payload から復元した検証済み招待トークンを `/invite` のフラグメントへ付けます。
 
 | 状況 | リダイレクト先 |
 |---|---|
@@ -142,6 +142,9 @@ RETURNING payload_enc;
 | state 消費後の家族 ACL 同意キャンセル | `/onboarding?error=acl_denied` |
 | state 消費後の家族 ACL 認可失敗（セッション不一致、所有権消失、トークン/JWT/スコープ/書き込み失敗を含む） | `/onboarding?error=acl_failed` |
 | 検証済み Google アカウントが ACL 認可対象アカウントと異なる | `/onboarding?error=acl_account_mismatch` |
+| state 消費後の本人個人予定の追加同意キャンセル | `/family?error=personal_denied` |
+| state 消費後の本人個人予定の追加認可失敗 | `/family?error=personal_failed` |
+| 検証済み Google アカウントが本人個人予定の認可対象アカウントと異なる | `/family?error=personal_account_mismatch` |
 
 `acl_denied` / `acl_failed` が表示された場合は、Google の許可画面で「カレンダーの共有」の項目にチェックを入れ、招待を発行できる権限を許可してください。通常ログインまたは招待ログインで `auth_failed` が表示された場合は、Google の許可画面で必要な項目にチェックが入っているか確認してください。
 
@@ -178,6 +181,7 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 >   - `https://danran-staging.tak-ikemachi.workers.dev/api/auth/callback`
 > - **登録済みスコープ**:
 >   `openid`, `email`, `profile`, `https://www.googleapis.com/auth/calendar.app.created`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+> - **Task 2-1 追加スコープ**: `https://www.googleapis.com/auth/calendar.events.readonly` の Google Cloud 登録はタスク開始時点で完了済みの想定ですが、人間による登録確認は未記録です。staging 手動確認の前に Google Cloud Console の同意画面で有効になっていることを人間が確認してください。
 > - **Secret 登録状況**:
 >   - local: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が `.dev.vars` に設定済み。
 >   - staging: すべての Secret（`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `TOKEN_ENC_KEY`）が Cloudflare Secrets に登録済み（2026-10-01 人間により確認）。
@@ -194,7 +198,8 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 3. **OAuth 同意画面**を設定：
    - ユーザータイプ: 外部（External）
    - アプリ名: `Danran`
-   - スコープ: `openid`, `email`, `profile`, `.../auth/calendar.app.created`, `.../auth/calendar.calendarlist.readonly` を追加。
+   - 基本スコープ: `openid`, `email`, `profile`, `.../auth/calendar.app.created`, `.../auth/calendar.calendarlist.readonly` を追加。
+   - Task 2-1 の段階的認可を staging で試す前に `.../auth/calendar.events.readonly` を追加登録する（人間の操作。登録済みか未確認）。この読み取り専用スコープは初回ログインでは要求しない。
    - プライバシーポリシー URL（staging）: `https://danran-staging.tak-ikemachi.workers.dev/privacy`
    - 公開ステータス: 家族利用時は「本番（未確認）」を選択（※「テスト」のままだとトークンが 7 日で失効します）。
 4. **OAuth 2.0 クライアント ID** を作成：
@@ -319,6 +324,13 @@ Task 1-4 において、最小権限の原則（Least Privilege）を維持し�
 - **復帰と URL フラグメント**: OAuth コールバックの成功時は暗号化 state から `inviteToken` を復元し、`/invite#<inviteToken>` へ遷移します。state 消費後の招待ログインのキャンセルは `/invite?error=access_denied#<inviteToken>`、それ以外の失敗は `/invite?error=auth_failed#<inviteToken>` に戻り、同じリンクから再試行できます。いずれもトークンは復号・検証済み payload の値だけを使い、callback query から取得しません。消費前の失敗は `/?error=auth_expired` で、トークンを付けません。URL フラグメントはブラウザにのみ渡され、リクエストラインには含まれません。
 - **自動参加の禁止（Explicit Confirmation）**: ログイン復帰後、即座に家族参加（`join`）API を自動実行することは固く禁止します。UI 上で家族名を確認し、ユーザー本人が明示的に「この家族に参加する」ボタンを押下して初めて `POST /api/invites/join` が実行されます。
 - **認可開始の多重送信防止と復帰**: ACL 認可と招待付きログインの開始には同期 ref のガードを使い、連打による複数の OAuth フロー開始を防ぎます。遷移開始後は「Google に移動中...」を表示して操作を無効化します。ブラウザの戻る操作などで BFCache からページが復元された場合（`pageshow` の `persisted` が true）はガードを解除し、再試行できる状態に戻します。
+
+### 3. 本人の個人予定を表示する追加認可（Task 2-1）
+
+- 通常ログインでは個人予定のスコープを要求しません。`/family` で「自分の予定を表示する」を選んだときに限り、本人の Google アカウントへ `https://www.googleapis.com/auth/calendar.events.readonly` を追加要求します。予定の更新権限を含む `calendar.events` は使いません。
+- 認可 URL には `include_granted_scopes=true` を付け、既存の基本スコープ、`calendar.calendarlist.readonly`、必要に応じて `calendar.acls` など既に同意した権限を維持します。追加同意後も、Google から返されたスコープ集合を保存し、基本スコープ検証は維持します。
+- 成功時は固定の `/family?personal=granted` に戻ります。キャンセルは `/family?error=personal_denied`、その他の追加認可失敗は `/family?error=personal_failed`、認可対象とは異なる Google アカウントで完了した場合は `/family?error=personal_account_mismatch` に戻します。state 消費・検証前の失敗は通常ログインと同じ `/?error=auth_expired` です。エラー文や Google の応答内容を URL や画面へ反映しません。
+- 同意前の personal-week は空イベントと `authorization_required` 状態を返します。これは通常の未同意状態で、家族週 API の結果には影響しません。
 
 ---
 

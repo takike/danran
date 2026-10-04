@@ -43,6 +43,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/15-week-api.md](docs/15-week-api.md) | 週ビュー API 契約（Task 1-6、入出力・認可・祝日範囲・Google ページング） |
 | [docs/16-event-editing.md](docs/16-event-editing.md) | 家族予定の作成・編集・削除 API、保存・再試行、制限と staging 確認手順 |
 | [docs/17-settings.md](docs/17-settings.md) | メンバー設定・休園日 API、権限、制限と staging 確認手順 |
+| [docs/18-personal-events.md](docs/18-personal-events.md) | 本人だけに表示する個人予定 API・段階的認可・プライバシー保証 |
 
 ## 前提条件
 
@@ -133,3 +134,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 1-7（S1 週ビュー、家族予定版）**: 実装完了。Phase 1 の表示範囲は [docs/02-screens.md](docs/02-screens.md#s1-週ビュー) に記載。390px の Playwright E2E とスクリーンショット（`docs/screenshots/s1-week-view.png`）を整備。実 Google アカウントと staging での週データ取得は未確認です。
   - **タスク 1-8（予定の作成・編集・削除）**: 実装・API モック E2E を整備。詳細は [docs/16-event-editing.md](docs/16-event-editing.md)、画面仕様は [docs/02-screens.md](docs/02-screens.md#s1-週ビュー)。Google Calendar と staging の実確認は未実施で、人間による staging 手順の確認が残っています。
   - **タスク 1-9（家族設定）**: `/family` で active な大人によるメンバー名・色変更、休園日の登録・削除を実装。API と権限の仕様は [docs/17-settings.md](docs/17-settings.md)。API モック E2E と390px スクリーンショット（`docs/screenshots/family.png`）を整備。Staging の人間による確認は未実施です。
+- Phase 2：本人の個人予定、free/busy、週末計画：
+  - **タスク 2-1（本人の個人予定）**: `/family` での段階的認可とカレンダー選択、本人の S1 に限った予定表示を実装。API・保存範囲・staging の確認手順は [docs/18-personal-events.md](docs/18-personal-events.md)。API モック E2E と合成データの 390px スクリーンショット（`docs/screenshots/family.png`, `docs/screenshots/s1-week-view.png`）を整備。Google Cloud の追加スコープ登録状況と staging 実機確認は人間による確認待ちです。

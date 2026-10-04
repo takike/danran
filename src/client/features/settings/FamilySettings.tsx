@@ -11,6 +11,7 @@ import {
   getColorCssVar,
 } from '@client/features/onboarding/useFamily';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
+import { PersonalCalendarsSettings } from '@client/features/settings/PersonalCalendarsSettings';
 import { WEEK_QUERY_KEY } from '@client/features/week/useWeek';
 import { expandClosureDateRange } from '@shared/domain/closureRange';
 import { dateKeySchema } from '@shared/schemas/date';
@@ -347,6 +348,8 @@ export function FamilySettings({ userId, family }: FamilySettingsProps): React.R
           })}
         </div>
       </section>
+
+      <PersonalCalendarsSettings userId={userId} familyId={family.id} />
 
       <section className={panelClass} data-testid="closure-settings">
         <h2 className="m-0 text-base font-semibold">休園日</h2>

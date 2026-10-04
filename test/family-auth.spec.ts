@@ -9,6 +9,7 @@ import {
   type AuthConfig,
   FAMILY_ACL_SCOPE,
   OAUTH_COOKIE_NAME,
+  PERSONAL_EVENTS_SCOPE,
   PHASE1_SCOPES,
   SESSION_COOKIE_NAME,
 } from '@worker/auth/config';
@@ -378,7 +379,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         expect(scopes).toContain(requiredScope);
       }
       expect(scopes).not.toContain(FAMILY_ACL_SCOPE);
-      expect(location.searchParams.get('include_granted_scopes')).toBeNull();
+      expect(location.searchParams.get('include_granted_scopes')).toBe('true');
     });
 
     it('baselineGET and POST scopesACLabsent: POST /api/auth/login does not include FAMILY_ACL_SCOPE', async () => {
@@ -405,7 +406,7 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         expect(scopes).toContain(requiredScope);
       }
       expect(scopes).not.toContain(FAMILY_ACL_SCOPE);
-      expect(url.searchParams.get('include_granted_scopes')).toBeNull();
+      expect(url.searchParams.get('include_granted_scopes')).toBe('true');
     });
   });
 
@@ -454,6 +455,266 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
         expect(await computeS256Challenge(parsedPayload.codeVerifier)).toBe(challenge);
       }
     });
+  });
+
+  describe('Task 2-1 personal calendar authorization', () => {
+    async function requestPersonalAuthorization(
+      familyId: string,
+      sessionJar: Record<string, string>,
+    ) {
+      const response = await app.request(
+        `http://localhost:5173/api/families/${familyId}/personal-calendars`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            Origin: 'http://localhost:5173',
+            Cookie: cookieHeaderFromJar(sessionJar),
+          },
+          body: JSON.stringify({ calendarIds: [] }),
+        },
+        TEST_AUTH_ENV,
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        authorizationRequired: boolean;
+        authorizationUrl: string;
+      };
+      expect(body.authorizationRequired).toBe(true);
+      return { authUrl: new URL(body.authorizationUrl), oauthJar: extractCookies(response) };
+    }
+
+    it('binds incremental consent to the caller and stores the returned scope set without losing earlier grants', async () => {
+      const { user, sessionJar } = await performLogin(
+        'personal-owner-sub',
+        'personal@example.test',
+      );
+      const { familyId } = await setupOwnedFamily(user.id);
+      const { authUrl, oauthJar } = await requestPersonalAuthorization(familyId, sessionJar);
+      expect(authUrl.searchParams.get('include_granted_scopes')).toBe('true');
+      expect(authUrl.searchParams.get('login_hint')).toBe(user.googleSub);
+      expect(authUrl.searchParams.get('scope')?.split(' ')).toEqual(
+        expect.arrayContaining([...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE]),
+      );
+      const state = required(authUrl.searchParams.get('state'));
+      const nonce = required(authUrl.searchParams.get('nonce'));
+      const idToken = await signTestIdToken({ sub: user.googleSub, nonce });
+      setupGoogleFetchMock({
+        idToken,
+        refreshToken: 'personal-refresh',
+        scope: [...PHASE1_SCOPES, FAMILY_ACL_SCOPE, PERSONAL_EVENTS_SCOPE].join(' '),
+      });
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?code=personal-code&state=${encodeURIComponent(state)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get('Location')).toBe('/family?personal=granted');
+      const saved = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(saved.scopes.split(' ')).toEqual(
+        expect.arrayContaining([...PHASE1_SCOPES, FAMILY_ACL_SCOPE, PERSONAL_EVENTS_SCOPE]),
+      );
+    });
+
+    it('uses fixed cancellation, token failure, account mismatch, and stale-session redirects', async () => {
+      const { user, session, sessionJar } = await performLogin(
+        'personal-branch-sub',
+        'branch@example.test',
+      );
+      const { familyId } = await setupOwnedFamily(user.id);
+
+      const cancelledFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const cancelledState = required(cancelledFlow.authUrl.searchParams.get('state'));
+      const cancelled = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&error_description=private&state=${encodeURIComponent(cancelledState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...cancelledFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(cancelled, '/family?error=personal_denied');
+      expect(await cancelled.text()).not.toContain('private');
+      const replayedCancellation = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&state=${encodeURIComponent(cancelledState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...cancelledFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      expect(replayedCancellation.headers.get('Location')).toBe('/?error=auth_expired');
+
+      const failedFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const failedState = required(failedFlow.authUrl.searchParams.get('state'));
+      setupGoogleFetchMock({ tokenStatus: 500 });
+      const failed = await app.request(
+        `http://localhost:5173/api/auth/callback?code=bad&state=${encodeURIComponent(failedState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...failedFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(failed, '/family?error=personal_failed');
+
+      const mismatchFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const mismatchState = required(mismatchFlow.authUrl.searchParams.get('state'));
+      const mismatchNonce = required(mismatchFlow.authUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: 'other-google-account', nonce: mismatchNonce }),
+        scope: [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE].join(' '),
+      });
+      const mismatch = await app.request(
+        `http://localhost:5173/api/auth/callback?code=mismatch&state=${encodeURIComponent(mismatchState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...mismatchFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(mismatch, '/family?error=personal_account_mismatch');
+
+      const staleFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const staleState = required(staleFlow.authUrl.searchParams.get('state'));
+      await db.delete(sessions).where(eq(sessions.id, session.id));
+      const stale = await app.request(
+        `http://localhost:5173/api/auth/callback?code=stale&state=${encodeURIComponent(staleState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...staleFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(stale, '/family?error=personal_failed');
+    });
+
+    it('rejects missing personal scope or ID token and preserves the existing grant without refresh token', async () => {
+      const { user, sessionJar } = await performLogin(
+        'personal-invalid-grant-sub',
+        'invalid@example.test',
+      );
+      const { familyId } = await setupOwnedFamily(user.id);
+      const oldToken = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+
+      const scopeFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const scopeState = required(scopeFlow.authUrl.searchParams.get('state'));
+      const scopeNonce = required(scopeFlow.authUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: user.googleSub, nonce: scopeNonce }),
+        scope: PHASE1_SCOPES.join(' '),
+      });
+      const missingScope = await app.request(
+        `http://localhost:5173/api/auth/callback?code=missing-scope&state=${encodeURIComponent(scopeState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...scopeFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(missingScope, '/family?error=personal_failed');
+      const afterMissingScope = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(afterMissingScope.refreshTokenEnc).toBe(oldToken.refreshTokenEnc);
+      expect(afterMissingScope.scopes).toBe(oldToken.scopes);
+
+      const noIdFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const noIdState = required(noIdFlow.authUrl.searchParams.get('state'));
+      setupGoogleFetchMock({
+        scope: [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE].join(' '),
+        refreshToken: null,
+      });
+      const noIdToken = await app.request(
+        `http://localhost:5173/api/auth/callback?code=missing-id-token&state=${encodeURIComponent(noIdState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...noIdFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(noIdToken, '/family?error=personal_failed');
+      const afterNoIdToken = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(afterNoIdToken.refreshTokenEnc).toBe(oldToken.refreshTokenEnc);
+      expect(afterNoIdToken.scopes).toBe(oldToken.scopes);
+
+      const noRefreshFlow = await requestPersonalAuthorization(familyId, sessionJar);
+      const noRefreshState = required(noRefreshFlow.authUrl.searchParams.get('state'));
+      const noRefreshNonce = required(noRefreshFlow.authUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: user.googleSub, nonce: noRefreshNonce }),
+        scope: [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE].join(' '),
+        refreshToken: null,
+      });
+      const noRefresh = await app.request(
+        `http://localhost:5173/api/auth/callback?code=no-refresh&state=${encodeURIComponent(noRefreshState)}`,
+        { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...noRefreshFlow.oauthJar }) } },
+        TEST_AUTH_ENV,
+      );
+      expect(noRefresh.headers.get('Location')).toBe('/family?personal=granted');
+      const afterNoRefresh = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(afterNoRefresh.refreshTokenEnc).toBe(oldToken.refreshTokenEnc);
+      expect(afterNoRefresh.scopes.split(' ')).toEqual(
+        expect.arrayContaining([...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE]),
+      );
+    });
+  });
+
+  it('preserves the exact Google-returned scope set on ordinary and invite logins', async () => {
+    const { user, sessionJar } = await performLogin('scope-refresh-sub', 'scope@example.test');
+    await db
+      .update(googleTokens)
+      .set({
+        scopes: [...PHASE1_SCOPES, 'https://www.googleapis.com/auth/calendar.readonly'].join(' '),
+      })
+      .where(eq(googleTokens.userId, user.id));
+    const returnedScopes = [...PHASE1_SCOPES, FAMILY_ACL_SCOPE, PERSONAL_EVENTS_SCOPE];
+
+    const ordinary = await app.request(
+      'http://localhost:5173/api/auth/login',
+      { headers: { Cookie: cookieHeaderFromJar(sessionJar) } },
+      TEST_AUTH_ENV,
+    );
+    const ordinaryUrl = new URL(required(ordinary.headers.get('Location')));
+    const ordinaryNonce = required(ordinaryUrl.searchParams.get('nonce'));
+    const ordinaryState = required(ordinaryUrl.searchParams.get('state'));
+    setupGoogleFetchMock({
+      idToken: await signTestIdToken({ sub: user.googleSub, nonce: ordinaryNonce }),
+      scope: returnedScopes.join(' '),
+    });
+    const ordinaryCallback = await app.request(
+      `http://localhost:5173/api/auth/callback?code=ordinary&state=${encodeURIComponent(ordinaryState)}`,
+      { headers: { Cookie: cookieHeaderFromJar({ ...sessionJar, ...extractCookies(ordinary) }) } },
+      TEST_AUTH_ENV,
+    );
+    expect(ordinaryCallback.headers.get('Location')).toBe('/');
+    const ordinaryToken = required(
+      (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+    );
+    expect(ordinaryToken.scopes.split(' ').sort()).toEqual([...returnedScopes].sort());
+
+    const inviteToken = 'F'.repeat(43);
+    const inviteStart = await app.request(
+      'http://localhost:5173/api/auth/login',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ inviteToken }),
+      },
+      TEST_AUTH_ENV,
+    );
+    const inviteUrl = new URL(
+      authLoginResponseSchema.parse(await inviteStart.json()).authorizationUrl,
+    );
+    const inviteNonce = required(inviteUrl.searchParams.get('nonce'));
+    const inviteState = required(inviteUrl.searchParams.get('state'));
+    setupGoogleFetchMock({
+      idToken: await signTestIdToken({ sub: user.googleSub, nonce: inviteNonce }),
+      scope: returnedScopes.join(' '),
+    });
+    const inviteCallback = await app.request(
+      `http://localhost:5173/api/auth/callback?code=invite&state=${encodeURIComponent(inviteState)}`,
+      { headers: { Cookie: cookieHeaderFromJar(extractCookies(inviteStart)) } },
+      TEST_AUTH_ENV,
+    );
+    expect(inviteCallback.headers.get('Location')).toBe(`/invite#${inviteToken}`);
+    const inviteTokenRow = required(
+      (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+    );
+    expect(inviteTokenRow.scopes.split(' ').sort()).toEqual([...returnedScopes].sort());
   });
 
   describe('3. Bound Session & Pre-Exchange Verification Gate', () => {

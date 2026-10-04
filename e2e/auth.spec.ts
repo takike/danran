@@ -600,6 +600,10 @@ test.describe('Task 1-1: Browser Authentication and Session Management', () => {
     await expect(page.getByRole('heading', { name: 'プライバシーポリシー' })).toBeVisible();
     await expect(page.getByText('ログイン情報')).toBeVisible();
     await expect(page.getByText('カレンダー情報')).toBeVisible();
+    if (process.env.DANRAN_SCREENSHOTS === '1') {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.screenshot({ path: 'docs/screenshots/privacy.png', fullPage: true });
+    }
 
     // Verify zero requests to /api/auth/me or any auth endpoint occurred
     expect(authMeRequested).toBe(false);

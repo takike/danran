@@ -286,6 +286,22 @@ async function mockWeekApis(
   await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
     const url = new URL(route.request().url());
     weekRequests.push(url.searchParams.get('start') ?? 'missing');
+    if (url.pathname.endsWith('/week/personal')) {
+      const anchor = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
+      const familyWeek = buildWeek(anchor);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          family: { id: FAMILY_ID },
+          memberId: 'mem_synthetic_self',
+          week: familyWeek.week,
+          status: 'authorization_required',
+          events: [],
+        }),
+      });
+      return;
+    }
     if (options.apiError) {
       await route.fulfill({
         status: options.apiError.status,
@@ -316,6 +332,17 @@ async function mockWeekApis(
       ),
     });
   });
+  await page.route(`**/api/families/${FAMILY_ID}/personal-calendars`, async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'authorization_required',
+        memberId: 'mem_synthetic_self',
+        calendars: [],
+      }),
+    }),
+  );
   return {
     get familyCalls() {
       return familyCalls;
@@ -512,11 +539,6 @@ test.describe('Task 1-7: S1 week view', () => {
     ).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
     await expectControlsAtLeast44px(page);
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      const fullPageHeight = await page.locator('html').evaluate((element) => element.scrollHeight);
-      await page.setViewportSize({ width: 390, height: Math.ceil(fullPageHeight) });
-      await page.screenshot({ path: 'docs/screenshots/s1-week-view.png', fullPage: true });
-    }
   });
 
   test('long synthetic names and event details wrap without horizontal overflow at 390px', async ({
@@ -1109,10 +1131,24 @@ test.describe('Task 1-7: S1 week view', () => {
       }),
     );
     await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
-      weekRequestUsers.push(activeUser);
       const url = new URL(route.request().url());
       const start = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
       const syntheticWeek = buildWeek(start);
+      if (url.pathname.endsWith('/week/personal')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            family: { id: FAMILY_ID },
+            memberId: 'mem_synthetic_self',
+            week: syntheticWeek.week,
+            status: 'authorization_required',
+            events: [],
+          }),
+        });
+        return;
+      }
+      weekRequestUsers.push(activeUser);
       const week =
         activeUser === 'A'
           ? syntheticWeek
@@ -1142,7 +1178,7 @@ test.describe('Task 1-7: S1 week view', () => {
 
     await page.goto('/?week=2026-10-05');
     await expect(page.getByText('公園ピクニック')).toBeVisible();
-    await page.getByRole('link', { name: '家族' }).click();
+    await page.getByRole('link', { name: '家族', exact: true }).click();
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveText('アカウントA');
     await page.getByRole('button', { name: 'ログアウト' }).click();
     await logoutEntered;
@@ -1177,7 +1213,7 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('公園ピクニック', { exact: true })).toHaveCount(0);
     expect(weekRequestUsers).toContain('B');
     expect(weekRequestUsers.at(-1)).toBe('B');
-    await page.getByRole('link', { name: '家族' }).click();
+    await page.getByRole('link', { name: '家族', exact: true }).click();
     await expect(page.locator('[data-testid="user-display-name"]')).toHaveText('アカウントB');
     await expect(page.getByRole('button', { name: 'ログアウト' })).toBeVisible();
   });
