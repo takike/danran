@@ -474,7 +474,9 @@ test.describe('Task 1-7: S1 week view', () => {
       expect(box).not.toBeNull();
       if (box) expect(box.y + box.height).toBeLessThanOrEqual(844);
     }
-    await expect(page.getByText(/追加|予定を立てる/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeVisible();
+    await expect(page.locator('button[data-testid^="add-event-"]')).toHaveCount(8);
+    await expect(page.getByText(/予定を立てる/)).toHaveCount(0);
     await expect(
       page.getByText(/みんな空き|予定あり|自分だけ|空き時間から探す|添付写真/),
     ).toHaveCount(0);

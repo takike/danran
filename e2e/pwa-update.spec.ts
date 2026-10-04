@@ -3,7 +3,11 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+import type { DateKey } from '../src/shared/schemas/date';
 import type { FamilyPublic } from '../src/shared/schemas/family';
+import type { WeekResponse } from '../src/shared/schemas/week';
+import { getWeekday } from '../src/shared/time/date';
+import { getWeekRange } from '../src/shared/time/week';
 
 test.use({
   serviceWorkers: 'allow',
@@ -396,6 +400,100 @@ test.describe('PWA update handover with a real Service Worker', () => {
       await expectVersionAndReloadCount(page, 'B', 2);
       expect(await navigationCount(page)).toBe(2);
     } finally {
+      await fixture.close();
+    }
+  });
+
+  test('an open event form protects its draft and a pending save blocks manual reload', async ({
+    page,
+  }) => {
+    const fixture = await createPwaFixtureServer();
+    let releaseSave: (() => void) | undefined;
+    let saveStarted: (() => void) | undefined;
+    const saveStartedPromise = new Promise<void>((resolve) => {
+      saveStarted = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    try {
+      const family = makeFamily({ id: 'mem_pwa_child', name: 'ひな', color: 'ochre' });
+      await mockOnboardingApis(page, family);
+      const weekStart = '2026-10-05' as DateKey;
+      const range = getWeekRange(weekStart);
+      const week: WeekResponse = {
+        family: { id: TEST_FAMILY_ID, name: family.name },
+        members: family.members.map((member) => ({
+          id: member.id,
+          name: member.name,
+          color: member.color,
+          kind: member.kind,
+          sortOrder: member.sortOrder,
+        })),
+        week: {
+          start: range.start,
+          endInclusive: range.endInclusive,
+          prevWeekStart: range.prevWeekStart,
+          nextWeekStart: range.nextWeekStart,
+          today: '2026-10-07' as DateKey,
+        },
+        days: [...range.days].reverse().map((date) => ({
+          date,
+          weekday: getWeekday(date),
+          holidayName: null,
+          closures: [],
+          layout:
+            getWeekday(date) === 0 || getWeekday(date) === 6
+              ? ('weekend-card' as const)
+              : ('compact' as const),
+          eventIds: [],
+        })),
+        events: [],
+      };
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/week**`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(week),
+        });
+      });
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/events`, async (route) => {
+        saveStarted?.();
+        await saveGate;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ eventId: 'evt_pwa_created' }),
+        });
+      });
+
+      await page.goto(`${fixture.origin}/?week=${weekStart}`);
+      await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeVisible();
+      await waitForActiveController(page);
+      await page.getByRole('button', { name: '予定を追加', exact: true }).click();
+      const dialog = page.getByTestId('event-dialog');
+      await expect(dialog).toBeVisible();
+      await dialog.getByLabel('タイトル').fill('更新中に守る予定');
+
+      await requestWorkerUpdate(page, fixture);
+      await expect(page.getByTestId('pwa-update-banner')).toBeVisible();
+      await expect(dialog.getByLabel('タイトル')).toHaveValue('更新中に守る予定');
+      expect(await navigationCount(page)).toBe(1);
+
+      const updateButton = page.getByRole('button', { name: '更新', exact: true });
+      await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      await saveStartedPromise;
+      await expect(updateButton).toBeDisabled();
+      expect(await navigationCount(page)).toBe(1);
+
+      releaseSave?.();
+      await expect(dialog).toHaveCount(0);
+      await expect(updateButton).toBeEnabled();
+      await expectVersionAndReloadCount(page, 'A', 1);
+      await updateButton.click();
+      await expectVersionAndReloadCount(page, 'B', 2);
+    } finally {
+      releaseSave?.();
       await fixture.close();
     }
   });

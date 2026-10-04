@@ -173,7 +173,7 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
 
 Google の家族カレンダー `events.list` は、リクエストユーザー自身のトークンで `singleEvents=true`、`orderBy=startTime`、`timeZone=Asia/Tokyo`、週の JST 境界、`showDeleted=false` を指定して取得する。最大10ページまで追跡し、ページ上限到達、同じページトークンの再出現、または不完全な取得はエラーとして扱う。イベントの Google metadata と `event_meta` は許可リストに沿ってレスポンスへ整形し、個人カレンダー情報は混ぜない。
 
-`event_meta` は `(calendar_id,event_id)` の一意制約と、`(family_id,calendar_id)`、`(calendar_id,recurring_event_id,original_start)`、`assignee_member_id` の各検索インデックスを持つ。週 API が読むのは持ち物の `items_json` だけである。`assignee_member_id`、`status`、`source` 列は将来の D1 利用に備えた予約フィールドであり、この API のレスポンス値には使わない。担当・状態・由来は Google の `extendedProperties.private` から検証して導出する。
+`event_meta` は `(calendar_id,event_id)` の一意制約と、`(family_id,calendar_id)`、`(calendar_id,recurring_event_id,original_start)`、`assignee_member_id` の各検索インデックスを持つ。週 API は返却対象のイベント ID に絞って `items_json` を読み、担当・状態・由来は Google の `extendedProperties.private` から検証して導出する。予定作成・編集時は `items_json` と `assignee_member_id`・`status`・`source` を `event_meta` にも保存し、Google 側のメタデータと同じ値を保つ。これらの列は既存スキーマにあり、Task 1-8 ではスキーマ変更を行わない。
 
 後のフェーズでは `syncToken` による差分取得と `events.watch`（Push 通知 → Worker の webhook）で高速化する。最初は行わない。
 

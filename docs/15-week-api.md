@@ -21,7 +21,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
 2. 指定家族に属する **active メンバー**であることを要求します。オーナーであっても active メンバーでなければ `404 NOT_FOUND` です。家族の存在や他人の所属状態を漏らさないため、アクセス不可と存在しない家族は同じ応答にします。
 3. 家族の作成状態が `ready` で、家族カレンダー ID が設定済みの場合だけ処理します。
 4. リクエストユーザー自身の Google トークンで、その家族カレンダーだけを `events.list` します。
-5. D1 から同じ家族の `event_meta`、active メンバー、対象週の休園日を読みます。家族予定・`event_meta`・休園日の書き込みは行いません。
+5. D1 から同じ家族の active メンバー、対象週の休園日、および今回返すイベントの `event_meta` を読みます。家族予定・`event_meta`・休園日の書き込みは行いません。
 
 この API は個人カレンダーの `events.list`、`freeBusy.query`、他メンバーのトークンを使った取得を行いません。個人予定のタイトル・場所・説明・参加者や free/busy 区間をレスポンスに含めません。公開コピーが家族カレンダー上に存在する場合は、家族カレンダーの予定として扱います。
 
@@ -85,7 +85,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
 - `status`: `'confirmed' | 'tentative'`。有効な Danran private metadata があればその値を使い、欠落・不正なら Google イベント状態から決めます。Google が tentative と示す場合だけ `tentative`、それ以外は `confirmed` とします。
 - `isRoutine`: Google イベントに `recurringEventId` がある場合 `true`。通常回か例外回かの詳細な判定は後続の繰り返しタスクで扱います。
 - `source`: `'manual' | 'import' | 'publish' | 'external'`。Danran marker がある場合は private metadata の有効な値を使い、値が欠落または不正なら `'manual'`。marker がない場合だけ `'external'`。
-- `items`: `event_meta.itemsJson` が有効な JSON 文字列配列ならその内容、そうでなければ空配列。メタデータ候補は、(1) `(calendarId,eventId)` のイベント行、(2) `(calendarId,recurringEventId,originalStart)` の個別回、(3) `(calendarId,eventId=recurringEventId)` のシリーズ行の順に選びます。個別回の `originalStart` は、終日なら日付の完全一致、時刻付きなら JST に正規化した同一 instant で照合します（例：`Z` と等価な `+09:00` は一致）。見つかった候補の JSON が不正なら空配列とし、下位候補にフォールバックしません。
+- `items`: `event_meta.itemsJson` が有効な JSON 文字列配列ならその内容、そうでなければ空配列。メタデータ候補は、(1) `(calendarId,eventId)` のイベント行、(2) `(calendarId,recurringEventId,originalStart)` の個別回、(3) `(calendarId,eventId=recurringEventId)` のシリーズ行の順に選びます。個別回の `originalStart` は、終日なら日付の完全一致、時刻付きなら JST に正規化した同一 instant で照合します（例：`Z` と等価な `+09:00` は一致）。見つかった候補の JSON が不正なら空配列とし、下位候補にフォールバックしません。D1 の bind 上限を避けるため、event ID と recurring ID を重複除去したうえで49件ずつ問い合わせます。1クエリの ID 条件は最大98 bind 値（event ID / recurring ID 各49）で、家族・カレンダー条件が加わります。空週では `event_meta` の全件検索をしません。
 
 ### イベントの日付への割り当てと順序
 
@@ -97,7 +97,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
 
 - `extendedProperties.private.danran === "1"` のイベントは Danran 管理イベントとして扱います。`members` は CSV から既知の active ID だけを残し、`assignee` も同様に検証します。`status` は定義済み値だけ受け入れます。`source` は `manual` / `import` / `publish` だけ受け入れ、欠落または不正なら `manual` にします。
 - Danran marker のないイベントは外部イベントとして扱い、`memberIds: []`、`assigneeMemberId: null`、`source: "external"` とします。Google イベントのタイトル等は家族カレンダー上のイベント情報として返ります。
-- `assigneeMemberId`、`status`、`source` の値は Google private metadata を正本とします。D1 の `event_meta` に同名の予約列がありますが、この API はそこからこれらの値を読みません。`event_meta` は `itemsJson` の補足にだけ使います。
+- `assigneeMemberId`、`status`、`source` の返却値は Google private metadata を正本とします。書き込み API はこれらを `event_meta` にも保存しますが、週 API のレスポンスでは Google の値を検証して使います。`event_meta` の読み取りは返却対象イベントに限ります。
 - `closure_days.member_ids` が有効な `[]` の場合は家族全員対象です。非空配列の場合は既知の active ID のみ残します。壊れた JSON や、未知 ID だけを含む配列はその休園日を破棄し、家族全体の休園日として解釈しません。
 - `dayLayout` は `src/shared/domain/dayLayout` の既存ルールを使い、週末・祝日・休園日を `weekend-card`、平日の非ルーティン家族予定があれば `expanded`、それ以外を `compact` とします。キャンセル済み予定は表示対象から外します。
 
@@ -132,4 +132,4 @@ GET /api/families/{familyId}/week?start=2026-10-05
 
 ## 実装範囲
 
-この契約は読み取り専用 API と共有 Zod スキーマに適用します。週画面 UI、予定編集、書き込み API、個人カレンダー、free/busy は含みません。API テストは認可、共有スキーマ、日付境界、プライバシー、Google ページング・エラー、休園日と event metadata の対応を確認します。実 Google アカウントや staging の週データ取得を確認したという意味ではありません。
+この文書は週ビュー読み取り API の契約です。単発予定の書き込み API は [16-event-editing.md](16-event-editing.md) に記載します。個人カレンダー、free/busy は含みません。週 API テストは認可、共有スキーマ、日付境界、プライバシー、Google ページング・エラー、休園日と event metadata の対応を確認します。実 Google アカウントや staging の週データ取得を確認したという意味ではありません。

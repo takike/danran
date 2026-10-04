@@ -991,4 +991,67 @@ describe('Task 1-6: family week API', () => {
       expect(JSON.stringify(body)).not.toContain('private google detail');
     },
   );
+
+  it('loads only matching event metadata in SQLite bind-safe chunks for a large week', async () => {
+    const fixture = await seedFamily();
+    const googleEvents = Array.from({ length: 120 }, (_, index) => ({
+      id: `week_event_${index}`,
+      status: 'confirmed',
+      summary: `予定 ${index}`,
+      start: { dateTime: '2026-10-05T09:00:00+09:00', timeZone: 'Asia/Tokyo' },
+      end: { dateTime: '2026-10-05T10:00:00+09:00', timeZone: 'Asia/Tokyo' },
+      extendedProperties: { private: { danran: '1', members: fixture.callerMemberId } },
+    }));
+    calendarResponder = () => Response.json({ items: googleEvents });
+    const matchingMetadata = googleEvents.map((event, index) => ({
+      id: `meta_week_large_${index}`,
+      familyId: fixture.familyId,
+      calendarId: fixture.calendarId ?? '',
+      eventId: event.id,
+      itemsJson: JSON.stringify([`持ち物 ${index}`]),
+    }));
+    for (let offset = 0; offset < matchingMetadata.length; offset += 12) {
+      await db.insert(eventMeta).values(matchingMetadata.slice(offset, offset + 12));
+    }
+    const unrelatedMetadata = Array.from({ length: 20 }, (_, index) => ({
+      id: `meta_unrelated_${index}`,
+      familyId: fixture.familyId,
+      calendarId: fixture.calendarId ?? '',
+      eventId: `unrelated_event_${index}`,
+      itemsJson: '["対象外"]',
+    }));
+    for (let offset = 0; offset < unrelatedMetadata.length; offset += 12) {
+      await db.insert(eventMeta).values(unrelatedMetadata.slice(offset, offset + 12));
+    }
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    const metadataQueries: Array<{ sql: string; values: unknown[] }> = [];
+    vi.spyOn(env.DB, 'prepare').mockImplementation((query: string) => {
+      const statement = originalPrepare(query);
+      if (/event_meta/i.test(query)) {
+        const originalBind = statement.bind.bind(statement);
+        vi.spyOn(statement, 'bind').mockImplementation((...values: unknown[]) => {
+          metadataQueries.push({ sql: query, values });
+          return originalBind(...values);
+        });
+      }
+      return statement;
+    });
+
+    const response = await requestWeek(
+      `/api/families/${fixture.familyId}/week?start=2026-10-05`,
+      fixture.cookie,
+    );
+    expect(response.status).toBe(200);
+    const body = weekResponseSchema.parse(await response.json());
+    expect(body.events).toHaveLength(120);
+    expect(body.events[0]?.items).toEqual(['持ち物 0']);
+    expect(metadataQueries.length).toBeGreaterThanOrEqual(3);
+    expect(
+      metadataQueries.every(({ sql, values }) => / IN /i.test(sql) && values.length <= 100),
+    ).toBe(true);
+    expect(
+      metadataQueries.flatMap(({ values }) => values).filter((value) => typeof value === 'string'),
+    ).not.toContain('unrelated_event_0');
+  });
 });
