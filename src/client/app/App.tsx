@@ -1,5 +1,6 @@
 import { OfflineFallback } from '@client/components/OfflineFallback';
 import { useSessionQuery } from '@client/features/auth/useSession';
+import { PwaUpdateBanner } from '@client/features/pwa/PwaUpdateBanner';
 import { useIsOnline } from '@client/hooks/useIsOnline';
 import ComingSoonPage from '@client/pages/ComingSoonPage';
 import FamilyPage from '@client/pages/FamilyPage';
@@ -60,48 +61,53 @@ function RouteAwarePrivateCacheGuard(): React.ReactElement | null {
 export function App() {
   const isOnline = useIsOnline();
 
-  if (!isOnline) {
-    return <OfflineFallback />;
-  }
-
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <RouteAwarePrivateCacheGuard />
-        <Routes>
-          <Route path="/family" element={<FamilyPage />} />
-          <Route path="/coming-soon" element={<ComingSoonPage feature="capture" />} />
-          <Route path="/import" element={<ComingSoonPage feature="capture" />} />
-          <Route path="/routines" element={<ComingSoonPage feature="routines" />} />
-          <Route path="/tasks" element={<ComingSoonPage feature="tasks" />} />
-          <Route path="/onboarding" element={<OnboardingPage />} />
-          <Route path="/invite" element={<InviteJoinPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route
-            path="/spike/*"
-            element={
-              <div className="min-h-screen bg-bg text-ink flex flex-col items-center justify-center p-[var(--spacing-md)] text-sm">
-                <p className="font-semibold">404 - ページが見つかりません</p>
-              </div>
-            }
-          />
-          {import.meta.env.DEV && DevUiPage ? (
-            <Route
-              path="/dev/ui"
-              element={
-                <React.Suspense
-                  fallback={
-                    <div className="p-[var(--spacing-md)] text-xs text-muted">読み込み中...</div>
+    <>
+      <PwaUpdateBanner />
+      {!isOnline ? (
+        <OfflineFallback />
+      ) : (
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <RouteAwarePrivateCacheGuard />
+            <Routes>
+              <Route path="/family" element={<FamilyPage />} />
+              <Route path="/coming-soon" element={<ComingSoonPage feature="capture" />} />
+              <Route path="/import" element={<ComingSoonPage feature="capture" />} />
+              <Route path="/routines" element={<ComingSoonPage feature="routines" />} />
+              <Route path="/tasks" element={<ComingSoonPage feature="tasks" />} />
+              <Route path="/onboarding" element={<OnboardingPage />} />
+              <Route path="/invite" element={<InviteJoinPage />} />
+              <Route path="/privacy" element={<PrivacyPage />} />
+              <Route
+                path="/spike/*"
+                element={
+                  <div className="min-h-screen bg-bg text-ink flex flex-col items-center justify-center p-[var(--spacing-md)] text-sm">
+                    <p className="font-semibold">404 - ページが見つかりません</p>
+                  </div>
+                }
+              />
+              {import.meta.env.DEV && DevUiPage ? (
+                <Route
+                  path="/dev/ui"
+                  element={
+                    <React.Suspense
+                      fallback={
+                        <div className="p-[var(--spacing-md)] text-xs text-muted">
+                          読み込み中...
+                        </div>
+                      }
+                    >
+                      <DevUiPage />
+                    </React.Suspense>
                   }
-                >
-                  <DevUiPage />
-                </React.Suspense>
-              }
-            />
-          ) : null}
-          <Route path="*" element={<HomePage />} />
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
+                />
+              ) : null}
+              <Route path="*" element={<HomePage />} />
+            </Routes>
+          </BrowserRouter>
+        </QueryClientProvider>
+      )}
+    </>
   );
 }

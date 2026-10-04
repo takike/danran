@@ -11,6 +11,7 @@ import {
   useReconcileFamilyMutation,
   useUpdateChildrenMutation,
 } from '@client/features/onboarding/useFamily';
+import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
 import { type FamilyPublic, MEMBER_COLORS, type MemberColor } from '@shared/schemas/family';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -54,6 +55,7 @@ export default function OnboardingPage(): React.ReactElement {
     isError: isFamiliesError,
     refetch: refetchFamilies,
   } = useFamiliesQuery(user?.id);
+  const family = families && families.length > 0 ? families[0] : null;
 
   const createFamilyMutation = useCreateFamilyMutation();
   const updateChildrenMutation = useUpdateChildrenMutation();
@@ -76,6 +78,26 @@ export default function OnboardingPage(): React.ReactElement {
   const [copyFailed, setCopyFailed] = useState(false);
   const [saveChildrenSuccess, setSaveChildrenSuccess] = useState(false);
   const [childFormError, setChildFormError] = useState<string | null>(null);
+
+  const savedChildren = family?.members.filter((member) => member.kind === 'child') ?? [];
+  const hasUnsavedChildChanges =
+    hasInitializedChildren &&
+    (children.length !== savedChildren.length ||
+      children.some(
+        (child, index) =>
+          child.name.trim() !== savedChildren[index]?.name ||
+          child.color !== savedChildren[index]?.color,
+      ));
+  const hasPendingOnboardingMutation =
+    createFamilyMutation.isPending ||
+    updateChildrenMutation.isPending ||
+    issueInviteMutation.isPending ||
+    reconcileFamilyMutation.isPending ||
+    isInviteRedirecting;
+  useReloadProtection(
+    newFamilyName.length > 0 || hasUnsavedChildChanges || hasPendingOnboardingMutation,
+    hasPendingOnboardingMutation,
+  );
 
   const handleAuthRevocation = useCallback(async () => {
     generationRef.current += 1;
@@ -175,8 +197,6 @@ export default function OnboardingPage(): React.ReactElement {
     window.addEventListener('pageshow', handlePageShow);
     return () => window.removeEventListener('pageshow', handlePageShow);
   }, [issueInviteMutation.reset]);
-
-  const family = families && families.length > 0 ? families[0] : null;
 
   // Initialize children state when ready family loads
   useEffect(() => {
