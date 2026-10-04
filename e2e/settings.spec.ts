@@ -189,6 +189,17 @@ async function mockSettingsApis(page: import('@playwright/test').Page) {
       body: JSON.stringify(buildWeek(family, closures)),
     });
   });
+  await page.route(`**/api/families/${FAMILY_ID}/personal-calendars`, async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'authorization_required',
+        memberId: MEMBER_B_ID,
+        calendars: [],
+      }),
+    }),
+  );
   await page.route(`**/api/families/${FAMILY_ID}/members/*`, async (route) => {
     if (route.request().method() !== 'PATCH') {
       await route.fallback();
@@ -354,12 +365,6 @@ test.describe('Task 1-9: family settings', () => {
     await expect(page.getByRole('heading', { name: '休園日', exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectVisibleTargetsAtLeast44px(page);
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      const fullPageHeight = await page.locator('html').evaluate((element) => element.scrollHeight);
-      await page.setViewportSize({ width: 390, height: fullPageHeight });
-      await page.screenshot({ path: 'docs/screenshots/family.png', fullPage: true });
-      await page.setViewportSize({ width: 390, height: 844 });
-    }
     await page.setViewportSize({ width: 445, height: 844 });
     await expectNoHorizontalOverflow(page);
     await expectVisibleTargetsAtLeast44px(page);

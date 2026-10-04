@@ -128,6 +128,22 @@ async function mockEventApis(page: import('@playwright/test').Page) {
     });
   });
   await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/week/personal')) {
+      const familyWeek = buildWeek(events);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          family: { id: FAMILY_ID },
+          memberId: 'mem_event_adult',
+          week: familyWeek.week,
+          status: 'authorization_required',
+          events: [],
+        }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -642,6 +658,11 @@ test.describe('Task 1-8: family event editing', () => {
     await mockEventApis(page);
     let weekCalls = 0;
     await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith('/week/personal')) {
+        await route.fallback();
+        return;
+      }
       weekCalls++;
       if (weekCalls === 1) {
         await route.fulfill({

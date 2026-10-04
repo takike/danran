@@ -1,11 +1,22 @@
+import { PersonalEventsApiError } from '@client/api/personal';
 import { WeekApiError } from '@client/api/week';
 import { AuthenticatedShell } from '@client/components/AuthenticatedShell';
 import { Card } from '@client/components/Card';
 import { Chip } from '@client/components/Chip';
 import { MemberDot } from '@client/components/MemberDot';
 import { OAuthNotices } from '@client/components/OAuthNotices';
+import {
+  PERSONAL_CALENDARS_QUERY_KEY,
+  PERSONAL_WEEK_QUERY_KEY,
+  usePersonalWeekQuery,
+} from '@client/features/settings/usePersonalEvents';
 import { EventDialog } from '@client/features/week/EventDialog';
 import { useWeekQuery } from '@client/features/week/useWeek';
+import {
+  type PersonalCalendarEvent,
+  getPersonalEventsForDate,
+  mergeCalendarDayEntries,
+} from '@shared/domain/personalEvents';
 import {
   getLongWeekendBadges,
   getVisibleDayEvents,
@@ -29,6 +40,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Repeat,
@@ -179,6 +191,120 @@ function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
   );
 }
 
+function PersonalEventLabel({
+  event,
+  member,
+  date,
+}: {
+  event: PersonalCalendarEvent;
+  member?: WeekMember;
+  date: DateKey;
+}): React.ReactElement {
+  return (
+    <span
+      data-testid={`personal-event-${event.id}`}
+      className="inline-flex min-h-[var(--week-chip-min-height)] min-w-0 max-w-full flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-2xs)] rounded-[var(--radius-sm)] border border-dashed bg-surface px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
+      style={{ borderColor: member ? `var(--member-${member.color})` : 'var(--line)' }}
+    >
+      <LockKeyhole size={13} aria-hidden="true" className="shrink-0 text-muted" />
+      <span className="shrink-0 text-muted">自分だけ</span>
+      <span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">
+        {event.title}
+      </span>
+      {event.isRoutine && <span className="shrink-0 text-muted">繰り返し</span>}
+      <span className="shrink-0 tabular-nums text-muted">{formatEventTime(event.time, date)}</span>
+    </span>
+  );
+}
+
+function PersonalEventRow({
+  event,
+  member,
+  date,
+}: {
+  event: PersonalCalendarEvent;
+  member?: WeekMember;
+  date: DateKey;
+}): React.ReactElement {
+  return (
+    <li
+      data-testid={`personal-event-${event.id}`}
+      className="grid min-w-0 grid-cols-[var(--event-time-column)_minmax(0,1fr)] gap-[var(--spacing-xs)] py-[var(--spacing-xs)]"
+    >
+      <time className="break-words pt-[var(--spacing-2xs)] text-xs tabular-nums text-muted [overflow-wrap:anywhere]">
+        {formatEventTime(event.time, date)}
+      </time>
+      <div
+        className="min-w-0 rounded-[var(--radius-sm)] border border-dashed bg-surface px-[var(--spacing-sm)] py-[var(--spacing-xs)]"
+        style={{ borderColor: member ? `var(--member-${member.color})` : 'var(--line)' }}
+      >
+        <div className="flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-xs)]">
+          <LockKeyhole size={14} aria-hidden="true" className="shrink-0 text-muted" />
+          <span className="shrink-0 text-xs text-muted">自分だけ</span>
+          <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
+            {event.title}
+          </span>
+          {event.isRoutine && <span className="text-xs text-muted">繰り返し</span>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function PersonalEventsDialog({
+  date,
+  events,
+  member,
+  onClose,
+}: {
+  date: DateKey;
+  events: PersonalCalendarEvent[];
+  member?: WeekMember;
+  onClose: () => void;
+}): React.ReactElement {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
+  return (
+    <dialog
+      ref={dialogRef}
+      data-testid="personal-events-dialog"
+      aria-labelledby="personal-events-dialog-title"
+      onClose={onClose}
+      className="m-auto max-h-[85dvh] w-[calc(100%-var(--spacing-lg))] max-w-[var(--app-max-width)] overflow-y-auto rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)] text-ink shadow-[var(--week-card-shadow)] backdrop:bg-ink/40"
+    >
+      <header className="flex items-start justify-between gap-[var(--spacing-sm)]">
+        <div className="min-w-0">
+          <h2 id="personal-events-dialog-title" className="m-0 text-base font-semibold">
+            {formatFullDateLabel(date)}の自分の予定
+          </h2>
+          <p className="mt-[var(--spacing-2xs)] mb-0 text-xs text-muted">
+            家族には表示されません。
+          </p>
+        </div>
+        <button
+          type="button"
+          data-testid="personal-events-dialog-close"
+          onClick={() => dialogRef.current?.close()}
+          className="min-h-[var(--tap-target-min)] shrink-0 rounded-[var(--radius-sm)] px-[var(--spacing-sm)] text-sm text-muted underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        >
+          閉じる
+        </button>
+      </header>
+      <ul className="mt-[var(--spacing-sm)] mb-0 list-none divide-y divide-line p-0">
+        {events.map((event) => (
+          <PersonalEventRow key={event.id} event={event} member={member} date={date} />
+        ))}
+      </ul>
+    </dialog>
+  );
+}
+
 interface EventActions {
   onAdd: (date: string, trigger: HTMLElement) => void;
   onEdit: (event: WeekEvent, trigger: HTMLElement) => void;
@@ -235,16 +361,26 @@ function EventEditButton({
 function CompactDay({
   day,
   events,
+  personalEvents,
   members,
+  personalMember,
   isToday,
   onAdd,
   onEdit,
   disabled,
+  onShowMorePersonal,
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
+  personalMember?: WeekMember;
   isToday: boolean;
+  onShowMorePersonal: (
+    day: DateKey,
+    events: PersonalCalendarEvent[],
+    trigger: HTMLButtonElement,
+  ) => void;
 } & EventActions): React.ReactElement {
   const routineEvents = events.filter((event) => event.isRoutine);
   const otherEvents = events.filter((event) => !event.isRoutine);
@@ -253,7 +389,7 @@ function CompactDay({
       data-testid="week-day"
       data-date={day.date}
       data-layout="compact"
-      aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 ? '、予定なし' : ''}`}
+      aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 && personalEvents.length === 0 ? '、予定なし' : ''}`}
       className="relative grid min-h-[var(--tap-target-min)] grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
@@ -288,7 +424,30 @@ function CompactDay({
             </span>
           </EventEditButton>
         ))}
-        {events.length === 0 && <span className="sr-only">予定なし</span>}
+        {personalEvents.slice(0, 2).map((event) => (
+          <PersonalEventLabel
+            key={`personal-${event.id}`}
+            event={event}
+            member={personalMember}
+            date={day.date}
+          />
+        ))}
+        {personalEvents.length > 2 && (
+          <button
+            type="button"
+            data-testid={`personal-events-more-${day.date}`}
+            aria-label={`${formatFullDateLabel(day.date)}の自分の予定をすべて表示（ほか${personalEvents.length - 2}件）`}
+            onClick={(clickEvent) =>
+              onShowMorePersonal(day.date, personalEvents, clickEvent.currentTarget)
+            }
+            className="inline-flex min-h-[var(--tap-target-min)] items-center rounded-[var(--radius-sm)] px-[var(--spacing-sm)] text-xs text-muted underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            ほか {personalEvents.length - 2} 件
+          </button>
+        )}
+        {events.length === 0 && personalEvents.length === 0 && (
+          <span className="sr-only">予定なし</span>
+        )}
       </div>
       <AddDayButton
         date={day.date}
@@ -303,7 +462,9 @@ function CompactDay({
 function ExpandedDay({
   day,
   events,
+  personalEvents,
   members,
+  personalMember,
   isToday,
   onAdd,
   onEdit,
@@ -311,9 +472,12 @@ function ExpandedDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
+  personalMember?: WeekMember;
   isToday: boolean;
 } & EventActions): React.ReactElement {
+  const entries = mergeCalendarDayEntries(events, personalEvents);
   return (
     <li
       data-testid="week-day"
@@ -328,45 +492,58 @@ function ExpandedDay({
           <span className="rounded-[var(--radius-sm)] border border-accent px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-accent">
             いつもと違う日
           </span>
-          {events.length === 0 && <span className="text-xs text-muted">予定なし</span>}
+          {entries.length === 0 && <span className="text-xs text-muted">予定なし</span>}
           <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
         </div>
         <ul className="m-0 list-none space-y-[var(--spacing-sm)] p-0">
-          {events.map((event) => (
-            <li key={event.id} className="min-w-0">
-              <div className="flex flex-wrap items-baseline justify-between gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)] text-xs text-muted">
-                <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
-                <EventBadges event={event} members={members} />
-              </div>
-              <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
-                <span className="mt-[var(--spacing-xs)] flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
-                  <EventMembers memberIds={event.memberIds} members={members} />
-                  <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
-                    {event.title}
-                  </span>
-                </span>
-              </EventEditButton>
-              {event.items.length > 0 && (
-                <div className="mt-[var(--spacing-sm)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
-                  {event.items.map((item, index) => (
-                    <span
-                      key={`${event.id}-item-${index}`}
-                      className="inline-flex min-w-0 max-w-full items-start gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
-                    >
-                      <ShoppingBag
-                        size={14}
-                        aria-hidden="true"
-                        className="mt-[var(--spacing-2xs)] shrink-0"
-                      />
-                      <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
-                        {item}
-                      </span>
-                    </span>
-                  ))}
+          {entries.map((entry) => {
+            if (entry.kind === 'personal') {
+              return (
+                <PersonalEventRow
+                  key={`personal-${entry.event.id}`}
+                  event={entry.event}
+                  member={personalMember}
+                  date={day.date}
+                />
+              );
+            }
+            const event = entry.event;
+            return (
+              <li key={event.id} className="min-w-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)] text-xs text-muted">
+                  <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
+                  <EventBadges event={event} members={members} />
                 </div>
-              )}
-            </li>
-          ))}
+                <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
+                  <span className="mt-[var(--spacing-xs)] flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+                    <EventMembers memberIds={event.memberIds} members={members} />
+                    <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
+                      {event.title}
+                    </span>
+                  </span>
+                </EventEditButton>
+                {event.items.length > 0 && (
+                  <div className="mt-[var(--spacing-sm)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
+                    {event.items.map((item, index) => (
+                      <span
+                        key={`${event.id}-item-${index}`}
+                        className="inline-flex min-w-0 max-w-full items-start gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
+                      >
+                        <ShoppingBag
+                          size={14}
+                          aria-hidden="true"
+                          className="mt-[var(--spacing-2xs)] shrink-0"
+                        />
+                        <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
+                          {item}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </Card>
     </li>
@@ -435,7 +612,9 @@ function WeekendEvent({
 function WeekendDay({
   day,
   events,
+  personalEvents,
   members,
+  personalMember,
   isToday,
   longWeekendDayCount,
   onAdd,
@@ -444,10 +623,13 @@ function WeekendDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
+  personalMember?: WeekMember;
   isToday: boolean;
   longWeekendDayCount?: number;
 } & EventActions): React.ReactElement {
+  const entries = mergeCalendarDayEntries(events, personalEvents);
   return (
     <article
       aria-label={formatFullDateLabel(day.date)}
@@ -484,19 +666,28 @@ function WeekendDay({
         </div>
       )}
 
-      {events.length > 0 ? (
+      {entries.length > 0 ? (
         <ul className="mt-[var(--spacing-md)] mb-0 list-none divide-y divide-line p-0">
-          {events.map((event) => (
-            <WeekendEvent
-              key={event.id}
-              event={event}
-              day={day}
-              members={members}
-              onAdd={onAdd}
-              onEdit={onEdit}
-              disabled={disabled}
-            />
-          ))}
+          {entries.map((entry) =>
+            entry.kind === 'personal' ? (
+              <PersonalEventRow
+                key={`personal-${entry.event.id}`}
+                event={entry.event}
+                member={personalMember}
+                date={day.date}
+              />
+            ) : (
+              <WeekendEvent
+                key={entry.event.id}
+                event={entry.event}
+                day={day}
+                members={members}
+                onAdd={onAdd}
+                onEdit={onEdit}
+                disabled={disabled}
+              />
+            ),
+          )}
         </ul>
       ) : (
         <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">予定なし</p>
@@ -537,6 +728,11 @@ export default function WeekPage({
   const [hideRoutines, setHideRoutines] = useState(false);
   const [eventEditor, setEventEditor] = useState<EventEditorState | null>(null);
   const [routineNotice, setRoutineNotice] = useState(false);
+  const [personalDialog, setPersonalDialog] = useState<{
+    identity: string;
+    date: DateKey;
+  } | null>(null);
+  const [revokedPersonalIdentity, setRevokedPersonalIdentity] = useState<string | null>(null);
   const invokingControlRef = useRef<HTMLElement | null>(null);
   const addEventButtonRef = useRef<HTMLButtonElement | null>(null);
   const hadOpenEditorRef = useRef(false);
@@ -549,8 +745,40 @@ export default function WeekPage({
     setSearchParams(next, { replace: true });
   }, [requestStart, searchParams, setSearchParams, urlWeek]);
 
+  // Reset scope-bound dialog and access state when the authenticated week identity changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identity is intentionally used as a transition key.
+  useEffect(() => {
+    setRevokedPersonalIdentity(null);
+    setPersonalDialog(null);
+  }, [userId, familyId, requestStart]);
+
   const weekQuery = useWeekQuery(userId, invalidUrlWeek ? undefined : familyId, requestStart);
   const data = weekQuery.isError ? undefined : weekQuery.data;
+  const personalIdentity = `${userId}:${familyId}:${requestStart ?? ''}`;
+  const personalWeekQuery = usePersonalWeekQuery(
+    userId,
+    familyId,
+    requestStart,
+    !invalidUrlWeek && revokedPersonalIdentity !== personalIdentity,
+  );
+  const personalResponse =
+    personalWeekQuery.isError || personalWeekQuery.isFetching ? undefined : personalWeekQuery.data;
+  const personalResponseMatches = Boolean(
+    personalResponse &&
+      requestStart &&
+      data &&
+      data.week.start === requestStart &&
+      personalResponse.family.id === familyId &&
+      personalResponse.week.start === requestStart &&
+      personalResponse.week.start === data.week.start &&
+      personalResponse.family.id === data.family.id,
+  );
+  const personalEvents =
+    personalResponseMatches && personalResponse?.status === 'ready' ? personalResponse.events : [];
+  const personalMember =
+    personalResponseMatches && data
+      ? data.members.find((member) => member.id === personalResponse?.memberId)
+      : undefined;
   const canEditEvents = Boolean(data && !weekQuery.isPlaceholderData && !invalidUrlWeek);
   const longWeekendCounts = new Map(
     data ? getLongWeekendBadges(data.days).map((badge) => [badge.start, badge.dayCount]) : [],
@@ -619,9 +847,50 @@ export default function WeekPage({
     queryClient.setQueryData(['session'], null);
     await queryClient.cancelQueries({ queryKey: ['week', userId] });
     await queryClient.cancelQueries({ queryKey: ['families', userId] });
+    await queryClient.cancelQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
+    await queryClient.cancelQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: ['week', userId] });
     queryClient.removeQueries({ queryKey: ['families', userId] });
+    queryClient.removeQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
+    queryClient.removeQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
   }, [queryClient, userId]);
+
+  useEffect(() => {
+    const error = personalWeekQuery.error;
+    if (!(error instanceof PersonalEventsApiError)) return;
+    if (error.code === 'UNAUTHORIZED') {
+      void clearSessionAfterUnauthorized();
+      return;
+    }
+    if (
+      error.status === 403 ||
+      error.status === 404 ||
+      error.code === 'FORBIDDEN' ||
+      error.code === 'NOT_FOUND' ||
+      error.code === 'CALENDAR_ACCESS_DENIED'
+    ) {
+      setRevokedPersonalIdentity(personalIdentity);
+      void (async () => {
+        await queryClient.cancelQueries({
+          queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId, familyId],
+        });
+        await queryClient.cancelQueries({
+          queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId, familyId],
+        });
+        queryClient.removeQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId, familyId] });
+        queryClient.removeQueries({
+          queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId, familyId],
+        });
+      })();
+    }
+  }, [
+    clearSessionAfterUnauthorized,
+    familyId,
+    personalIdentity,
+    personalWeekQuery.error,
+    queryClient,
+    userId,
+  ]);
 
   const closeEventEditorFromHistory = useCallback(() => {
     if (
@@ -638,18 +907,9 @@ export default function WeekPage({
       weekQuery.error.status === 401 &&
       weekQuery.error.code === 'UNAUTHORIZED'
     ) {
-      void (async () => {
-        if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
-        await queryClient.cancelQueries({ queryKey: ['session'] });
-        if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
-        queryClient.setQueryData(['session'], null);
-        await queryClient.cancelQueries({ queryKey: ['week', userId] });
-        await queryClient.cancelQueries({ queryKey: ['families', userId] });
-        queryClient.removeQueries({ queryKey: ['week', userId] });
-        queryClient.removeQueries({ queryKey: ['families', userId] });
-      })();
+      void clearSessionAfterUnauthorized();
     }
-  }, [queryClient, userId, weekQuery.error]);
+  }, [clearSessionAfterUnauthorized, weekQuery.error]);
 
   const onCapture = () => navigate('/import');
   const error = weekQuery.error;
@@ -825,6 +1085,36 @@ export default function WeekPage({
               予定を追加
             </button>
           </div>
+          {personalWeekQuery.isError ||
+          revokedPersonalIdentity === personalIdentity ||
+          (personalResponseMatches && personalResponse?.status !== 'ready') ? (
+            <aside
+              data-testid="personal-events-status"
+              className="mb-[var(--spacing-md)] rounded-[var(--radius-md)] border border-line bg-surface p-[var(--spacing-sm)] text-xs leading-relaxed text-muted"
+            >
+              <p className="m-0">
+                {personalWeekQuery.error instanceof PersonalEventsApiError &&
+                personalWeekQuery.error.code === 'REAUTH_REQUIRED'
+                  ? '個人予定の再認証が必要です。家族の予定は引き続き表示しています。'
+                  : personalWeekQuery.error instanceof PersonalEventsApiError &&
+                      (personalWeekQuery.error.code === 'FORBIDDEN' ||
+                        personalWeekQuery.error.code === 'NOT_FOUND' ||
+                        personalWeekQuery.error.code === 'CALENDAR_ACCESS_DENIED')
+                    ? '個人予定は現在表示できません。家族の予定は引き続き表示しています。'
+                    : personalWeekQuery.isError || revokedPersonalIdentity === personalIdentity
+                      ? '個人予定を読み込めませんでした。家族の予定は引き続き表示しています。'
+                      : personalResponse?.status === 'authorization_required'
+                        ? '個人予定を表示するには、家族ページで Google の同意が必要です。'
+                        : '表示する個人カレンダーを家族ページで選んでください。'}
+              </p>
+              <Link
+                to="/family"
+                className="mt-[var(--spacing-xs)] inline-flex min-h-[var(--tap-target-min)] items-center text-xs font-semibold underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                家族ページを開く
+              </Link>
+            </aside>
+          ) : null}
           {data.week.start !== getMondayAnchor(data.week.today) && (
             <button
               type="button"
@@ -862,7 +1152,13 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      personalEvents={getPersonalEventsForDate(
+                        day.date,
+                        personalEvents,
+                        hideRoutines,
+                      )}
                       members={data.members}
+                      personalMember={personalMember}
                       isToday={isToday}
                       onAdd={(date, trigger) => openNewEvent(date, trigger)}
                       onEdit={openEditEvent}
@@ -873,11 +1169,20 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      personalEvents={getPersonalEventsForDate(
+                        day.date,
+                        personalEvents,
+                        hideRoutines,
+                      )}
                       members={data.members}
+                      personalMember={personalMember}
                       isToday={isToday}
                       onAdd={(date, trigger) => openNewEvent(date, trigger)}
                       onEdit={openEditEvent}
                       disabled={!canEditEvents}
+                      onShowMorePersonal={(date) =>
+                        setPersonalDialog({ identity: personalIdentity, date })
+                      }
                     />
                   );
                 })}
@@ -898,7 +1203,9 @@ export default function WeekPage({
                   key={day.date}
                   day={day}
                   events={getVisibleEvents(day, data, hideRoutines)}
+                  personalEvents={getPersonalEventsForDate(day.date, personalEvents, hideRoutines)}
                   members={data.members}
+                  personalMember={personalMember}
                   isToday={day.date === data.week.today}
                   longWeekendDayCount={longWeekendCounts.get(day.date)}
                   onAdd={(date, trigger) => openNewEvent(date, trigger)}
@@ -933,6 +1240,16 @@ export default function WeekPage({
           onUnauthorized={() => void clearSessionAfterUnauthorized()}
         />
       )}
+      {personalDialog?.identity === personalIdentity &&
+        personalResponseMatches &&
+        personalEvents.length > 0 && (
+          <PersonalEventsDialog
+            date={personalDialog.date}
+            events={getPersonalEventsForDate(personalDialog.date, personalEvents, hideRoutines)}
+            member={personalMember}
+            onClose={() => setPersonalDialog(null)}
+          />
+        )}
       <footer className="mt-[var(--spacing-xl)] border-t border-line pt-[var(--spacing-md)] text-center">
         <Link
           to="/privacy"

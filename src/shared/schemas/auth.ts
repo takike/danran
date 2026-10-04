@@ -97,11 +97,28 @@ export const oauthFamilyAclPayloadSchema = z
 
 export type OAuthFamilyAclPayload = z.infer<typeof oauthFamilyAclPayloadSchema>;
 
+export const oauthPersonalEventsPayloadSchema = z
+  .object({
+    purpose: z.literal('personal-events'),
+    codeVerifier: z.string().min(1),
+    nonce: z.string().min(1),
+    userId: z.string().min(1).max(128),
+    sessionId: z.string().min(1).max(128),
+    familyId: z.string().min(1).max(128),
+    memberId: z.string().min(1).max(128),
+  })
+  .strict();
+export type OAuthPersonalEventsPayload = z.infer<typeof oauthPersonalEventsPayloadSchema>;
+
 /**
  * Decrypted OAuth flow payload stored in oauth_states.
  * Retains backward-compatibility for legacy login payload {codeVerifier, nonce}.
  */
-export const oauthPayloadSchema = z.union([oauthFamilyAclPayloadSchema, oauthLoginPayloadSchema]);
+export const oauthPayloadSchema = z.union([
+  oauthPersonalEventsPayloadSchema,
+  oauthFamilyAclPayloadSchema,
+  oauthLoginPayloadSchema,
+]);
 
 export type OAuthPayload = z.infer<typeof oauthPayloadSchema>;
 

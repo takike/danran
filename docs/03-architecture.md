@@ -93,6 +93,12 @@ danran/
 - **二重表示の回避**：Danran が個人カレンダーに書き出した予定（送迎ブロック等）も free/busy に含まれてしまう。free/busy は中身を返さないので、**D1 に記録した「書き出し済み区間」と完全一致する busy 区間を差し引く**。
 - `transparency: transparent`（「予定なし」扱い）の予定は、Google 側で busy に含まれない。
 
+### ① 個人カレンダー（本人の画面）
+
+- Task 2-1 では、本人が段階的認可に同意し、本人が選択した個人カレンダーだけを本人のトークンで読む。予定の内容を返すのはその本人への `/week/personal` 応答だけであり、家族用 `/week` API や他のメンバーの API には混ぜない。
+- `member_calendars` は大人のメンバーと本人の Google カレンダー ID、および `display_enabled` を保持する。カレンダー名や個人予定の中身は保存しない。保存行のない初回は `/family` の選択下書きとして primary だけを選び、保存までは personal-week を `unselected` とする。全カレンダーを外して保存した状態は明示的な未選択として保持する。この本人表示設定は将来の free/busy 共有選択・同意とは独立する。
+- 個人予定は D1、キャッシュ、ログに保存しない。選択カレンダーのいずれかが取得に失敗した場合、部分的なイベント一覧を返さず個人予定 API 全体を失敗させる。家族予定 API と画面は独立して表示を続ける。
+
 ### ② 家族カレンダー
 
 - 家族作成時に、オーナーのトークンで `calendars.insert` を呼んで作成する（名前例「Danran（家族）」、タイムゾーン `Asia/Tokyo`）。
@@ -123,7 +129,7 @@ families         id, name, family_calendar_id, owner_user_id, day_start_hour(8),
                  creation_status(creating|ready|uncertain|failed), calendar_creation_id, created_at
 members          id, family_id, user_id NULL, kind(adult|child), name,
                  color(indigo|green|ochre|purple|coral|teal|rose|slate), sort_order, status(active|pending)
-member_calendars member_id, calendar_id, include_in_busy(bool)          -- free/busy 対象の個人カレンダー
+member_calendars member_id, calendar_id, display_enabled(bool)          -- 本人画面で表示する個人カレンダー（free/busy共有同意とは独立）
 invites          id, family_id, token_hash, expires_at, used_at, claimed_user_id NULL,
                  status(available|claiming|uncertain|used), created_at
 closure_days     id, family_id, date, label, member_ids                -- 保育園の休園日など
@@ -161,15 +167,15 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
   - `openid email profile`
   - `https://www.googleapis.com/auth/calendar.app.created`：家族カレンダーの作成と、その上の予定の読み書き
   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：free/busy 対象カレンダーの選択
-  - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events`（個人予定の取得・書き出し）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。
+  - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events.readonly`（本人の個人予定の読み取り）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。読み取り専用のため `calendar.events` は要求しない。
   - `https://www.googleapis.com/auth/calendar.acls`：**招待リンクを発行するオーナーだけ**に、発行時に追加で同意を求める（incremental authorization）。家族カレンダーの共有設定にのみ使う
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。
 
 ### 週ビューの取得（Phase 1: 家族予定のみ）
 
-週ビュー API は `GET /api/families/:id/week?start=YYYY-MM-DD`。`start` を省略すると `Asia/Tokyo` の今日を含む週を返す。家族カレンダーの Google イベントと D1 の `event_meta`、有効なメンバー、祝日、休園日を読み取り、`shared/domain/dayLayout` で日ごとのレイアウトを決める。完全な入出力契約、境界条件、エラーコードは [15-week-api.md](15-week-api.md) を参照。
+家族週ビュー API は `GET /api/families/:id/week?start=YYYY-MM-DD`。`start` を省略すると `Asia/Tokyo` の今日を含む週を返す。家族カレンダーの Google イベントと D1 の `event_meta`、有効なメンバー、祝日、休園日を読み取り、`shared/domain/dayLayout` で日ごとのレイアウトを決める。個人予定はこのレスポンスに含めない。Task 2-1 の `GET /api/families/:id/week/personal?start=YYYY-MM-DD` は本人の選択カレンダーだけを本人の Google トークンで取得し、本人だけに予定内容を返す。完全な家族 API の契約は [15-week-api.md](15-week-api.md)、個人予定 API は [18-personal-events.md](18-personal-events.md) を参照。
 
-この API は Phase 1 では家族カレンダーだけを読む。リクエストした本人を含め、個人カレンダーの `events.list` と全メンバーの `freeBusy.query` は呼ばず、予定作成・更新・削除も行わない。個人カレンダーの空きや本人だけに見える予定は Phase 2 で追加認可し、Task 2-2 以降で週 API に組み込む予定。週範囲が祝日ライブラリの対応年（1970–2050）を越える場合は、祝日を平日と誤認しないようリクエストを拒否する。
+家族週 API はリクエストした本人を含め個人カレンダーの `events.list` と全メンバーの `freeBusy.query` を呼ばない。個人予定は別 API で取得し、失敗しても互いに影響しない。週範囲が祝日ライブラリの対応年（1970–2050）を越える場合は、祝日を平日と誤認しないようリクエストを拒否する。
 
 Google の家族カレンダー `events.list` は、リクエストユーザー自身のトークンで `singleEvents=true`、`orderBy=startTime`、`timeZone=Asia/Tokyo`、週の JST 境界、`showDeleted=false` を指定して取得する。最大10ページまで追跡し、ページ上限到達、同じページトークンの再出現、または不完全な取得はエラーとして扱う。イベントの Google metadata と `event_meta` は許可リストに沿ってレスポンスへ整形し、個人カレンダー情報は混ぜない。
 
