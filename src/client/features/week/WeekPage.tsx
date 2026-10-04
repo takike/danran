@@ -1,0 +1,706 @@
+import { WeekApiError } from '@client/api/week';
+import { AuthenticatedShell } from '@client/components/AuthenticatedShell';
+import { Card } from '@client/components/Card';
+import { Chip } from '@client/components/Chip';
+import { MemberDot } from '@client/components/MemberDot';
+import { OAuthNotices } from '@client/components/OAuthNotices';
+import { useWeekQuery } from '@client/features/week/useWeek';
+import { getLongWeekendBadges, getVisibleDayEvents } from '@shared/domain/weekPresentation';
+import type { AuthUser } from '@shared/schemas/auth';
+import { type DateKey, dateKeySchema } from '@shared/schemas/date';
+import type { WeekDay, WeekEvent, WeekResponse } from '@shared/schemas/week';
+import { getMondayAnchor, getTodayDateKey } from '@shared/time';
+import {
+  formatDayNumber,
+  formatEventTime,
+  formatFullDateLabel,
+  formatMonthHeading,
+  formatWeekPeriod,
+  formatWeekday,
+} from '@shared/time/format';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  CalendarDays,
+  RefreshCw,
+  Repeat,
+  ShoppingBag,
+} from 'lucide-react';
+import type React from 'react';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+
+interface WeekPageProps {
+  userId: string;
+  familyId: string;
+  familyName: string;
+}
+
+type WeekMember = WeekResponse['members'][number];
+
+const memberColor = (member?: WeekMember): string =>
+  member ? `var(--member-${member.color})` : 'var(--muted)';
+
+function parseWeekAnchor(value: string | null): DateKey | undefined {
+  if (!value) return undefined;
+  const parsed = dateKeySchema.safeParse(value);
+  if (!parsed.success) return undefined;
+  const year = Number(value.slice(0, 4));
+  if (year < 1970 || year > 2050) return undefined;
+  try {
+    const anchor = getMondayAnchor(parsed.data);
+    const anchorYear = Number(anchor.slice(0, 4));
+    if (anchorYear < 1970 || anchorYear > 2050) return undefined;
+    return anchor;
+  } catch {
+    return undefined;
+  }
+}
+
+function getVisibleEvents(day: WeekDay, data: WeekResponse, hideRoutines: boolean): WeekEvent[] {
+  return getVisibleDayEvents(day, data.events, hideRoutines);
+}
+
+function MemberLegend({ members }: { members: WeekMember[] }): React.ReactElement {
+  return (
+    <ul
+      aria-label="メンバー"
+      className="mt-[var(--spacing-md)] mb-0 flex flex-wrap gap-x-[var(--spacing-md)] gap-y-[var(--spacing-sm)] p-0 list-none"
+    >
+      {members.map((member) => (
+        <li key={member.id} className="flex min-h-[var(--tap-target-min)] items-center">
+          <MemberDot name={member.name} color={memberColor(member)} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EventMembers({
+  memberIds,
+  members,
+}: { memberIds: string[]; members: WeekMember[] }): React.ReactElement | null {
+  if (memberIds.length === 0) return null;
+  const byId = new Map(members.map((member) => [member.id, member]));
+  const known = memberIds
+    .map((id) => byId.get(id))
+    .filter((member): member is WeekMember => member !== undefined);
+  if (known.length === 0) return null;
+  return (
+    <span className="inline-flex flex-wrap gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+      {known.map((member) => (
+        <MemberDot
+          key={member.id}
+          name={member.name}
+          color={memberColor(member)}
+          className="text-xs"
+        />
+      ))}
+    </span>
+  );
+}
+
+function EventBadges({
+  event,
+  members,
+  showAssignee = true,
+}: { event: WeekEvent; members: WeekMember[]; showAssignee?: boolean }): React.ReactElement | null {
+  const assignee = showAssignee
+    ? members.find((member) => member.id === event.assigneeMemberId)
+    : undefined;
+  if (!assignee && event.status !== 'tentative' && !event.isRoutine) return null;
+  return (
+    <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--spacing-xs)]">
+      {assignee && (
+        <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+          担当 {assignee.name}
+        </span>
+      )}
+      {event.status === 'tentative' && (
+        <span className="rounded-[var(--radius-sm)] border border-dashed border-accent px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs text-accent">
+          候補
+        </span>
+      )}
+      {event.isRoutine && <span className="text-xs text-muted">繰り返し</span>}
+    </span>
+  );
+}
+
+function DateLabel({
+  day,
+  isToday,
+  large = false,
+}: { day: WeekDay; isToday: boolean; large?: boolean }): React.ReactElement {
+  return (
+    <h3
+      className={`m-0 flex min-w-0 flex-wrap items-baseline gap-[var(--spacing-xs)] font-semibold ${large ? 'text-accent' : 'shrink-0'}`}
+    >
+      <span className={`${large ? 'text-4xl' : 'text-2xl'} leading-none tabular-nums`}>
+        {formatDayNumber(day.date)}
+      </span>
+      <span
+        className={`text-sm font-medium ${day.weekday === 0 ? 'text-accent' : day.weekday === 6 ? 'text-member-indigo' : 'text-muted'}`}
+      >
+        {formatWeekday(day.date)}
+      </span>
+      {isToday && (
+        <span className="rounded-[var(--radius-sm)] bg-accent-tint px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-accent">
+          今日
+        </span>
+      )}
+    </h3>
+  );
+}
+
+function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
+  return (
+    <span className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full items-center gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-muted">
+      {event.isRoutine && <Repeat size={14} aria-hidden="true" className="shrink-0" />}
+      <span className="break-words [overflow-wrap:anywhere]">{event.title}</span>
+      <span className="break-words tabular-nums [overflow-wrap:anywhere]">
+        {formatEventTime(event.time)}
+      </span>
+    </span>
+  );
+}
+
+function CompactDay({
+  day,
+  events,
+  members,
+  isToday,
+}: {
+  day: WeekDay;
+  events: WeekEvent[];
+  members: WeekMember[];
+  isToday: boolean;
+}): React.ReactElement {
+  const routineEvents = events.filter((event) => event.isRoutine);
+  const otherEvents = events.filter((event) => !event.isRoutine);
+  return (
+    <li
+      data-testid="week-day"
+      data-date={day.date}
+      data-layout="compact"
+      aria-label={formatFullDateLabel(day.date)}
+      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-start gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-sm)] last:border-0"
+    >
+      <DateLabel day={day} isToday={isToday} />
+      <div className="flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] py-[var(--spacing-2xs)]">
+        {routineEvents.map((event) => (
+          <RoutineChip key={event.id} event={event} />
+        ))}
+        {otherEvents.map((event) => (
+          <span
+            key={event.id}
+            className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-accent-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
+          >
+            <EventMembers memberIds={event.memberIds} members={members} />
+            <span className="break-words font-medium [overflow-wrap:anywhere]">{event.title}</span>
+            <EventBadges event={event} members={members} />
+          </span>
+        ))}
+        {events.length === 0 && <span className="text-xs text-muted">予定なし</span>}
+      </div>
+    </li>
+  );
+}
+
+function ExpandedDay({
+  day,
+  events,
+  members,
+  isToday,
+}: {
+  day: WeekDay;
+  events: WeekEvent[];
+  members: WeekMember[];
+  isToday: boolean;
+}): React.ReactElement {
+  return (
+    <li
+      data-testid="week-day"
+      data-date={day.date}
+      data-layout="expanded"
+      aria-label={formatFullDateLabel(day.date)}
+      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-start gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-sm)] last:border-0"
+    >
+      <DateLabel day={day} isToday={isToday} />
+      <Card className="min-w-0 rounded-[var(--radius-lg)] border-line p-[var(--spacing-sm)]">
+        <div className="mb-[var(--spacing-sm)] flex flex-wrap items-center justify-between gap-[var(--spacing-xs)]">
+          <span className="rounded-[var(--radius-sm)] border border-accent px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-accent">
+            いつもと違う日
+          </span>
+          {events.length === 0 && <span className="text-xs text-muted">予定なし</span>}
+        </div>
+        <ul className="m-0 list-none space-y-[var(--spacing-sm)] p-0">
+          {events.map((event) => (
+            <li key={event.id} className="min-w-0">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)] text-xs text-muted">
+                <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
+                <EventBadges event={event} members={members} />
+              </div>
+              <div className="mt-[var(--spacing-xs)] flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+                <EventMembers memberIds={event.memberIds} members={members} />
+                <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
+                  {event.title}
+                </span>
+              </div>
+              {event.items.length > 0 && (
+                <div className="mt-[var(--spacing-sm)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
+                  {event.items.map((item, index) => (
+                    <span
+                      key={`${event.id}-item-${index}`}
+                      className="inline-flex min-w-0 max-w-full items-start gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
+                    >
+                      <ShoppingBag
+                        size={14}
+                        aria-hidden="true"
+                        className="mt-[var(--spacing-2xs)] shrink-0"
+                      />
+                      <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
+                        {item}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </li>
+  );
+}
+
+function WeekendEvent({
+  event,
+  day,
+  members,
+}: { event: WeekEvent; day: WeekDay; members: WeekMember[] }): React.ReactElement {
+  const member = members.find((candidate) => event.memberIds.includes(candidate.id));
+  const assignee = members.find((candidate) => candidate.id === event.assigneeMemberId);
+  return (
+    <li className="grid min-w-0 grid-cols-[var(--event-time-column)_minmax(0,1fr)] gap-[var(--spacing-xs)] py-[var(--spacing-xs)]">
+      <time className="break-words pt-[var(--spacing-2xs)] text-xs tabular-nums text-muted [overflow-wrap:anywhere]">
+        {formatEventTime(event.time, day.date)}
+      </time>
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-xs)]">
+          {member && (
+            <span
+              className="h-[var(--member-dot-size)] w-[var(--member-dot-size)] shrink-0 rounded-[var(--radius-full)]"
+              aria-hidden="true"
+              style={{ backgroundColor: memberColor(member) }}
+            />
+          )}
+          <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
+            {event.title}
+          </span>
+          <EventBadges event={event} members={members} showAssignee={false} />
+        </div>
+        <div className="mt-[var(--spacing-2xs)] flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+          <EventMembers memberIds={event.memberIds} members={members} />
+          {assignee && (
+            <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+              担当 {assignee.name}
+            </span>
+          )}
+          {event.items.map((item, index) => (
+            <span
+              key={`${event.id}-item-${index}`}
+              className="inline-flex min-w-0 max-w-full items-start gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs"
+            >
+              <ShoppingBag
+                size={14}
+                aria-hidden="true"
+                className="mt-[var(--spacing-2xs)] shrink-0"
+              />
+              <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">
+                {item}
+              </span>
+            </span>
+          ))}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function WeekendDay({
+  day,
+  events,
+  members,
+  isToday,
+  longWeekendDayCount,
+}: {
+  day: WeekDay;
+  events: WeekEvent[];
+  members: WeekMember[];
+  isToday: boolean;
+  longWeekendDayCount?: number;
+}): React.ReactElement {
+  return (
+    <article
+      aria-label={formatFullDateLabel(day.date)}
+      data-testid="week-day"
+      data-date={day.date}
+      data-layout="weekend-card"
+      className="mb-[var(--spacing-md)] rounded-[var(--radius-lg)] border border-transparent bg-surface p-[var(--spacing-md)] text-ink shadow-[var(--week-card-shadow)]"
+    >
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-[var(--spacing-sm)]">
+        <div className="flex min-w-0 items-baseline gap-[var(--spacing-sm)]">
+          <DateLabel day={day} isToday={isToday} large />
+          {day.holidayName && (
+            <span className="break-words text-xs text-accent [overflow-wrap:anywhere]">
+              {day.holidayName}
+            </span>
+          )}
+        </div>
+        {longWeekendDayCount && (
+          <span className="rounded-[var(--radius-full)] bg-accent px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs font-semibold text-surface">
+            {longWeekendDayCount}連休
+          </span>
+        )}
+      </header>
+
+      {(day.closures.length > 0 || day.holidayName) && (
+        <div className="mt-[var(--spacing-sm)] flex flex-wrap gap-[var(--spacing-xs)]">
+          {day.closures.map((closure, index) => (
+            <Chip key={`${day.date}-closure-${index}`} className="max-w-full text-xs">
+              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{closure.label}</span>
+            </Chip>
+          ))}
+          {day.holidayName && <Chip className="text-xs">祝日</Chip>}
+        </div>
+      )}
+
+      {events.length > 0 ? (
+        <ul className="mt-[var(--spacing-md)] mb-0 list-none divide-y divide-line p-0">
+          {events.map((event) => (
+            <WeekendEvent key={event.id} event={event} day={day} members={members} />
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">予定なし</p>
+      )}
+    </article>
+  );
+}
+
+function InvalidWeek(): React.ReactElement {
+  return (
+    <section
+      role="alert"
+      className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)]"
+    >
+      <h2 className="m-0 text-base font-semibold">週の日付を確認してください</h2>
+      <p className="mt-[var(--spacing-sm)] mb-0 text-sm leading-relaxed text-muted">
+        1970年から2050年までの実在する日付を指定してください。
+      </p>
+    </section>
+  );
+}
+
+export default function WeekPage({
+  userId,
+  familyId,
+  familyName,
+}: WeekPageProps): React.ReactElement {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const urlWeek = searchParams.get('week');
+  const validUrlAnchor = parseWeekAnchor(urlWeek);
+  const invalidUrlWeek = urlWeek !== null && validUrlAnchor === undefined;
+  const currentMonday = getMondayAnchor(getTodayDateKey());
+  const requestStart = invalidUrlWeek ? undefined : (validUrlAnchor ?? currentMonday);
+  const [hideRoutines, setHideRoutines] = useState(false);
+
+  useEffect(() => {
+    if (requestStart === undefined || urlWeek === requestStart) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('week', requestStart);
+    setSearchParams(next, { replace: true });
+  }, [requestStart, searchParams, setSearchParams, urlWeek]);
+
+  const weekQuery = useWeekQuery(userId, invalidUrlWeek ? undefined : familyId, requestStart);
+  const data = weekQuery.isError ? undefined : weekQuery.data;
+  const longWeekendCounts = new Map(
+    data ? getLongWeekendBadges(data.days).map((badge) => [badge.start, badge.dayCount]) : [],
+  );
+
+  const showWeek = (start: DateKey | undefined, replace = false) => {
+    const next = new URLSearchParams(searchParams);
+    if (start) next.set('week', start);
+    else next.delete('week');
+    setSearchParams(next, { replace });
+  };
+
+  useEffect(() => {
+    if (
+      weekQuery.error instanceof WeekApiError &&
+      weekQuery.error.status === 401 &&
+      weekQuery.error.code === 'UNAUTHORIZED'
+    ) {
+      void (async () => {
+        if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
+        await queryClient.cancelQueries({ queryKey: ['session'] });
+        if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
+        queryClient.setQueryData(['session'], null);
+        await queryClient.cancelQueries({ queryKey: ['week', userId] });
+        await queryClient.cancelQueries({ queryKey: ['families', userId] });
+        queryClient.removeQueries({ queryKey: ['week', userId] });
+        queryClient.removeQueries({ queryKey: ['families', userId] });
+      })();
+    }
+  }, [queryClient, userId, weekQuery.error]);
+
+  const onCapture = () => navigate('/import');
+  const error = weekQuery.error;
+  const unauthorized =
+    error instanceof WeekApiError && error.status === 401 && error.code === 'UNAUTHORIZED';
+  const needsGoogleReauth = error instanceof WeekApiError && error.code === 'REAUTH_REQUIRED';
+  const invalidApiRange = error instanceof WeekApiError && error.code === 'INVALID_INPUT';
+  const calendarAccessDenied =
+    error instanceof WeekApiError && error.code === 'CALENDAR_ACCESS_DENIED';
+
+  return (
+    <AuthenticatedShell activeTab="week" onCapture={onCapture} mainTestId="home-screen">
+      <OAuthNotices />
+      <header className="mb-[var(--spacing-lg)]">
+        <p className="m-0 min-w-0 max-w-full break-words text-sm text-muted [overflow-wrap:anywhere]">
+          {familyName}
+        </p>
+        <div className="mt-[var(--spacing-xs)] flex items-center justify-between gap-[var(--spacing-sm)]">
+          <div className="min-w-0">
+            {data ? (
+              <>
+                <p className="m-0 text-sm text-muted">
+                  {formatMonthHeading(data.week.start, data.week.endInclusive)}
+                </p>
+                <h1 className="m-0 break-words text-3xl font-semibold tracking-tight">
+                  {formatWeekPeriod(data.week.start, data.week.endInclusive)}
+                </h1>
+              </>
+            ) : (
+              <h1 className="m-0 text-2xl font-bold">週の予定</h1>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-[var(--spacing-xs)]">
+            <button
+              type="button"
+              aria-label="前の週"
+              disabled={!data}
+              onClick={() => data && showWeek(data.week.prevWeekStart)}
+              className="inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] items-center justify-center rounded-[var(--radius-full)] border border-line bg-surface text-ink disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <ArrowLeft size={20} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              aria-label="次の週"
+              disabled={!data}
+              onClick={() => data && showWeek(data.week.nextWeekStart)}
+              className="inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] items-center justify-center rounded-[var(--radius-full)] border border-line bg-surface text-ink disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <ArrowRight size={20} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+        {data && <MemberLegend members={data.members} />}
+      </header>
+
+      {invalidUrlWeek ? (
+        <>
+          <InvalidWeek />
+          <button
+            type="button"
+            onClick={() => showWeek(currentMonday, true)}
+            className="mt-[var(--spacing-md)] min-h-[var(--tap-target-min)] w-full rounded-[var(--radius-md)] bg-accent px-[var(--spacing-md)] text-sm font-semibold text-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            今週へ
+          </button>
+        </>
+      ) : weekQuery.isLoading ? (
+        <section
+          aria-live="polite"
+          className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-lg)] text-center"
+        >
+          <RefreshCw
+            size={24}
+            aria-hidden="true"
+            className="mx-auto mb-[var(--spacing-sm)] animate-spin text-accent"
+          />
+          <p className="m-0 text-sm text-muted">週の予定を読み込み中...</p>
+        </section>
+      ) : weekQuery.isError || !data ? (
+        <section
+          role="alert"
+          className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)]"
+        >
+          <div className="flex items-start gap-[var(--spacing-sm)]">
+            <AlertCircle
+              size={20}
+              aria-hidden="true"
+              className="mt-[var(--spacing-2xs)] shrink-0 text-accent"
+            />
+            <div className="min-w-0">
+              <h2 className="m-0 text-sm font-semibold">
+                {unauthorized
+                  ? 'ログインが必要です'
+                  : invalidApiRange
+                    ? '週の日付を確認してください'
+                    : needsGoogleReauth
+                      ? 'Google カレンダーの再認証が必要です'
+                      : calendarAccessDenied
+                        ? '家族カレンダーにアクセスできません'
+                        : '週の予定を取得できませんでした'}
+              </h2>
+              <p className="mt-[var(--spacing-xs)] mb-0 break-words text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">
+                {unauthorized
+                  ? 'セッションの有効期限が切れました。Google で再度ログインしてください。'
+                  : invalidApiRange
+                    ? '祝日を含めた週の範囲が対応期間外です。今週の予定を表示してください。'
+                    : needsGoogleReauth
+                      ? 'Google で再度ログインすると家族カレンダーを読み込めます。'
+                      : calendarAccessDenied
+                        ? '家族カレンダーが共有されているか、オーナーに確認してください。'
+                        : error instanceof WeekApiError && error.code
+                          ? error.message
+                          : '予定を読み込めませんでした。通信状態を確認して、もう一度お試しください。'}
+              </p>
+            </div>
+          </div>
+          <div className="mt-[var(--spacing-md)] flex flex-col gap-[var(--spacing-sm)]">
+            {unauthorized ? (
+              <button
+                type="button"
+                data-testid="login-button"
+                onClick={() => window.location.assign('/api/auth/login')}
+                className="min-h-[var(--tap-target-min)] rounded-[var(--radius-md)] bg-accent px-[var(--spacing-md)] text-sm font-semibold text-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                Google でログイン
+              </button>
+            ) : needsGoogleReauth ? (
+              <button
+                type="button"
+                onClick={() => window.location.assign('/api/auth/login')}
+                className="min-h-[var(--tap-target-min)] rounded-[var(--radius-md)] bg-accent px-[var(--spacing-md)] text-sm font-semibold text-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                Google で再ログイン
+              </button>
+            ) : invalidApiRange ? (
+              <button
+                type="button"
+                onClick={() => showWeek(currentMonday, true)}
+                className="min-h-[var(--tap-target-min)] rounded-[var(--radius-md)] bg-accent px-[var(--spacing-md)] text-sm font-semibold text-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                今週へ
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void weekQuery.refetch()}
+                className="inline-flex min-h-[var(--tap-target-min)] items-center justify-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-md)] text-sm font-medium hover:bg-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                <RefreshCw size={16} aria-hidden="true" />
+                再試行
+              </button>
+            )}
+          </div>
+        </section>
+      ) : (
+        <>
+          {data.week.start !== getMondayAnchor(data.week.today) && (
+            <button
+              type="button"
+              onClick={() => showWeek(getMondayAnchor(data.week.today))}
+              className="mb-[var(--spacing-md)] inline-flex min-h-[var(--tap-target-min)] items-center gap-[var(--spacing-xs)] rounded-[var(--radius-full)] border border-line bg-surface px-[var(--spacing-md)] text-sm font-medium text-ink hover:bg-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <CalendarDays size={16} aria-hidden="true" />
+              今週へ
+            </button>
+          )}
+
+          <section aria-labelledby="weekday-heading">
+            <div className="flex flex-wrap items-center justify-between gap-[var(--spacing-sm)] border-b border-line pb-[var(--spacing-sm)]">
+              <h2 id="weekday-heading" className="m-0 text-sm font-semibold tracking-wide">
+                平日 いつもどおり
+              </h2>
+              <button
+                type="button"
+                aria-pressed={hideRoutines}
+                onClick={() => setHideRoutines((value) => !value)}
+                className="inline-flex min-h-[var(--tap-target-min)] items-center rounded-[var(--radius-sm)] px-[var(--spacing-xs)] text-xs text-muted underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                {hideRoutines ? 'ルーティンを表示' : 'ルーティンを隠す'}
+              </button>
+            </div>
+            <ul className="m-0 list-none p-0">
+              {[...data.days]
+                .sort((left, right) => left.date.localeCompare(right.date))
+                .filter((day) => day.layout !== 'weekend-card')
+                .map((day) => {
+                  const events = getVisibleEvents(day, data, hideRoutines);
+                  const isToday = day.date === data.week.today;
+                  return day.layout === 'expanded' ? (
+                    <ExpandedDay
+                      key={day.date}
+                      day={day}
+                      events={events}
+                      members={data.members}
+                      isToday={isToday}
+                    />
+                  ) : (
+                    <CompactDay
+                      key={day.date}
+                      day={day}
+                      events={events}
+                      members={data.members}
+                      isToday={isToday}
+                    />
+                  );
+                })}
+            </ul>
+          </section>
+
+          <section aria-labelledby="weekend-heading" className="mt-[var(--spacing-xl)]">
+            <div className="mb-[var(--spacing-md)] flex items-center justify-between gap-[var(--spacing-sm)]">
+              <h2 id="weekend-heading" className="m-0 text-base font-bold text-accent">
+                週末・祝日
+              </h2>
+            </div>
+            {[...data.days]
+              .sort((left, right) => left.date.localeCompare(right.date))
+              .filter((day) => day.layout === 'weekend-card')
+              .map((day) => (
+                <WeekendDay
+                  key={day.date}
+                  day={day}
+                  events={getVisibleEvents(day, data, hideRoutines)}
+                  members={data.members}
+                  isToday={day.date === data.week.today}
+                  longWeekendDayCount={longWeekendCounts.get(day.date)}
+                />
+              ))}
+          </section>
+          <p className="mt-[var(--spacing-md)] min-w-0 max-w-full break-words text-center text-xs text-muted [overflow-wrap:anywhere]">
+            {data.family.name}の家族予定
+          </p>
+        </>
+      )}
+      <footer className="mt-[var(--spacing-xl)] border-t border-line pt-[var(--spacing-md)] text-center">
+        <Link
+          to="/privacy"
+          data-testid="privacy-link"
+          className="inline-flex min-h-[var(--tap-target-min)] items-center justify-center rounded-[var(--radius-sm)] px-[var(--spacing-md)] py-[var(--spacing-xs)] text-xs text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        >
+          プライバシーポリシー
+        </Link>
+      </footer>
+    </AuthenticatedShell>
+  );
+}
