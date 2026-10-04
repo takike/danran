@@ -14,6 +14,10 @@ Danran は家族の予定共有 PWA。「ルーティンは背景に、週末は
 4. UI を触るときは [docs/02-screens.md](docs/02-screens.md)
 5. 迷ったら [docs/06-decisions.md](docs/06-decisions.md)
 
+## タスクの指示書
+
+作業の指示は [docs/tasks/](docs/tasks/) のファイルで渡される。人間から「docs/tasks/<ファイル名> を実施して」と言われたら、まず `git pull` で最新にし、そのファイルを最初から最後まで読んで、書かれたとおりに進める。進め方は [docs/tasks/README.md](docs/tasks/README.md) を参照。
+
 ## コマンド（Phase 0 で整備中。変えたらここを更新すること）
 
 ### 実装済みコマンド（Task 0-1, 0-2, 0-3, 0-4）
