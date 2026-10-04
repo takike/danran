@@ -17,7 +17,7 @@ export default function PrivacyPage(): React.ReactElement {
   return (
     <main
       data-testid="privacy-screen"
-      className="max-w-[390px] mx-auto min-h-screen px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border"
+      className="mx-auto min-h-screen w-full max-w-[var(--app-max-width)] px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border"
     >
       <header className="mb-[var(--spacing-lg)]">
         <Link

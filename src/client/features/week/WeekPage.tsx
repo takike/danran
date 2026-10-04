@@ -5,11 +5,15 @@ import { Chip } from '@client/components/Chip';
 import { MemberDot } from '@client/components/MemberDot';
 import { OAuthNotices } from '@client/components/OAuthNotices';
 import { useWeekQuery } from '@client/features/week/useWeek';
-import { getLongWeekendBadges, getVisibleDayEvents } from '@shared/domain/weekPresentation';
+import {
+  getLongWeekendBadges,
+  getVisibleDayEvents,
+  getVisibleDayLayout,
+} from '@shared/domain/weekPresentation';
 import type { AuthUser } from '@shared/schemas/auth';
 import { type DateKey, dateKeySchema } from '@shared/schemas/date';
 import type { WeekDay, WeekEvent, WeekResponse } from '@shared/schemas/week';
-import { getMondayAnchor, getTodayDateKey } from '@shared/time';
+import { addCalendarWeeks, getMondayAnchor, getTodayDateKey } from '@shared/time';
 import {
   formatDayNumber,
   formatEventTime,
@@ -184,11 +188,13 @@ function CompactDay({
       data-testid="week-day"
       data-date={day.date}
       data-layout="compact"
-      aria-label={formatFullDateLabel(day.date)}
-      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-start gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-sm)] last:border-0"
+      aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 ? '、予定なし' : ''}`}
+      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
-      <div className="flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] py-[var(--spacing-2xs)]">
+      <div
+        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
+      >
         {routineEvents.map((event) => (
           <RoutineChip key={event.id} event={event} />
         ))}
@@ -202,7 +208,7 @@ function CompactDay({
             <EventBadges event={event} members={members} />
           </span>
         ))}
-        {events.length === 0 && <span className="text-xs text-muted">予定なし</span>}
+        {events.length === 0 && <span className="sr-only">予定なし</span>}
       </div>
     </li>
   );
@@ -417,6 +423,8 @@ export default function WeekPage({
   const invalidUrlWeek = urlWeek !== null && validUrlAnchor === undefined;
   const currentMonday = getMondayAnchor(getTodayDateKey());
   const requestStart = invalidUrlWeek ? undefined : (validUrlAnchor ?? currentMonday);
+  const previousStart = requestStart ? addCalendarWeeks(requestStart, -1) : undefined;
+  const nextStart = requestStart ? addCalendarWeeks(requestStart, 1) : undefined;
   const [hideRoutines, setHideRoutines] = useState(false);
 
   useEffect(() => {
@@ -488,13 +496,18 @@ export default function WeekPage({
             ) : (
               <h1 className="m-0 text-2xl font-bold">週の予定</h1>
             )}
+            {weekQuery.isFetching && data && (
+              <p data-testid="week-updating" aria-live="polite" className="m-0 text-xs text-muted">
+                更新中...
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-[var(--spacing-xs)]">
             <button
               type="button"
               aria-label="前の週"
-              disabled={!data}
-              onClick={() => data && showWeek(data.week.prevWeekStart)}
+              disabled={!previousStart}
+              onClick={() => previousStart && showWeek(previousStart)}
               className="inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] items-center justify-center rounded-[var(--radius-full)] border border-line bg-surface text-ink disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft size={20} aria-hidden="true" />
@@ -502,8 +515,8 @@ export default function WeekPage({
             <button
               type="button"
               aria-label="次の週"
-              disabled={!data}
-              onClick={() => data && showWeek(data.week.nextWeekStart)}
+              disabled={!nextStart}
+              onClick={() => nextStart && showWeek(nextStart)}
               className="inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] items-center justify-center rounded-[var(--radius-full)] border border-line bg-surface text-ink disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowRight size={20} aria-hidden="true" />
@@ -646,7 +659,7 @@ export default function WeekPage({
                 .map((day) => {
                   const events = getVisibleEvents(day, data, hideRoutines);
                   const isToday = day.date === data.week.today;
-                  return day.layout === 'expanded' ? (
+                  return getVisibleDayLayout(day, events) === 'expanded' ? (
                     <ExpandedDay
                       key={day.date}
                       day={day}

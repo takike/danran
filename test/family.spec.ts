@@ -1386,6 +1386,131 @@ describe('Task 1-4: Family Onboarding, Creation, & Invitations', () => {
       expect(outsiderInspectRes.status).toBe(410);
     });
 
+    it('assigns a joining adult after the maximum existing sort order and stabilizes legacy ties in family responses', async () => {
+      const owner = await createTestUser({
+        id: 'usr_order_owner',
+        googleSub: 'sub-order-owner',
+        email: 'owner.order@danran.test',
+        displayName: 'Owner',
+      });
+      const existingAdult = await createTestUser({
+        id: 'usr_order_adult',
+        googleSub: 'sub-order-adult',
+        email: 'adult.order@danran.test',
+        displayName: 'Adult',
+      });
+      const joiner = await createTestUser({
+        id: 'usr_order_joiner',
+        googleSub: 'sub-order-joiner',
+        email: 'joiner.order@danran.test',
+        displayName: 'Joiner',
+      });
+      const pendingUser = await createTestUser({
+        id: 'usr_order_pending',
+        googleSub: 'sub-order-pending',
+        email: 'pending.order@danran.test',
+        displayName: 'Pending',
+      });
+      const famId = 'fam_member_order';
+      await db.insert(families).values({
+        id: famId,
+        name: '並び順テスト家',
+        familyCalendarId: 'cal_member_order',
+        ownerUserId: owner.user.id,
+        creationStatus: 'ready',
+        dayStartHour: 8,
+        dayEndHour: 20,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+      await db.insert(members).values([
+        {
+          id: 'mem_z_order_owner',
+          familyId: famId,
+          userId: owner.user.id,
+          kind: 'adult',
+          name: 'Owner',
+          color: 'indigo',
+          sortOrder: 5,
+          status: 'active',
+        },
+        {
+          id: 'mem_a_order_adult',
+          familyId: famId,
+          userId: existingAdult.user.id,
+          kind: 'adult',
+          name: 'Adult',
+          color: 'teal',
+          sortOrder: 5,
+          status: 'active',
+        },
+        {
+          id: 'mem_child_order',
+          familyId: famId,
+          userId: null,
+          kind: 'child',
+          name: 'Child',
+          color: 'ochre',
+          sortOrder: 5,
+          status: 'active',
+        },
+        {
+          id: 'mem_pending_order',
+          familyId: famId,
+          userId: pendingUser.user.id,
+          kind: 'adult',
+          name: 'Pending',
+          color: 'green',
+          sortOrder: 8,
+          status: 'pending',
+        },
+      ]);
+      const rawToken = generateRandomToken(32);
+      await db.insert(invites).values({
+        id: 'inv_member_order',
+        familyId: famId,
+        tokenHash: await sha256Hex(rawToken),
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        status: 'available',
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+
+      const joinResponse = await app.request(
+        `${TEST_ORIGIN}/api/invites/join`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: TEST_ORIGIN,
+            'X-Requested-With': 'XMLHttpRequest',
+            Cookie: joiner.cookieHeader,
+          },
+          body: JSON.stringify({ token: rawToken }),
+        },
+        TEST_ENV,
+      );
+      expect(joinResponse.status).toBe(200);
+      const joinData = joinSuccessResponseSchema.parse(await joinResponse.json());
+      expect(joinData.family.members.map(({ id }) => id)).toEqual([
+        'mem_a_order_adult',
+        'mem_z_order_owner',
+        expect.stringMatching(/^mem_/),
+        'mem_child_order',
+      ]);
+      expect(joinData.family.members[2]?.sortOrder).toBe(9);
+      expect(joinData.family.members.some(({ id }) => id === 'mem_pending_order')).toBe(false);
+
+      const listResponse = await app.request(
+        `${TEST_ORIGIN}/api/families`,
+        { headers: { Cookie: joiner.cookieHeader } },
+        TEST_ENV,
+      );
+      expect(listResponse.status).toBe(200);
+      const listData = familyListResponseSchema.parse(await listResponse.json());
+      expect(listData.families[0]?.members.map(({ id }) => id)).toEqual(
+        joinData.family.members.map(({ id }) => id),
+      );
+    });
+
     it('returns authorizationRequired: true when owner lacks calendar.acls scope', async () => {
       const ownerWithoutAcl = await createTestUser({
         id: 'usr_owner_no_acl',

@@ -19,7 +19,7 @@ export function PwaUpdateBanner(): React.ReactElement | null {
     <output
       data-testid="pwa-update-banner"
       aria-live="polite"
-      className="sticky top-0 z-50 mx-auto flex w-full max-w-[390px] flex-wrap items-center justify-between gap-[var(--spacing-sm)] border-b border-line bg-surface px-[var(--spacing-sm)] pt-[calc(env(safe-area-inset-top,0px)+var(--spacing-sm))] pb-[var(--spacing-sm)] text-ink shadow-[var(--week-card-shadow)]"
+      className="sticky top-0 z-50 mx-auto flex w-full max-w-[var(--app-max-width)] flex-wrap items-center justify-between gap-[var(--spacing-sm)] border-b border-line bg-surface px-[var(--spacing-sm)] pt-[calc(env(safe-area-inset-top,0px)+var(--spacing-sm))] pb-[var(--spacing-sm)] text-ink shadow-[var(--week-card-shadow)]"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold">新しいバージョンがあります</span>

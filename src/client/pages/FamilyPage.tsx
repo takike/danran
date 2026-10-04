@@ -19,7 +19,7 @@ function PrivacyLink(): React.ReactElement {
 
 function FamilyGate({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[390px] flex-col justify-between bg-bg px-[var(--spacing-md)] py-[var(--spacing-lg)] text-ink">
+    <main className="mx-auto flex min-h-screen w-full max-w-[var(--app-max-width)] flex-col justify-between bg-bg px-[var(--spacing-md)] py-[var(--spacing-lg)] text-ink">
       <div>
         <OAuthNotices />
         {children}

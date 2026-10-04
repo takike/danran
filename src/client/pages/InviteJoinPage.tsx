@@ -264,7 +264,7 @@ export default function InviteJoinPage(): React.ReactElement {
   return (
     <main
       data-testid="invite-screen"
-      className="max-w-[390px] mx-auto min-h-screen px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border flex flex-col justify-between"
+      className="mx-auto min-h-screen w-full max-w-[var(--app-max-width)] px-[var(--spacing-md)] py-[var(--spacing-lg)] bg-bg text-ink box-border flex flex-col justify-between"
     >
       <div>
         <header className="border-b border-line pb-[var(--spacing-md)] flex items-center justify-between">

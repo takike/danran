@@ -58,6 +58,13 @@ export function getVisibleDayEvents(
   return day.eventIds
     .map((eventId) => eventsById.get(eventId))
     .filter((event): event is WeekEvent => event !== undefined)
-    .filter((event) => event.source !== 'publish')
     .filter((event) => !hideRoutines || !event.isRoutine);
+}
+
+/** Keeps the API layout unless an expanded day has no events left to present. */
+export function getVisibleDayLayout(
+  day: WeekDay,
+  visibleEvents: readonly WeekEvent[],
+): WeekDay['layout'] {
+  return day.layout === 'expanded' && visibleEvents.length === 0 ? 'compact' : day.layout;
 }

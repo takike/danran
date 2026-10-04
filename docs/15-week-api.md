@@ -78,7 +78,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
 
 - `family`: 認可済みの家族の `id` と `name` のみ。
 - `week.start`: 表示範囲の月曜アンカー。`endInclusive` は延長を含む表示最終日。`prevWeekStart` / `nextWeekStart` は月曜アンカーを7暦日ずつ移動した日付。`today` は JST の今日。
-- `members`: `active` メンバーのみを `sortOrder` 順で返します。`userId` などアカウント情報は返しません。
+- `members`: `active` メンバーのみを、成人 (`kind: "adult"`) → 子ども (`kind: "child"`) の順で返します。同じ種別では `sortOrder`、続いて `id` の昇順とし、既存データで `sortOrder` が重複していても順序を安定させます。`userId` などアカウント情報は返しません。
 - `days`: 表示範囲の全日を昇順に返します。`weekday` は日曜を0とする曜日番号です。`holidayName` は祝日名または `null`。`closures` は `{label, memberIds}` の配列で、休園日の対象メンバー ID は現在 active な既知 ID のみを含みます。`layout` は `'weekend-card' | 'expanded' | 'compact'`。`eventIds` はその暦日に重なるイベント ID を含みます。
 - `events`: 週表示範囲と重なる家族カレンダーイベントを、各イベントの完全な時間範囲で返します。時刻は `+09:00` 付き ISO 8601。終日は `{kind: "all-day", start: "YYYY-MM-DD", endExclusive: "YYYY-MM-DD"}` です。終日イベントの `endExclusive` は Google Calendar と同じ排他的終了日です。タイトルが空または空白だけの場合は `（無題）` を返します。
 - `memberIds`: イベント対象メンバーのうち、現在 active な既知のメンバー ID のみ。未知または壊れた ID は除きます。`assigneeMemberId` も同様に既知の active メンバーでなければ `null` です。

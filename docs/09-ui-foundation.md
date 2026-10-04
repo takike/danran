@@ -29,6 +29,7 @@ CSS カスタムプロパティを単一の真実源（Single Source of Truth）
 | `--member-rose` | `#a23b5d` | メンバー固有色（薔薇） | `bg-member-rose` |
 | `--member-slate` | `#4f5d6b` | メンバー固有色（石板） | `bg-member-slate` |
 | `--tap-target-min` | `44px` | アクセシビリティ最小タップ領域（44px） | `w-[var(--tap-target-min)]` |
+| `--app-max-width` | `480px` | 共通画面とタブバー内側の最大幅 | `max-w-[var(--app-max-width)]` |
 | `--capture-button-size`| `56px` | タブバー中央の撮影ボタンサイズ | `w-[var(--capture-button-size)]` |
 | `--member-dot-size` | `10px` | メンバー色ドットサイズ | `w-[var(--member-dot-size)]` |
 | `--icon-size-sm` | `14px` | チップ等小型アイコンサイズ | `w-[var(--icon-size-sm)]` |

@@ -7,7 +7,7 @@ export function OfflineFallback() {
     <main
       data-testid="offline-screen"
       style={{
-        maxWidth: '390px',
+        maxWidth: 'var(--app-max-width)',
         margin: '0 auto',
         padding: 'var(--spacing-lg) var(--spacing-md)',
         minHeight: '100vh',
