@@ -148,7 +148,16 @@ describe('Task 1-8 event API', () => {
               { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } },
               { status: 404 },
             );
-          const updated = { ...current, ...(body as Record<string, unknown>) };
+          const patchBody = body as Record<string, unknown>;
+          const updated = { ...current, ...patchBody };
+          for (const key of ['start', 'end']) {
+            const value = patchBody[key];
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+              updated[key] = Object.fromEntries(
+                Object.entries(value).filter(([, fieldValue]) => fieldValue !== null),
+              );
+            }
+          }
           storedGoogleEvents.set(eventId, updated);
           return Response.json(updated);
         }
@@ -405,6 +414,49 @@ describe('Task 1-8 event API', () => {
       status: 'tentative',
       source: 'manual',
       items: ['上履き'],
+    });
+  });
+
+  it('clears unused Google date fields when switching between timed and all-day events', async () => {
+    const cookie = await createCaller();
+    const created = await request('POST', '/api/families/fam_events/events', cookie, {
+      ...input,
+      clientRequestId: '123e4567-e89b-42d3-a456-426614174014',
+    });
+    const eventId = ((await created.json()) as { eventId: string }).eventId;
+
+    const allDay = await request('PATCH', `/api/families/fam_events/events/${eventId}`, cookie, {
+      ...input,
+      time: { kind: 'all-day', start: '2026-10-10', endExclusive: '2026-10-12' },
+    });
+    expect(allDay.status).toBe(200);
+    const allDayPatch = requests.filter((entry) => entry.method === 'PATCH').at(-1)?.body as Record<
+      string,
+      unknown
+    >;
+    expect(allDayPatch.start).toEqual({ date: '2026-10-10', dateTime: null, timeZone: null });
+    expect(allDayPatch.end).toEqual({ date: '2026-10-12', dateTime: null, timeZone: null });
+
+    const backToTimed = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      input,
+    );
+    expect(backToTimed.status).toBe(200);
+    const timedPatch = requests.filter((entry) => entry.method === 'PATCH').at(-1)?.body as Record<
+      string,
+      unknown
+    >;
+    expect(timedPatch.start).toEqual({
+      date: null,
+      dateTime: input.time.start,
+      timeZone: 'Asia/Tokyo',
+    });
+    expect(timedPatch.end).toEqual({
+      date: null,
+      dateTime: input.time.endExclusive,
+      timeZone: 'Asia/Tokyo',
     });
   });
 

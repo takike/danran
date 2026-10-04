@@ -1,4 +1,8 @@
-import { buildDanranPrivateProperties, toGoogleEventTimes } from '@shared/domain/eventMetadata';
+import {
+  buildDanranPrivateProperties,
+  toGoogleEventPatchTimes,
+  toGoogleEventTimes,
+} from '@shared/domain/eventMetadata';
 import {
   type EventInput,
   createEventInputSchema,
@@ -114,6 +118,10 @@ function googleTime(time: EventInput['time']) {
     start: value.start,
     end: value.end,
   };
+}
+
+function googlePatchTime(time: EventInput['time']) {
+  return toGoogleEventPatchTimes(time);
 }
 
 function stringProperties(value: unknown): Record<string, string> {
@@ -332,7 +340,7 @@ eventsRoute.patch('/:id/events/:eventId', async (c) => {
     const shared = stringProperties(oldProperties?.shared);
     const patch = {
       summary: input.title,
-      ...googleTime(input.time),
+      ...googlePatchTime(input.time),
       status: input.status,
       extendedProperties: {
         private: mergedPrivate,

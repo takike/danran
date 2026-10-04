@@ -245,6 +245,43 @@ export const insertEventInputSchema = z
 
 export type InsertEventInput = z.infer<typeof insertEventInputSchema>;
 
+/** PATCH date fields are nullable because Google merges nested date objects. */
+export const patchEventDateTimeSchema = z
+  .object({
+    date: isoDateStringSchema.nullable().optional(),
+    dateTime: rfc3339InstantSchema.nullable().optional(),
+    timeZone: ianaTimeZoneSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasDate = typeof value.date === 'string';
+    const hasDateTime = typeof value.dateTime === 'string';
+    if (hasDate === hasDateTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'PATCH event datetime must specify exactly one of date or dateTime',
+      });
+    }
+  });
+
+export type PatchEventDateTime = z.infer<typeof patchEventDateTimeSchema>;
+
+function validatePatchStartEndOrder(
+  start: PatchEventDateTime,
+  end: PatchEventDateTime,
+  ctx: z.RefinementCtx,
+): void {
+  const normalizedStart = {
+    date: typeof start.date === 'string' ? start.date : undefined,
+    dateTime: typeof start.dateTime === 'string' ? start.dateTime : undefined,
+  };
+  const normalizedEnd = {
+    date: typeof end.date === 'string' ? end.date : undefined,
+    dateTime: typeof end.dateTime === 'string' ? end.dateTime : undefined,
+  };
+  validateStartEndOrder(normalizedStart, normalizedEnd, ctx);
+}
+
 /**
  * Patch Event input schema (strict).
  * No default values injected. Null allows clearing supported fields.
@@ -254,8 +291,8 @@ export const patchEventInputSchema = z
     summary: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
     location: z.string().nullable().optional(),
-    start: insertEventDateTimeSchema.optional(),
-    end: insertEventDateTimeSchema.optional(),
+    start: patchEventDateTimeSchema.optional(),
+    end: patchEventDateTimeSchema.optional(),
     recurrence: z.array(z.string()).nullable().optional(),
     transparency: z.enum(['opaque', 'transparent']).optional(),
     status: z.enum(['confirmed', 'tentative', 'cancelled']).optional(),
@@ -263,9 +300,7 @@ export const patchEventInputSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (val.start && val.end) {
-      validateStartEndOrder(val.start, val.end, ctx);
-    }
+    if (val.start && val.end) validatePatchStartEndOrder(val.start, val.end, ctx);
   });
 
 export type PatchEventInput = z.infer<typeof patchEventInputSchema>;

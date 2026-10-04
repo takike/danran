@@ -189,18 +189,25 @@ function AddDayButton({
   date,
   onAdd,
   disabled,
-}: { date: string; onAdd: EventActions['onAdd']; disabled: boolean }): React.ReactElement {
+  className = '',
+}: {
+  date: DateKey;
+  onAdd: EventActions['onAdd'];
+  disabled: boolean;
+  className?: string;
+}): React.ReactElement {
+  const fullDateLabel = formatFullDateLabel(date);
+  const monthDay = fullDateLabel.slice(fullDateLabel.indexOf('年') + 1).split(' ')[0];
   return (
     <button
       type="button"
       data-testid={`add-event-${date}`}
-      aria-label={`${date}に予定を追加`}
+      aria-label={`${monthDay}に予定を追加`}
       disabled={disabled}
       onClick={(event) => onAdd(date, event.currentTarget)}
-      className="inline-flex min-h-[var(--tap-target-min)] shrink-0 items-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-sm)] text-xs font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
+      className={`inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] shrink-0 items-center justify-center rounded-[var(--radius-full)] text-muted hover:bg-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50 ${className}`.trim()}
     >
       <Plus size={16} aria-hidden="true" />
-      追加
     </button>
   );
 }
@@ -247,11 +254,11 @@ function CompactDay({
       data-date={day.date}
       data-layout="compact"
       aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 ? '、予定なし' : ''}`}
-      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
+      className="relative grid min-h-[var(--tap-target-min)] grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
       <div
-        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
+        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] pr-[var(--tap-target-min)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
       >
         {routineEvents.map((event) => (
           <EventEditButton
@@ -282,8 +289,13 @@ function CompactDay({
           </EventEditButton>
         ))}
         {events.length === 0 && <span className="sr-only">予定なし</span>}
-        <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
       </div>
+      <AddDayButton
+        date={day.date}
+        onAdd={onAdd}
+        disabled={disabled}
+        className="absolute right-0 top-1/2 -translate-y-1/2"
+      />
     </li>
   );
 }
@@ -445,19 +457,19 @@ function WeekendDay({
       className="mb-[var(--spacing-md)] rounded-[var(--radius-lg)] border border-transparent bg-surface p-[var(--spacing-md)] text-ink shadow-[var(--week-card-shadow)]"
     >
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-[var(--spacing-sm)]">
-        <div className="flex min-w-0 items-baseline gap-[var(--spacing-sm)]">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--spacing-sm)]">
           <DateLabel day={day} isToday={isToday} large />
           {day.holidayName && (
             <span className="break-words text-xs text-accent [overflow-wrap:anywhere]">
               {day.holidayName}
             </span>
           )}
+          {longWeekendDayCount && (
+            <span className="rounded-[var(--radius-full)] bg-accent px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs font-semibold text-surface">
+              {longWeekendDayCount}連休
+            </span>
+          )}
         </div>
-        {longWeekendDayCount && (
-          <span className="rounded-[var(--radius-full)] bg-accent px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs font-semibold text-surface">
-            {longWeekendDayCount}連休
-          </span>
-        )}
         <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
       </header>
 

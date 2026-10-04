@@ -52,9 +52,15 @@ function buildWeek(events: WeekEvent[]): WeekResponse {
   const range = getWeekRange(BASE_WEEK);
   const days = range.days.map((date) => {
     const dayEvents = events.filter((event) => {
+      if (event.time.kind === 'all-day')
+        return event.time.start <= date && date < event.time.endExclusive;
       const start = event.time.start.slice(0, 10);
       const end = event.time.endExclusive.slice(0, 10);
-      return start <= date && date <= end;
+      return (
+        start <= date &&
+        date <= end &&
+        !(end === date && event.time.endExclusive.endsWith('T00:00:00+09:00'))
+      );
     });
     const weekday = getWeekday(date);
     return {
@@ -280,6 +286,10 @@ test.describe('Task 1-8: family event editing', () => {
     await page.goto('/?week=2026-10-05');
     const addButton = page.getByRole('button', { name: '予定を追加', exact: true });
     await expect(addButton).toBeVisible();
+    await expect(page.getByTestId('add-event-2026-10-10')).toHaveAttribute(
+      'aria-label',
+      '10月10日に予定を追加',
+    );
     await page.getByTestId('add-event-2026-10-10').click();
     const dialog = page.getByTestId('event-dialog');
     await expect(dialog).toBeVisible();
@@ -545,6 +555,10 @@ test.describe('Task 1-8: family event editing', () => {
   }) => {
     const api = await mockEventApis(page);
     await page.goto('/?week=2026-10-05');
+    await expect(page.getByTestId('add-event-2026-10-10')).toHaveAttribute(
+      'aria-label',
+      '10月10日に予定を追加',
+    );
     await page.getByTestId('add-event-2026-10-10').click();
     const dialog = page.getByTestId('event-dialog');
     await dialog.getByLabel('タイトル').fill('終日の運動会');
@@ -561,6 +575,39 @@ test.describe('Task 1-8: family event editing', () => {
       kind: 'all-day',
       start: '2026-10-10',
       endExclusive: '2026-10-11',
+    });
+  });
+
+  test('edits timed events to all-day and back to timed with the correct API date range', async ({
+    page,
+  }) => {
+    const api = await mockEventApis(page);
+    await page.goto('/?week=2026-10-05');
+    await page.getByTestId('edit-event-evt_picnic').click();
+    const allDayDialog = page.getByTestId('event-dialog');
+    await expect(allDayDialog.getByLabel('終日')).not.toBeChecked();
+    await allDayDialog.getByLabel('終日').check();
+    await expect(allDayDialog.getByLabel('開始時刻')).toHaveCount(0);
+    await allDayDialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(allDayDialog).toHaveCount(0);
+    expect(api.updateBodies[0]?.time).toEqual({
+      kind: 'all-day',
+      start: '2026-10-10',
+      endExclusive: '2026-10-11',
+    });
+
+    await page.getByTestId('edit-event-evt_picnic').click();
+    const timedDialog = page.getByTestId('event-dialog');
+    await expect(timedDialog.getByLabel('終日')).toBeChecked();
+    await timedDialog.getByLabel('終日').uncheck();
+    await timedDialog.getByLabel('開始時刻').fill('14:30');
+    await timedDialog.getByLabel('終了時刻').fill('16:00');
+    await timedDialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(timedDialog).toHaveCount(0);
+    expect(api.updateBodies[1]?.time).toEqual({
+      kind: 'timed',
+      start: '2026-10-10T14:30:00+09:00',
+      endExclusive: '2026-10-10T16:00:00+09:00',
     });
   });
 

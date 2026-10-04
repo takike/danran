@@ -24,3 +24,20 @@ export function toGoogleEventTimes(time: EventInput['time']): {
     end: { dateTime: time.endExclusive, timeZone: 'Asia/Tokyo' },
   };
 }
+
+/** Builds PATCH date objects that explicitly clear Google's unused nested datetime fields. */
+export function toGoogleEventPatchTimes(time: EventInput['time']): {
+  start: { date: string | null; dateTime: string | null; timeZone: string | null };
+  end: { date: string | null; dateTime: string | null; timeZone: string | null };
+} {
+  if (time.kind === 'all-day') {
+    return {
+      start: { date: time.start, dateTime: null, timeZone: null },
+      end: { date: time.endExclusive, dateTime: null, timeZone: null },
+    };
+  }
+  return {
+    start: { date: null, dateTime: time.start, timeZone: 'Asia/Tokyo' },
+    end: { date: null, dateTime: time.endExclusive, timeZone: 'Asia/Tokyo' },
+  };
+}

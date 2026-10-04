@@ -303,7 +303,7 @@ export function EventDialog({
         </header>
         <fieldset
           disabled={isSaving || isDeleting}
-          className="m-0 space-y-[var(--spacing-lg)] border-0 px-[var(--spacing-md)] py-[var(--spacing-lg)]"
+          className="m-0 flex min-w-0 flex-col gap-[var(--spacing-lg)] border-0 px-[var(--spacing-md)] py-[var(--spacing-lg)]"
         >
           {errorMessage && (
             <p
