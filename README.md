@@ -41,6 +41,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/13-calendar-sharing-spike.md](docs/13-calendar-sharing-spike.md) | カレンダー共有スパイク仕様書（staging A/B 実機検証プロトコル、記録枠、権限境界） |
 | [docs/14-family-onboarding.md](docs/14-family-onboarding.md) | 家族作成・招待オンボーディング仕様（データモデル、段階的認可、招待URL、手動検証手順） |
 | [docs/15-week-api.md](docs/15-week-api.md) | 週ビュー API 契約（Task 1-6、入出力・認可・祝日範囲・Google ページング） |
+| [docs/16-event-editing.md](docs/16-event-editing.md) | 家族予定の作成・編集・削除 API、保存・再試行、制限と staging 確認手順 |
 
 ## 前提条件
 
@@ -129,3 +130,4 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 1-5（時間・祝日・レイアウトのドメインロジック）**: 実装完了（[docs/12-time-and-layout.md](docs/12-time-and-layout.md)）。Asia/Tokyo 固定の日付計算、@holiday-jp/holiday_jp による祝日判定（1970–2050）、月曜起点・祝日連続延長週範囲、dayLayout（週末カード/展開平日/畳み込み平日）、および休園日（`closure_days`、タスク 1-4 にて families への外部キー制約を追加）Drizzle スキーマ・Zod バリデーション・テストを配備。ローカルマイグレーション適用および 4 つのホストタイムゾーン（UTC, Asia/Tokyo, America/New_York, Pacific/Auckland）検証を通過。
   - **タスク 1-6（`GET /api/families/:id/week` 週表示 API）**: 実装完了（[docs/15-week-api.md](docs/15-week-api.md)）。ログイン中の active メンバーに対し、家族カレンダーの予定・D1 付加情報・祝日・休園日・日ごとのレイアウトを返します。認可、共有スキーマ、日付範囲、プライバシー、ページング・エラー条件の API テストを追加。実 Google アカウントや staging での週データ取得は未確認です。
   - **タスク 1-7（S1 週ビュー、家族予定版）**: 実装完了。Phase 1 の表示範囲は [docs/02-screens.md](docs/02-screens.md#s1-週ビュー) に記載。390px の Playwright E2E とスクリーンショット（`docs/screenshots/s1-week-view.png`, `docs/screenshots/family.png`）を整備。実 Google アカウントと staging での週データ取得は未確認です。
+  - **タスク 1-8（予定の作成・編集・削除）**: 実装・API モック E2E を整備。詳細は [docs/16-event-editing.md](docs/16-event-editing.md)、画面仕様は [docs/02-screens.md](docs/02-screens.md#s1-週ビュー)。Google Calendar と staging の実確認は未実施で、人間による staging 手順の確認が残っています。

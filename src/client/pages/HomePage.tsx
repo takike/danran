@@ -200,7 +200,14 @@ export default function HomePage(): React.ReactElement {
     (item) => item.creationStatus === 'ready' && item.familyCalendarId,
   );
   if (family) {
-    return <WeekPage userId={user.id} familyId={family.id} familyName={family.name} />;
+    return (
+      <WeekPage
+        key={`${user.id}:${family.id}`}
+        userId={user.id}
+        familyId={family.id}
+        familyName={family.name}
+      />
+    );
   }
 
   return (

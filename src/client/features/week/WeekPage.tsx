@@ -4,6 +4,7 @@ import { Card } from '@client/components/Card';
 import { Chip } from '@client/components/Chip';
 import { MemberDot } from '@client/components/MemberDot';
 import { OAuthNotices } from '@client/components/OAuthNotices';
+import { EventDialog } from '@client/features/week/EventDialog';
 import { useWeekQuery } from '@client/features/week/useWeek';
 import {
   getLongWeekendBadges,
@@ -28,12 +29,13 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
+  Plus,
   RefreshCw,
   Repeat,
   ShoppingBag,
 } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 interface WeekPageProps {
@@ -43,6 +45,13 @@ interface WeekPageProps {
 }
 
 type WeekMember = WeekResponse['members'][number];
+
+interface EventEditorState {
+  event?: WeekEvent;
+  selectedDate?: DateKey;
+  members: WeekMember[];
+  clientRequestId: string;
+}
 
 const memberColor = (member?: WeekMember): string =>
   member ? `var(--member-${member.color})` : 'var(--muted)';
@@ -170,17 +179,73 @@ function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
   );
 }
 
+interface EventActions {
+  onAdd: (date: string, trigger: HTMLElement) => void;
+  onEdit: (event: WeekEvent, trigger: HTMLElement) => void;
+  disabled: boolean;
+}
+
+function AddDayButton({
+  date,
+  onAdd,
+  disabled,
+  className = '',
+}: {
+  date: DateKey;
+  onAdd: EventActions['onAdd'];
+  disabled: boolean;
+  className?: string;
+}): React.ReactElement {
+  const fullDateLabel = formatFullDateLabel(date);
+  const monthDay = fullDateLabel.slice(fullDateLabel.indexOf('年') + 1).split(' ')[0];
+  return (
+    <button
+      type="button"
+      data-testid={`add-event-${date}`}
+      aria-label={`${monthDay}に予定を追加`}
+      disabled={disabled}
+      onClick={(event) => onAdd(date, event.currentTarget)}
+      className={`inline-flex h-[var(--tap-target-min)] w-[var(--tap-target-min)] shrink-0 items-center justify-center rounded-[var(--radius-full)] text-muted hover:bg-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50 ${className}`.trim()}
+    >
+      <Plus size={16} aria-hidden="true" />
+    </button>
+  );
+}
+
+function EventEditButton({
+  event,
+  onEdit,
+  disabled,
+  children,
+}: EventActions & { event: WeekEvent; children: React.ReactNode }): React.ReactElement {
+  return (
+    <button
+      type="button"
+      data-testid={`edit-event-${event.id}`}
+      aria-label={`予定を編集: ${event.title}`}
+      disabled={disabled}
+      onClick={(clickEvent) => onEdit(event, clickEvent.currentTarget)}
+      className="inline-flex min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] max-w-full items-center rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {children}
+    </button>
+  );
+}
+
 function CompactDay({
   day,
   events,
   members,
   isToday,
+  onAdd,
+  onEdit,
+  disabled,
 }: {
   day: WeekDay;
   events: WeekEvent[];
   members: WeekMember[];
   isToday: boolean;
-}): React.ReactElement {
+} & EventActions): React.ReactElement {
   const routineEvents = events.filter((event) => event.isRoutine);
   const otherEvents = events.filter((event) => !event.isRoutine);
   return (
@@ -189,27 +254,48 @@ function CompactDay({
       data-date={day.date}
       data-layout="compact"
       aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 ? '、予定なし' : ''}`}
-      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
+      className="relative grid min-h-[var(--tap-target-min)] grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
       <div
-        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
+        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] pr-[var(--tap-target-min)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
       >
         {routineEvents.map((event) => (
-          <RoutineChip key={event.id} event={event} />
+          <EventEditButton
+            key={event.id}
+            event={event}
+            onAdd={onAdd}
+            onEdit={onEdit}
+            disabled={disabled}
+          >
+            <RoutineChip event={event} />
+          </EventEditButton>
         ))}
         {otherEvents.map((event) => (
-          <span
+          <EventEditButton
             key={event.id}
-            className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-accent-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink"
+            event={event}
+            onAdd={onAdd}
+            onEdit={onEdit}
+            disabled={disabled}
           >
-            <EventMembers memberIds={event.memberIds} members={members} />
-            <span className="break-words font-medium [overflow-wrap:anywhere]">{event.title}</span>
-            <EventBadges event={event} members={members} />
-          </span>
+            <span className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-accent-tint px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-ink">
+              <EventMembers memberIds={event.memberIds} members={members} />
+              <span className="break-words font-medium [overflow-wrap:anywhere]">
+                {event.title}
+              </span>
+              <EventBadges event={event} members={members} />
+            </span>
+          </EventEditButton>
         ))}
         {events.length === 0 && <span className="sr-only">予定なし</span>}
       </div>
+      <AddDayButton
+        date={day.date}
+        onAdd={onAdd}
+        disabled={disabled}
+        className="absolute right-0 top-1/2 -translate-y-1/2"
+      />
     </li>
   );
 }
@@ -219,12 +305,15 @@ function ExpandedDay({
   events,
   members,
   isToday,
+  onAdd,
+  onEdit,
+  disabled,
 }: {
   day: WeekDay;
   events: WeekEvent[];
   members: WeekMember[];
   isToday: boolean;
-}): React.ReactElement {
+} & EventActions): React.ReactElement {
   return (
     <li
       data-testid="week-day"
@@ -240,6 +329,7 @@ function ExpandedDay({
             いつもと違う日
           </span>
           {events.length === 0 && <span className="text-xs text-muted">予定なし</span>}
+          <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
         </div>
         <ul className="m-0 list-none space-y-[var(--spacing-sm)] p-0">
           {events.map((event) => (
@@ -248,12 +338,14 @@ function ExpandedDay({
                 <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
                 <EventBadges event={event} members={members} />
               </div>
-              <div className="mt-[var(--spacing-xs)] flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
-                <EventMembers memberIds={event.memberIds} members={members} />
-                <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
-                  {event.title}
+              <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
+                <span className="mt-[var(--spacing-xs)] flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+                  <EventMembers memberIds={event.memberIds} members={members} />
+                  <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
+                    {event.title}
+                  </span>
                 </span>
-              </div>
+              </EventEditButton>
               {event.items.length > 0 && (
                 <div className="mt-[var(--spacing-sm)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
                   {event.items.map((item, index) => (
@@ -285,7 +377,10 @@ function WeekendEvent({
   event,
   day,
   members,
-}: { event: WeekEvent; day: WeekDay; members: WeekMember[] }): React.ReactElement {
+  onAdd,
+  onEdit,
+  disabled,
+}: { event: WeekEvent; day: WeekDay; members: WeekMember[] } & EventActions): React.ReactElement {
   const member = members.find((candidate) => event.memberIds.includes(candidate.id));
   const assignee = members.find((candidate) => candidate.id === event.assigneeMemberId);
   return (
@@ -294,19 +389,21 @@ function WeekendEvent({
         {formatEventTime(event.time, day.date)}
       </time>
       <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-xs)]">
-          {member && (
-            <span
-              className="h-[var(--member-dot-size)] w-[var(--member-dot-size)] shrink-0 rounded-[var(--radius-full)]"
-              aria-hidden="true"
-              style={{ backgroundColor: memberColor(member) }}
-            />
-          )}
-          <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
-            {event.title}
+        <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
+          <span className="flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-xs)]">
+            {member && (
+              <span
+                className="h-[var(--member-dot-size)] w-[var(--member-dot-size)] shrink-0 rounded-[var(--radius-full)]"
+                aria-hidden="true"
+                style={{ backgroundColor: memberColor(member) }}
+              />
+            )}
+            <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
+              {event.title}
+            </span>
+            <EventBadges event={event} members={members} showAssignee={false} />
           </span>
-          <EventBadges event={event} members={members} showAssignee={false} />
-        </div>
+        </EventEditButton>
         <div className="mt-[var(--spacing-2xs)] flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
           <EventMembers memberIds={event.memberIds} members={members} />
           {assignee && (
@@ -341,13 +438,16 @@ function WeekendDay({
   members,
   isToday,
   longWeekendDayCount,
+  onAdd,
+  onEdit,
+  disabled,
 }: {
   day: WeekDay;
   events: WeekEvent[];
   members: WeekMember[];
   isToday: boolean;
   longWeekendDayCount?: number;
-}): React.ReactElement {
+} & EventActions): React.ReactElement {
   return (
     <article
       aria-label={formatFullDateLabel(day.date)}
@@ -357,19 +457,20 @@ function WeekendDay({
       className="mb-[var(--spacing-md)] rounded-[var(--radius-lg)] border border-transparent bg-surface p-[var(--spacing-md)] text-ink shadow-[var(--week-card-shadow)]"
     >
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-[var(--spacing-sm)]">
-        <div className="flex min-w-0 items-baseline gap-[var(--spacing-sm)]">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--spacing-sm)]">
           <DateLabel day={day} isToday={isToday} large />
           {day.holidayName && (
             <span className="break-words text-xs text-accent [overflow-wrap:anywhere]">
               {day.holidayName}
             </span>
           )}
+          {longWeekendDayCount && (
+            <span className="rounded-[var(--radius-full)] bg-accent px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs font-semibold text-surface">
+              {longWeekendDayCount}連休
+            </span>
+          )}
         </div>
-        {longWeekendDayCount && (
-          <span className="rounded-[var(--radius-full)] bg-accent px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs font-semibold text-surface">
-            {longWeekendDayCount}連休
-          </span>
-        )}
+        <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
       </header>
 
       {(day.closures.length > 0 || day.holidayName) && (
@@ -386,7 +487,15 @@ function WeekendDay({
       {events.length > 0 ? (
         <ul className="mt-[var(--spacing-md)] mb-0 list-none divide-y divide-line p-0">
           {events.map((event) => (
-            <WeekendEvent key={event.id} event={event} day={day} members={members} />
+            <WeekendEvent
+              key={event.id}
+              event={event}
+              day={day}
+              members={members}
+              onAdd={onAdd}
+              onEdit={onEdit}
+              disabled={disabled}
+            />
           ))}
         </ul>
       ) : (
@@ -426,6 +535,12 @@ export default function WeekPage({
   const previousStart = requestStart ? addCalendarWeeks(requestStart, -1) : undefined;
   const nextStart = requestStart ? addCalendarWeeks(requestStart, 1) : undefined;
   const [hideRoutines, setHideRoutines] = useState(false);
+  const [eventEditor, setEventEditor] = useState<EventEditorState | null>(null);
+  const [routineNotice, setRoutineNotice] = useState(false);
+  const invokingControlRef = useRef<HTMLElement | null>(null);
+  const addEventButtonRef = useRef<HTMLButtonElement | null>(null);
+  const hadOpenEditorRef = useRef(false);
+  const focusRestoreTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (requestStart === undefined || urlWeek === requestStart) return;
@@ -436,6 +551,7 @@ export default function WeekPage({
 
   const weekQuery = useWeekQuery(userId, invalidUrlWeek ? undefined : familyId, requestStart);
   const data = weekQuery.isError ? undefined : weekQuery.data;
+  const canEditEvents = Boolean(data && !weekQuery.isPlaceholderData && !invalidUrlWeek);
   const longWeekendCounts = new Map(
     data ? getLongWeekendBadges(data.days).map((badge) => [badge.start, badge.dayCount]) : [],
   );
@@ -446,6 +562,75 @@ export default function WeekPage({
     else next.delete('week');
     setSearchParams(next, { replace });
   };
+
+  const closeEventEditor = useCallback(() => setEventEditor(null), []);
+  const openNewEvent = useCallback(
+    (date: string | undefined, trigger: HTMLElement) => {
+      if (!data) return;
+      invokingControlRef.current = trigger;
+      setRoutineNotice(false);
+      setEventEditor({
+        selectedDate: date as DateKey | undefined,
+        members: data.members,
+        clientRequestId: crypto.randomUUID(),
+      });
+    },
+    [data],
+  );
+  const openEditEvent = useCallback(
+    (event: WeekEvent, trigger: HTMLElement) => {
+      if (!data) return;
+      invokingControlRef.current = trigger;
+      if (event.isRoutine) {
+        setRoutineNotice(true);
+        return;
+      }
+      setRoutineNotice(false);
+      setEventEditor({ event, members: data.members, clientRequestId: crypto.randomUUID() });
+    },
+    [data],
+  );
+
+  useEffect(() => {
+    if (eventEditor) {
+      if (focusRestoreTimerRef.current !== undefined) {
+        window.clearTimeout(focusRestoreTimerRef.current);
+        focusRestoreTimerRef.current = undefined;
+      }
+      hadOpenEditorRef.current = true;
+      return;
+    }
+    if (hadOpenEditorRef.current) {
+      hadOpenEditorRef.current = false;
+      focusRestoreTimerRef.current = window.setTimeout(() => {
+        focusRestoreTimerRef.current = undefined;
+        if (document.querySelector('dialog[open]')) return;
+        if (invokingControlRef.current?.isConnected) invokingControlRef.current.focus();
+        else addEventButtonRef.current?.focus();
+        invokingControlRef.current = null;
+      }, 0);
+    }
+  }, [eventEditor]);
+
+  const clearSessionAfterUnauthorized = useCallback(async () => {
+    if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
+    await queryClient.cancelQueries({ queryKey: ['session'] });
+    if (queryClient.getQueryData<AuthUser | null>(['session'])?.id !== userId) return;
+    queryClient.setQueryData(['session'], null);
+    await queryClient.cancelQueries({ queryKey: ['week', userId] });
+    await queryClient.cancelQueries({ queryKey: ['families', userId] });
+    queryClient.removeQueries({ queryKey: ['week', userId] });
+    queryClient.removeQueries({ queryKey: ['families', userId] });
+  }, [queryClient, userId]);
+
+  const closeEventEditorFromHistory = useCallback(() => {
+    if (
+      window.history.state?.danranEventDialog === `event-dialog-${eventEditor?.clientRequestId}`
+    ) {
+      window.history.back();
+    }
+    closeEventEditor();
+  }, [closeEventEditor, eventEditor?.clientRequestId]);
 
   useEffect(() => {
     if (
@@ -627,6 +812,19 @@ export default function WeekPage({
         </section>
       ) : (
         <>
+          <div className="mb-[var(--spacing-md)] flex justify-end">
+            <button
+              type="button"
+              ref={addEventButtonRef}
+              data-testid="add-event"
+              disabled={!canEditEvents}
+              onClick={(clickEvent) => openNewEvent(undefined, clickEvent.currentTarget)}
+              className="inline-flex min-h-[var(--tap-target-min)] items-center justify-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] bg-accent px-[var(--spacing-md)] text-sm font-semibold text-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
+            >
+              <Plus size={18} aria-hidden="true" />
+              予定を追加
+            </button>
+          </div>
           {data.week.start !== getMondayAnchor(data.week.today) && (
             <button
               type="button"
@@ -666,6 +864,9 @@ export default function WeekPage({
                       events={events}
                       members={data.members}
                       isToday={isToday}
+                      onAdd={(date, trigger) => openNewEvent(date, trigger)}
+                      onEdit={openEditEvent}
+                      disabled={!canEditEvents}
                     />
                   ) : (
                     <CompactDay
@@ -674,6 +875,9 @@ export default function WeekPage({
                       events={events}
                       members={data.members}
                       isToday={isToday}
+                      onAdd={(date, trigger) => openNewEvent(date, trigger)}
+                      onEdit={openEditEvent}
+                      disabled={!canEditEvents}
                     />
                   );
                 })}
@@ -697,13 +901,37 @@ export default function WeekPage({
                   members={data.members}
                   isToday={day.date === data.week.today}
                   longWeekendDayCount={longWeekendCounts.get(day.date)}
+                  onAdd={(date, trigger) => openNewEvent(date, trigger)}
+                  onEdit={openEditEvent}
+                  disabled={!canEditEvents}
                 />
               ))}
           </section>
+          {routineNotice && (
+            <output
+              data-testid="routine-event-notice"
+              className="mt-[var(--spacing-md)] block rounded-[var(--radius-md)] border border-line bg-surface p-[var(--spacing-sm)] text-sm text-muted"
+            >
+              繰り返し予定の変更は準備中です。
+            </output>
+          )}
           <p className="mt-[var(--spacing-md)] min-w-0 max-w-full break-words text-center text-xs text-muted [overflow-wrap:anywhere]">
             {data.family.name}の家族予定
           </p>
         </>
+      )}
+      {eventEditor && (
+        <EventDialog
+          familyId={familyId}
+          userId={userId}
+          members={eventEditor.members}
+          event={eventEditor.event}
+          selectedDate={eventEditor.selectedDate}
+          clientRequestId={eventEditor.clientRequestId}
+          onClose={closeEventEditor}
+          onSaved={closeEventEditorFromHistory}
+          onUnauthorized={() => void clearSessionAfterUnauthorized()}
+        />
       )}
       <footer className="mt-[var(--spacing-xl)] border-t border-line pt-[var(--spacing-md)] text-center">
         <Link

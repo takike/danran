@@ -20,6 +20,7 @@ export default defineConfig({
         '**/auth.spec.ts',
         '**/family.spec.ts',
         '**/week.spec.ts',
+        '**/events.spec.ts',
       ],
       use: {
         ...devices['Desktop Chrome'],

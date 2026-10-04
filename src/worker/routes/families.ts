@@ -84,7 +84,10 @@ const bodyLimit16KiB = bodyLimit({
     ),
 });
 
-const securityMiddleware: MiddlewareHandler<{ Bindings: WorkerEnv }> = async (c, next) => {
+export const familySecurityMiddleware: MiddlewareHandler<{ Bindings: WorkerEnv }> = async (
+  c,
+  next,
+) => {
   c.header('Cache-Control', 'no-store');
   c.header('Pragma', 'no-cache');
   c.header('Referrer-Policy', 'no-referrer');
@@ -143,8 +146,8 @@ const securityMiddleware: MiddlewareHandler<{ Bindings: WorkerEnv }> = async (c,
   await next();
 };
 
-familiesRoute.use('*', securityMiddleware);
-invitesRoute.use('*', securityMiddleware);
+familiesRoute.use('*', familySecurityMiddleware);
+invitesRoute.use('*', familySecurityMiddleware);
 
 familiesRoute.get('/:id/week', getFamilyWeek);
 

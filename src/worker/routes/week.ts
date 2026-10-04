@@ -19,12 +19,13 @@ import { eventMeta, families, members } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import { GoogleCalendarError, createGoogleCalendarClient } from '@worker/google/calendar';
 import { ReauthNeededError } from '@worker/google/oauth';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import type { Context, Handler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 const PAGE_SIZE = 2500;
 const MAX_EVENT_PAGES = 10;
+const EVENT_META_ID_CHUNK_SIZE = 49;
 
 type WeekContext = Context<{ Bindings: WorkerEnv }>;
 type WeekStatusCode = 400 | 401 | 403 | 404 | 409 | 500 | 502 | 503;
@@ -168,6 +169,38 @@ function getMetadataForEvent(event: GoogleEvent, metadata: MetadataIndex) {
     return metadata.series.get(event.recurringEventId);
   }
   return undefined;
+}
+
+async function fetchRelevantEventMetadata(
+  db: ReturnType<typeof createDb>,
+  familyId: string,
+  calendarId: string,
+  events: GoogleEvent[],
+) {
+  const eventIds = new Set<string>();
+  for (const event of events) {
+    if (event.id) eventIds.add(event.id);
+    if (event.recurringEventId) eventIds.add(event.recurringEventId);
+  }
+  const ids = [...eventIds];
+  const rows: (typeof eventMeta.$inferSelect)[] = [];
+  for (let offset = 0; offset < ids.length; offset += EVENT_META_ID_CHUNK_SIZE) {
+    const chunk = ids.slice(offset, offset + EVENT_META_ID_CHUNK_SIZE);
+    const result = await db
+      .select()
+      .from(eventMeta)
+      .where(
+        and(
+          eq(eventMeta.familyId, familyId),
+          eq(eventMeta.calendarId, calendarId),
+          or(inArray(eventMeta.eventId, chunk), inArray(eventMeta.recurringEventId, chunk)),
+        ),
+      );
+    rows.push(...result);
+  }
+  const uniqueRows = new Map<string, typeof eventMeta.$inferSelect>();
+  for (const row of rows) uniqueRows.set(row.id, row);
+  return [...uniqueRows.values()];
 }
 
 function parsePrivateMetadata(value: unknown): Record<string, string> {
@@ -359,12 +392,21 @@ async function handleFamilyWeek(c: WeekContext) {
   activeMembers.sort(compareFamilyMembers);
   const activeMemberIds = new Set(activeMembers.map((member) => member.id));
 
-  const metaRows = await db
-    .select()
-    .from(eventMeta)
-    .where(
-      and(eq(eventMeta.familyId, familyId), eq(eventMeta.calendarId, family.familyCalendarId)),
+  let metaRows: (typeof eventMeta.$inferSelect)[];
+  try {
+    const eligibleEvents = fetchedEvents.filter(
+      (event) =>
+        event.status !== 'cancelled' && eventIsInRange(event, range.timeMin, range.timeMax),
     );
+    metaRows = await fetchRelevantEventMetadata(
+      db,
+      familyId,
+      family.familyCalendarId,
+      eligibleEvents,
+    );
+  } catch {
+    return errorResponse(c, 500, 'INTERNAL_ERROR');
+  }
 
   const seenEventIds = new Set<string>();
   const events: WeekEvent[] = [];

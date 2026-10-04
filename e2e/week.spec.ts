@@ -433,6 +433,18 @@ test.describe('Task 1-7: S1 week view', () => {
     expect(emptyRowHeight).toBeDefined();
     if (mondayRowHeight !== undefined && emptyRowHeight !== undefined)
       expect(emptyRowHeight).toBeLessThan(mondayRowHeight);
+    const emptyDayAddButton = emptyTuesday.locator('button[data-testid="add-event-2026-10-06"]');
+    await expect(emptyDayAddButton).toHaveAttribute('aria-label', '10月6日に予定を追加');
+    await expect(emptyDayAddButton).toHaveText('');
+    await expect(emptyDayAddButton.locator('svg')).toHaveCount(1);
+    const emptyDayAddBounds = await emptyDayAddButton.boundingBox();
+    expect(emptyDayAddBounds?.width).toBeGreaterThanOrEqual(44);
+    expect(emptyDayAddBounds?.height).toBeGreaterThanOrEqual(44);
+    const emptyDayAddStyle = await emptyDayAddButton.evaluate((button) => ({
+      borderWidth: getComputedStyle(button).borderTopWidth,
+      backgroundColor: getComputedStyle(button).backgroundColor,
+    }));
+    expect(emptyDayAddStyle).toEqual({ borderWidth: '0px', backgroundColor: 'rgba(0, 0, 0, 0)' });
     const weekendDates = await page
       .locator('[data-testid="week-day"][data-layout="weekend-card"]')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-date')));
@@ -454,6 +466,24 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('秋の行事')).toBeVisible();
     const saturdayCard = page.locator('[data-testid="week-day"][data-date="2026-10-10"]');
     const sundayCard = page.locator('[data-testid="week-day"][data-date="2026-10-11"]');
+    const saturdayAddButton = saturdayCard.locator('button[data-testid="add-event-2026-10-10"]');
+    await expect(saturdayAddButton).toHaveAttribute('aria-label', '10月10日に予定を追加');
+    await expect(saturdayAddButton).toHaveText('');
+    await expect(saturdayAddButton.locator('svg')).toHaveCount(1);
+    const longWeekendBadge = saturdayCard.getByText('3連休', { exact: true });
+    const [longWeekendBounds, saturdayAddBounds, saturdayCardBounds] = await Promise.all([
+      longWeekendBadge.boundingBox(),
+      saturdayAddButton.boundingBox(),
+      saturdayCard.boundingBox(),
+    ]);
+    expect(longWeekendBounds?.x).toBeDefined();
+    expect(saturdayAddBounds?.x).toBeDefined();
+    if (longWeekendBounds && saturdayAddBounds && saturdayCardBounds) {
+      expect(longWeekendBounds.x).toBeLessThan(saturdayAddBounds.x);
+      expect(saturdayAddBounds.x + saturdayAddBounds.width).toBeLessThanOrEqual(
+        saturdayCardBounds.x + saturdayCardBounds.width,
+      );
+    }
     await expect(saturdayCard.getByText('家族で宿泊', { exact: true })).toBeVisible();
     await expect(sundayCard.getByText('家族で宿泊', { exact: true })).toBeVisible();
     await expect(saturdayCard.getByText('繰り返し', { exact: true })).toBeVisible();
@@ -474,7 +504,9 @@ test.describe('Task 1-7: S1 week view', () => {
       expect(box).not.toBeNull();
       if (box) expect(box.y + box.height).toBeLessThanOrEqual(844);
     }
-    await expect(page.getByText(/追加|予定を立てる/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeVisible();
+    await expect(page.locator('button[data-testid^="add-event-"]')).toHaveCount(8);
+    await expect(page.getByText(/予定を立てる/)).toHaveCount(0);
     await expect(
       page.getByText(/みんな空き|予定あり|自分だけ|空き時間から探す|添付写真/),
     ).toHaveCount(0);
@@ -501,6 +533,52 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText(LONG_FAMILY_NAME, { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectControlsAtLeast44px(page);
+  });
+
+  test('keeps adjacent empty compact rows at 44px with separate add-button hit areas', async ({
+    page,
+  }) => {
+    await mockWeekApis(page);
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const requested = new URL(route.request().url()).searchParams.get('start') as DateKey | null;
+      const week = buildWeek(requested ?? BASE_WEEK);
+      const emptyDates = new Set<DateKey>(['2026-10-08', '2026-10-09']);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...week,
+          days: week.days.map((day) =>
+            emptyDates.has(day.date) ? { ...day, layout: 'compact', eventIds: [] } : day,
+          ),
+        }),
+      });
+    });
+    await page.goto('/?week=2026-10-05');
+
+    const thursday = page.locator('[data-testid="week-day"][data-date="2026-10-08"]');
+    const friday = page.locator('[data-testid="week-day"][data-date="2026-10-09"]');
+    await expect(thursday).toHaveAttribute('data-layout', 'compact');
+    await expect(friday).toHaveAttribute('data-layout', 'compact');
+    const [thursdayRow, fridayRow, thursdayAdd, fridayAdd] = await Promise.all([
+      thursday.boundingBox(),
+      friday.boundingBox(),
+      page.getByTestId('add-event-2026-10-08').boundingBox(),
+      page.getByTestId('add-event-2026-10-09').boundingBox(),
+    ]);
+    expect(thursdayRow).not.toBeNull();
+    expect(fridayRow).not.toBeNull();
+    expect(thursdayAdd).not.toBeNull();
+    expect(fridayAdd).not.toBeNull();
+    if (thursdayRow && fridayRow && thursdayAdd && fridayAdd) {
+      expect(Math.abs(thursdayRow.height - 44)).toBeLessThanOrEqual(1);
+      expect(Math.abs(fridayRow.height - 44)).toBeLessThanOrEqual(1);
+      for (const target of [thursdayAdd, fridayAdd]) {
+        expect(target.width).toBeGreaterThanOrEqual(44);
+        expect(target.height).toBeGreaterThanOrEqual(44);
+      }
+      expect(thursdayAdd.y + thursdayAdd.height).toBeLessThanOrEqual(fridayAdd.y + 0.5);
+    }
   });
 
   test('uses viewport width at 445px and centers the shared max width on a wide viewport', async ({
