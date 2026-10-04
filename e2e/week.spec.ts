@@ -933,9 +933,6 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('朝の支度')).toHaveCount(0);
     await page.goto('/family');
     await expect(page.getByText('テスト利用者')).toBeVisible();
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      await page.screenshot({ path: 'docs/screenshots/family.png', fullPage: true });
-    }
     await expect(page.locator('[data-testid="onboarding-link"]')).toBeVisible();
     await expect(page.locator('[data-testid="logout-button"]')).toBeVisible();
     await expect(page.getByText('朝の支度')).toHaveCount(0);
