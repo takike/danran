@@ -1,6 +1,6 @@
 # タスク指示書
 
-コーディングエージェントに渡す作業指示を置く場所。チャットには「どのファイルを実施するか」だけを書き、内容はここを正とする。
+コーディングエージェント（Codex）に渡す作業指示を置く場所。指示書を書き、PR をレビューするのは計画・レビュー担当（[CLAUDE.md](../../CLAUDE.md)）。チャットには「どのファイルを実施するか」だけを書き、内容はここを正とする。
 
 ## 使い方
 
@@ -18,7 +18,7 @@
 | 1 | [fix-pwa-update-reload.md](fix-pwa-update-reload.md) | デプロイ後に古い画面が残る問題の修正 | 完了（PR #15） |
 | 2 | [1-7-followup-week-polish.md](1-7-followup-week-polish.md) | 週ビューの実機確認で見つかった点の修正 | 完了（PR #16） |
 | 3 | [1-8-event-editing.md](1-8-event-editing.md) | 予定の作成・編集・削除 | 完了（PR #17。[1-8-review-fixes.md](1-8-review-fixes.md) 反映済み） |
-| 4 | [1-9-settings.md](1-9-settings.md) | 設定：メンバーの名前・色、休園日 | PR #18（レビュー済み） |
-| 5 | [2-1-personal-events.md](2-1-personal-events.md) | 自分の個人予定を自分の画面にだけ表示（要：人間による Google Cloud のスコープ登録） | 未着手 |
+| 4 | [1-9-settings.md](1-9-settings.md) | 設定：メンバーの名前・色、休園日 | 完了（PR #18） |
+| 5 | [2-1-personal-events.md](2-1-personal-events.md) | 自分の個人予定を自分の画面にだけ表示（要：人間による Google Cloud のスコープ登録） | PR #19（未レビュー） |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
