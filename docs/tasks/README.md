@@ -14,8 +14,8 @@
 
 | 順 | ファイル | 内容 | 状態 |
 |---|---|---|---|
-| 1 | [fix-pwa-update-reload.md](fix-pwa-update-reload.md) | デプロイ後に古い画面が残る問題の修正 | PR #15（レビュー済み） |
-| 2 | [1-7-followup-week-polish.md](1-7-followup-week-polish.md) | 週ビューの実機確認で見つかった点の修正 | 未着手 |
+| 1 | [fix-pwa-update-reload.md](fix-pwa-update-reload.md) | デプロイ後に古い画面が残る問題の修正 | 完了（PR #15） |
+| 2 | [1-7-followup-week-polish.md](1-7-followup-week-polish.md) | 週ビューの実機確認で見つかった点の修正 | PR #16（レビュー済み） |
 | 3 | [1-8-event-editing.md](1-8-event-editing.md) | 予定の作成・編集・削除 | 未着手 |
 
 2 と 3 はどちらも週ビューを変更するので、同時に進めず、前の PR がマージされてから次に着手する。
