@@ -26,5 +26,6 @@
 | 9 | [2-3-busy-api.md](2-3-busy-api.md) | 家族の空き状況を取得する API（開始・終了だけを返す。画面は変えない） | 完了（PR #23） |
 | 10 | [2-5-weekend-timeline.md](2-5-weekend-timeline.md) | 週末カードの空きタイムライン（メンバーごとの埋まっている時間、共通の空き、「みんな空き N時間」） | 完了（PR #24） |
 | 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | 完了（PR #25。[2-6-review-fixes.md](2-6-review-fixes.md) の3回分を反映済み）。実機確認待ち |
+| 12 | [ci-skip-docs-deploy.md](ci-skip-docs-deploy.md) | ドキュメントだけの push では staging のデプロイを走らせない（CI の変更。マージは人間） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
