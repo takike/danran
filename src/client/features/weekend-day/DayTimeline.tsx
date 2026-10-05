@@ -7,7 +7,10 @@ import {
   DAY_TIMELINE_START_HOUR,
   type PositionedDayEvent,
   type WeekendDayLayout,
-  getDayIntervalGeometry,
+  getDayEventDurationMilliseconds,
+  getDayEventGeometry,
+  getDayEventHitGeometry,
+  getDayEventHitPriority,
   getDayMemberColumnTracks,
   getDaySpanningTitleArea,
   getFreeBandHitGeometry,
@@ -26,13 +29,27 @@ function clock(instant: string): string {
   return toTokyoIsoString(instant).slice(11, 16);
 }
 
-function blockStyle(block: PositionedDayEvent<WeekEvent | PersonalEvent>): React.CSSProperties {
+function hitBlockStyle(block: PositionedDayEvent<WeekEvent | PersonalEvent>): React.CSSProperties {
+  const hit = getDayEventHitGeometry(block.geometry);
   return {
-    top: `${block.geometry.top}px`,
-    height: `${block.geometry.height}px`,
+    top: `${hit.top}px`,
+    height: `${hit.height}px`,
     left: `${(block.lane / block.laneCount) * 100}%`,
     width: `${100 / block.laneCount}%`,
+    zIndex: eventHitZIndex(block),
   };
+}
+
+function eventHitZIndex(block: PositionedDayEvent<WeekEvent | PersonalEvent>): number {
+  const maximumDuration = (DAY_TIMELINE_END_HOUR - DAY_TIMELINE_START_HOUR) * 60 * 60 * 1000;
+  // Exact duration wins first; at equal duration, local events stay above spanning events.
+  const localTieBreak = block.column.spansAll ? 0 : 1;
+  return 100 + (maximumDuration + getDayEventHitPriority(block.geometry)) * 2 + localTieBreak;
+}
+
+function eventFaceStyle(block: PositionedDayEvent<WeekEvent | PersonalEvent>): React.CSSProperties {
+  const hit = getDayEventHitGeometry(block.geometry);
+  return { top: `${hit.faceTop}px`, height: `${block.geometry.height}px` };
 }
 
 function eventTime(event: WeekEvent | PersonalEvent, date: DateKey): string {
@@ -129,18 +146,18 @@ function FamilyEventDetails({
         )}
       </span>
       <span className="day-timeline-event__wide-details flex min-w-0 max-w-full flex-col items-start gap-[var(--spacing-2xs)]">
-        <span className="max-w-full break-words text-[length:var(--nav-caption-size)] text-muted [overflow-wrap:anywhere]">
+        <span className="day-timeline-event__event-time max-w-full truncate whitespace-nowrap text-[length:var(--nav-caption-size)] text-muted">
           {eventTime(event, date)} · {eventTargets(event, members)}
         </span>
         {event.items.length > 0 && (
-          <span className="flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-2xs)]">
+          <span className="day-timeline-event__items flex min-w-0 max-w-full flex-nowrap gap-[var(--spacing-2xs)] overflow-hidden">
             {event.items.map((item, index) => (
               <span
                 key={`${event.id}-item-${index}`}
-                className="inline-flex min-w-0 items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)]"
+                className="inline-flex min-w-0 max-w-full shrink items-center gap-[var(--spacing-2xs)] overflow-hidden whitespace-nowrap rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)]"
               >
                 <ShoppingBag size={10} aria-hidden="true" className="shrink-0" />
-                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{item}</span>
+                <span className="min-w-0 truncate">{item}</span>
               </span>
             ))}
           </span>
@@ -175,12 +192,19 @@ function FamilyEventButton({
     <button
       type="button"
       data-testid={`weekend-day-event-${event.id}-${member?.id ?? 'all'}`}
+      data-event-duration-ms={getDayEventDurationMilliseconds(block.geometry)}
       aria-label={familyEventAccessibleLabel(event, date, members, block.column.assigneeMemberId)}
       onClick={(eventTarget) => onEdit(event, eventTarget.currentTarget)}
-      className={`day-timeline-event absolute z-20 flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${tentative ? 'border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus`}
-      style={{ ...blockStyle(block), backgroundColor: background }}
+      className="day-timeline-event day-timeline-event__hit absolute min-w-0 border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      style={hitBlockStyle(block)}
     >
-      <FamilyEventDetails block={block} date={date} members={members} />
+      <span
+        data-testid={`weekend-day-event-face-${event.id}-${member?.id ?? 'all'}`}
+        className={`day-timeline-event__face absolute inset-x-0 flex min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${tentative ? 'day-timeline-event__face--candidate border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-xs leading-tight shadow-[var(--week-card-shadow)]`}
+        style={{ ...eventFaceStyle(block), backgroundColor: background }}
+      >
+        <FamilyEventDetails block={block} date={date} members={members} />
+      </span>
     </button>
   );
 }
@@ -205,29 +229,40 @@ function SpanningFamilyEventButton({
     <button
       type="button"
       data-testid={`weekend-day-event-${event.id}-all`}
+      data-event-duration-ms={getDayEventDurationMilliseconds(block.geometry)}
       aria-label={label}
       onClick={(eventTarget) => onEdit(event, eventTarget.currentTarget)}
-      className={`day-timeline-event pointer-events-auto absolute inset-x-0 z-[15] flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${event.status === 'tentative' ? 'border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus`}
+      className="day-timeline-event day-timeline-event__hit pointer-events-auto absolute inset-x-0 min-w-0 border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       style={{
-        top: `${block.geometry.top}px`,
-        height: `${block.geometry.height}px`,
-        backgroundColor: background,
-        borderColor: event.status === 'tentative' ? 'var(--accent)' : 'var(--line)',
+        top: `${getDayEventHitGeometry(block.geometry).top}px`,
+        height: `${getDayEventHitGeometry(block.geometry).height}px`,
+        zIndex: eventHitZIndex(block),
       }}
     >
-      {titleArea.titleOnly ? (
-        <span
-          className="day-timeline-event__query-container absolute top-[var(--spacing-2xs)] min-w-0 overflow-hidden"
-          style={{
-            left: `calc(${titleArea.left * 100}% + var(--spacing-sm))`,
-            width: `calc(${titleArea.width * 100}% - var(--spacing-sm))`,
-          }}
-        >
+      <span
+        data-testid={`weekend-day-event-face-${event.id}-all`}
+        className={`day-timeline-event__face absolute inset-x-0 flex min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${event.status === 'tentative' ? 'day-timeline-event__face--candidate border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-xs leading-tight shadow-[var(--week-card-shadow)]`}
+        style={{
+          top: `${getDayEventHitGeometry(block.geometry).faceTop}px`,
+          height: `${block.geometry.height}px`,
+          backgroundColor: background,
+          borderColor: event.status === 'tentative' ? 'var(--accent)' : 'var(--line)',
+        }}
+      >
+        {titleArea.titleOnly ? (
+          <span
+            className="day-timeline-event__query-container absolute top-[var(--spacing-2xs)] bottom-[var(--spacing-2xs)] min-w-0 overflow-hidden"
+            style={{
+              left: `calc(${titleArea.left * 100}% + var(--spacing-sm))`,
+              width: `calc(${titleArea.width * 100}% - var(--spacing-sm))`,
+            }}
+          >
+            <FamilyEventDetails block={block} date={date} members={members} spanning />
+          </span>
+        ) : (
           <FamilyEventDetails block={block} date={date} members={members} spanning />
-        </span>
-      ) : (
-        <FamilyEventDetails block={block} date={date} members={members} spanning />
-      )}
+        )}
+      </span>
     </button>
   );
 }
@@ -243,30 +278,34 @@ function PrivateEventBlock({
     <div
       data-testid={`weekend-day-personal-event-${block.event.id}`}
       aria-label={`${block.event.title}、${eventTime(block.event, date)}、自分だけに見える予定`}
-      className="day-timeline-event absolute z-20 flex min-h-[var(--tap-target-min)] min-w-0 flex-col overflow-hidden rounded-[var(--radius-sm)] border border-dashed border-focus bg-surface px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs leading-tight"
-      style={blockStyle(block)}
+      className="absolute min-w-0"
+      style={{
+        top: `${block.geometry.top}px`,
+        height: `${block.geometry.height}px`,
+        left: `${(block.lane / block.laneCount) * 100}%`,
+        width: `${100 / block.laneCount}%`,
+        zIndex: eventHitZIndex(block),
+      }}
     >
-      <span className="block w-full min-w-0 truncate whitespace-nowrap font-semibold">
-        {block.event.title}
-      </span>
-      {block.laneCount === 1 && (
-        <>
-          <span className="text-[length:var(--nav-caption-size)] text-muted">
-            {eventTime(block.event, date)}
-          </span>
-          <span className="mt-auto inline-flex items-center gap-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)] text-muted">
-            <KeyRound size={12} aria-hidden="true" />
-            自分だけ
-          </span>
-        </>
-      )}
-      {block.laneCount > 1 && (
+      <span
+        data-testid={`weekend-day-personal-event-face-${block.event.id}`}
+        className="day-timeline-event__face absolute inset-0 flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-sm)] border border-dashed border-focus bg-surface px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs leading-tight"
+      >
+        <span
+          data-testid={`weekend-day-personal-title-${block.event.id}`}
+          className="block w-full min-w-0 truncate whitespace-nowrap pl-[var(--spacing-md)] font-semibold"
+        >
+          {block.event.title}
+        </span>
         <KeyRound
-          size={10}
+          size={12}
           aria-hidden="true"
-          className="absolute bottom-[var(--spacing-2xs)] right-[var(--spacing-2xs)]"
+          className="absolute left-[var(--spacing-xs)] top-[var(--spacing-xs)]"
         />
-      )}
+        <span className="day-timeline-event__private-details truncate whitespace-nowrap text-[length:var(--nav-caption-size)] text-muted">
+          {eventTime(block.event, date)} · 自分だけ
+        </span>
+      </span>
     </div>
   );
 }
@@ -282,7 +321,11 @@ function BusyStripe({
   memberId: string;
   index: number;
 }): React.ReactElement | null {
-  const geometry = getDayIntervalGeometry(date, interval);
+  const geometry = getDayEventGeometry(date, {
+    kind: 'timed',
+    start: interval.start,
+    endExclusive: interval.end,
+  });
   if (geometry.kind !== 'timeline') return null;
   return (
     <div

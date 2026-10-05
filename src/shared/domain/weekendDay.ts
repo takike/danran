@@ -17,7 +17,8 @@ import { getLongWeekendBadges } from './weekPresentation';
 export const DAY_TIMELINE_START_HOUR = 7;
 export const DAY_TIMELINE_END_HOUR = 21;
 export const DAY_PIXELS_PER_HOUR = 48;
-const MIN_BLOCK_HEIGHT = 44;
+const MIN_BLOCK_HEIGHT = 24;
+const MIN_EVENT_HIT_HEIGHT = 44;
 
 export type DayEventGeometry =
   | { kind: 'timeline'; top: number; height: number; start: string; end: string }
@@ -76,6 +77,12 @@ export interface FreeBandHitGeometry {
   backgroundTop: number;
 }
 
+export interface DayEventHitGeometry {
+  top: number;
+  height: number;
+  faceTop: number;
+}
+
 export interface WeekendDayLayout {
   kind: 'ready' | 'family-error' | 'day-error';
   ownMemberId: string | null;
@@ -95,12 +102,8 @@ export interface WeekendDayLayout {
 export function getDayEventGeometry(
   date: DateKey,
   time: WeekEvent['time'] | PersonalEvent['time'],
-  minimumHeight = MIN_BLOCK_HEIGHT,
 ): DayEventGeometry {
   if (time.kind === 'all-day') return { kind: 'all-day' };
-  if (!Number.isFinite(minimumHeight) || minimumHeight <= 0) {
-    throw new RangeError('Minimum event card height must be finite and positive');
-  }
 
   const intervalGeometry = getDayIntervalGeometry(date, {
     start: time.start,
@@ -117,7 +120,7 @@ export function getDayEventGeometry(
       3_600_000) *
     DAY_PIXELS_PER_HOUR;
   const timelineHeight = DAY_PIXELS_PER_HOUR * (DAY_TIMELINE_END_HOUR - DAY_TIMELINE_START_HOUR);
-  const height = Math.min(timelineHeight, Math.max(minimumHeight, actualHeight));
+  const height = Math.min(timelineHeight, Math.max(MIN_BLOCK_HEIGHT, actualHeight));
   const top = Math.min(rawTop, timelineHeight - height);
   if (![top, height].every(Number.isFinite))
     throw new TypeError('Timeline geometry must be finite');
@@ -191,7 +194,7 @@ export function assignEventColumns(
   return columns;
 }
 
-/** Assigns overlap lanes independently per member column, accounting for short-block minimum height. */
+/** Assigns overlap lanes from visible event geometry, without expanding hit targets. */
 export function layoutDayEventBlocks(blocks: readonly DayBlockLaneInput[]): DayBlockLane[] {
   const normalized = blocks.map((block) => {
     if (!Number.isFinite(block.top) || !Number.isFinite(block.height) || block.height <= 0) {
@@ -401,6 +404,30 @@ export function getFreeBandHitGeometry(
     Math.min(geometry.top - (height - geometry.height) / 2, timelineHeight - height),
   );
   return { top, height, backgroundTop: geometry.top - top };
+}
+
+/** Expands only an event's transparent hit area, clipped to the timeline edges. */
+export function getDayEventHitGeometry(
+  geometry: Pick<Extract<DayEventGeometry, { kind: 'timeline' }>, 'top' | 'height'>,
+  timelineHeight = DAY_PIXELS_PER_HOUR * (DAY_TIMELINE_END_HOUR - DAY_TIMELINE_START_HOUR),
+  minimumHitHeight = MIN_EVENT_HIT_HEIGHT,
+): DayEventHitGeometry {
+  const hit = getFreeBandHitGeometry(geometry, timelineHeight, minimumHitHeight);
+  return { top: hit.top, height: hit.height, faceTop: geometry.top - hit.top };
+}
+
+/** Returns exact visible event duration, independent of the minimum drawn height. */
+export function getDayEventDurationMilliseconds(
+  geometry: Pick<Extract<DayEventGeometry, { kind: 'timeline' }>, 'start' | 'end'>,
+): number {
+  return parseIsoInstantMilliseconds(geometry.end) - parseIsoInstantMilliseconds(geometry.start);
+}
+
+/** Higher values put shorter events in front when their expanded hit areas overlap. */
+export function getDayEventHitPriority(
+  geometry: Pick<Extract<DayEventGeometry, { kind: 'timeline' }>, 'start' | 'end'>,
+): number {
+  return -getDayEventDurationMilliseconds(geometry);
 }
 
 /** Builds a one-hour (or shorter) timed event range from the start of a free band. */
@@ -618,7 +645,7 @@ function categorizeAndPositionEvents<T extends WeekEvent | PersonalEvent>(
     geometry: Extract<DayEventGeometry, { kind: 'timeline' }>;
   }> = [];
   for (const event of events) {
-    const geometry = getDayEventGeometry(date, event.time, getMinimumCardHeight(event));
+    const geometry = getDayEventGeometry(date, event.time);
     if (geometry.kind === 'all-day') {
       allDay.push(event);
       continue;
@@ -659,10 +686,4 @@ function toLaneInput(
     top: block.geometry.top,
     height: block.geometry.height,
   };
-}
-
-function getMinimumCardHeight(event: WeekEvent | PersonalEvent): number {
-  if (!('status' in event)) return 68;
-  const baseHeight = event.status === 'tentative' ? 88 : 68;
-  return baseHeight + event.items.length * 24;
 }

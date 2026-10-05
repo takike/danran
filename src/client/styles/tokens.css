@@ -46,7 +46,7 @@
     color-mix(in srgb, var(--muted) 30%, transparent) 0 2px,
     transparent 2px 6px
   );
-  --day-event-min-height: 36px;
+  --day-event-min-height: 24px;
   --day-band-min-height: 44px;
   --day-block-inset: 2px;
   --week-card-shadow: 0 2px 10px rgba(31, 29, 26, 0.05);
@@ -114,14 +114,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.day-timeline-event {
+.day-timeline-event__face {
   container-name: day-event;
-  container-type: inline-size;
+  container-type: size;
 }
 
 .day-timeline-event__query-container {
   container-name: day-event;
-  container-type: inline-size;
+  container-type: size;
 }
 
 .day-timeline-event__wide-details {
@@ -135,6 +135,12 @@ body {
   overflow: hidden;
 }
 
+.day-timeline-event__event-time,
+.day-timeline-event__items,
+.day-timeline-event__private-details {
+  display: none;
+}
+
 .day-timeline-event__compact-candidate {
   display: inline-flex;
 }
@@ -143,21 +149,36 @@ body {
   display: none;
 }
 
-/* Container queries measure the card content box, keeping the usable-width threshold near 120px. */
-@container day-event (min-width: 120px) {
-  .day-timeline-event__wide-details {
+/* Width controls metadata density; height controls how many rows fit in the visible face. */
+@container day-event (min-width: 120px) and (min-height: 32px) {
+  .day-timeline-event__wide-labels {
     display: flex;
   }
 
-  .day-timeline-event__wide-labels {
-    display: flex;
+  .day-timeline-event__compact-candidate {
+    display: none;
   }
 
   .day-timeline-event__routine {
     display: inline-flex;
   }
+}
 
-  .day-timeline-event__compact-candidate {
-    display: none;
+@container day-event (min-width: 120px) and (min-height: 32px) {
+  .day-timeline-event__wide-details,
+  .day-timeline-event__event-time {
+    display: flex;
+  }
+}
+
+@container day-event (min-width: 120px) and (min-height: 56px) {
+  .day-timeline-event__items {
+    display: flex;
+  }
+}
+
+@container day-event (min-width: 120px) and (min-height: 32px) {
+  .day-timeline-event__private-details {
+    display: block;
   }
 }

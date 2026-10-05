@@ -188,6 +188,35 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       { isRoutine: true },
     ),
     event(
+      'evt-short-overlap-long',
+      '1時間の比較予定',
+      `${date}T09:00:00+09:00`,
+      `${date}T10:00:00+09:00`,
+      [],
+    ),
+    event(
+      'evt-short-thirty',
+      '30分の短い予定',
+      `${date}T09:15:00+09:00`,
+      `${date}T09:45:00+09:00`,
+      [ADULT_C],
+    ),
+    event(
+      'evt-short-fifteen',
+      '15分の短い予定',
+      `${date}T13:00:00+09:00`,
+      `${date}T13:15:00+09:00`,
+      [CHILD],
+    ),
+    event(
+      'evt-candidate-items-hour',
+      '持ち物あり候補',
+      `${date}T13:00:00+09:00`,
+      `${date}T14:00:00+09:00`,
+      [],
+      { status: 'tentative', items: ['水筒'] },
+    ),
+    event(
       'evt-all-members',
       '家族全員の昼予定',
       `${date}T14:00:00+09:00`,
@@ -321,7 +350,10 @@ function makeBusyWeek(family: FamilyPublic, anchor: DateKey, mode: MockOptions):
       return {
         memberId,
         status: 'ready',
-        busy: [{ start: `${day}T08:00:00+09:00`, end: `${day}T08:45:00+09:00` }],
+        busy: [
+          { start: `${day}T08:00:00+09:00`, end: `${day}T08:45:00+09:00` },
+          { start: `${day}T09:00:00+09:00`, end: `${day}T09:15:00+09:00` },
+        ],
       };
     }
     return { memberId, status: 'ready', busy: intervals };
@@ -375,6 +407,17 @@ function makePersonalWeek(
               kind: 'timed',
               start: `${date}T21:30:00+09:00`,
               endExclusive: `${date}T22:00:00+09:00`,
+            },
+            isRoutine: false,
+          },
+          {
+            id: `${memberId}::personal-short`,
+            calendarId: `private_calendar_${activeAccount}`,
+            title: '15分の自分だけ予定',
+            time: {
+              kind: 'timed',
+              start: `${date}T13:00:00+09:00`,
+              endExclusive: `${date}T13:15:00+09:00`,
             },
             isRoutine: false,
           },
@@ -643,7 +686,10 @@ async function expectCardTitleAboveOverlappingFreeLabel(
         cardElement.querySelector('span');
       if (!titleElement) return { foundTitle: false, overlaps: [], titleInsideCard: false };
       const titleRect = titleElement.getBoundingClientRect();
-      const cardRect = cardElement.getBoundingClientRect();
+      const faceElement =
+        cardElement.querySelector<HTMLElement>('[data-testid^="weekend-day-event-face-"]') ??
+        cardElement;
+      const cardRect = faceElement.getBoundingClientRect();
       const range = document.createRange();
       range.selectNodeContents(titleElement);
       const visibleTextRects = Array.from(range.getClientRects())
@@ -706,7 +752,7 @@ async function expectCardTitleAboveOverlappingFreeLabel(
     await title.getAttribute('data-testid'),
   );
   await expect(title).toBeVisible();
-  await expect(card).toHaveAttribute('aria-label', new RegExp((await title.textContent()) ?? ''));
+  expect(await card.getAttribute('aria-label')).toContain((await title.textContent()) ?? '');
   expect(result.foundTitle).toBe(true);
   expect(result.titleInsideCard, JSON.stringify(result.overlaps)).toBe(true);
   expect(result.overlaps.length > 0, JSON.stringify(result)).toBe(expectedOverlap);
@@ -755,7 +801,7 @@ async function expectVisibleControlsAtLeast44px(page: Page) {
     expect(bounds).not.toBeNull();
     if (bounds) {
       const isDenseTimelineEvent = await control.evaluate((element) =>
-        element.matches('.day-timeline-event'),
+        element.matches('.day-timeline-event, .day-timeline-event__hit'),
       );
       // Narrow event lanes divide their column width; keep their tap height while allowing that specified width.
       if (!isDenseTimelineEvent) expect(bounds.width).toBeGreaterThanOrEqual(44);
@@ -950,10 +996,10 @@ test.describe('Task 2-6: weekend day detail', () => {
       await expectTextFirstGlyphHitWithinCard(label, picnic);
     }
     const assignedBounds = await page
-      .getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`)
+      .getByTestId(`weekend-day-event-face-evt-assigned-piano-${ADULT_A}`)
       .boundingBox();
     const overlapBounds = await page
-      .getByTestId(`weekend-day-event-evt-overlap-piano-${ADULT_A}`)
+      .getByTestId(`weekend-day-event-face-evt-overlap-piano-${ADULT_A}`)
       .boundingBox();
     expect(assignedBounds).not.toBeNull();
     expect(overlapBounds).not.toBeNull();
@@ -964,7 +1010,7 @@ test.describe('Task 2-6: weekend day detail', () => {
       expect(assignedBounds.width).toBeLessThan(overlapBounds.width * 2);
     }
     const singleCandidate = await page
-      .getByTestId(`weekend-day-event-evt-candidate-overlap-${ADULT_A}`)
+      .getByTestId(`weekend-day-event-face-evt-candidate-overlap-${ADULT_A}`)
       .boundingBox();
     expect(singleCandidate).not.toBeNull();
     if (singleCandidate && assignedBounds && overlapBounds) {
@@ -976,10 +1022,13 @@ test.describe('Task 2-6: weekend day detail', () => {
       expect(singleCandidate.x).not.toBe(overlapBounds.x);
     }
     const narrowCandidate = page.getByTestId(`weekend-day-event-evt-candidate-overlap-${ADULT_A}`);
-    const narrowCandidateBounds = await narrowCandidate.boundingBox();
+    const narrowCandidateFace = page.getByTestId(
+      `weekend-day-event-face-evt-candidate-overlap-${ADULT_A}`,
+    );
+    const narrowCandidateBounds = await narrowCandidateFace.boundingBox();
     expect(narrowCandidateBounds).not.toBeNull();
     if (narrowCandidateBounds) expect(narrowCandidateBounds.width).toBeLessThan(90);
-    const narrowCandidateBorder = await narrowCandidate.evaluate(
+    const narrowCandidateBorder = await narrowCandidateFace.evaluate(
       (element) => getComputedStyle(element).borderTopStyle,
     );
     const narrowCandidateMark = narrowCandidate.getByText('候', { exact: true });
@@ -990,7 +1039,7 @@ test.describe('Task 2-6: weekend day detail', () => {
       await expect(narrowCandidateMark).toBeVisible();
       const [markBounds, cardBounds] = await Promise.all([
         narrowCandidateMark.boundingBox(),
-        narrowCandidate.boundingBox(),
+        narrowCandidateFace.boundingBox(),
       ]);
       expect(markBounds).not.toBeNull();
       expect(cardBounds).not.toBeNull();
@@ -1021,22 +1070,24 @@ test.describe('Task 2-6: weekend day detail', () => {
     expect(busyPattern).not.toContain('var(');
     const candidate = page.getByTestId('weekend-day-event-evt-candidate-picnic-all');
     const lunch = page.getByTestId('weekend-day-event-evt-all-members-all');
+    const candidateFace = page.getByTestId('weekend-day-event-face-evt-candidate-picnic-all');
+    const lunchFace = page.getByTestId('weekend-day-event-face-evt-all-members-all');
     const [candidateBounds, lunchBounds] = await Promise.all([
-      candidate.boundingBox(),
-      lunch.boundingBox(),
+      candidateFace.boundingBox(),
+      lunchFace.boundingBox(),
     ]);
     expect(candidateBounds).not.toBeNull();
     expect(lunchBounds).not.toBeNull();
     if (candidateBounds && lunchBounds) {
-      expect(candidateBounds.y).toBeLessThan(lunchBounds.y + lunchBounds.height);
-      expect(lunchBounds.y).toBeLessThan(candidateBounds.y + candidateBounds.height);
+      expect(candidateBounds.y).toBeGreaterThanOrEqual(lunchBounds.y + lunchBounds.height - 1);
       expect(candidateBounds.x).toBeCloseTo(lunchBounds.x, 0);
       expect(candidateBounds.width).toBeCloseTo(lunchBounds.width, 0);
     }
     const allMemberSpan = page.getByTestId('weekend-day-event-evt-all-span-only-all');
+    const allMemberSpanFace = page.getByTestId('weekend-day-event-face-evt-all-span-only-all');
     await expect(allMemberSpan).toHaveCount(1);
     const [spanBounds, firstColumnBounds, lastColumnBounds] = await Promise.all([
-      allMemberSpan.boundingBox(),
+      allMemberSpanFace.boundingBox(),
       page.getByTestId(`weekend-day-column-${ADULT_A}`).boundingBox(),
       page.getByTestId(`weekend-day-column-${CHILD}`).boundingBox(),
     ]);
@@ -1055,7 +1106,7 @@ test.describe('Task 2-6: weekend day detail', () => {
       );
     }
     await expect(allMemberSpan).toContainText('家族全員で見る予定');
-    const spanningBackground = await allMemberSpan.evaluate(
+    const spanningBackground = await allMemberSpanFace.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );
     const freeBandBackground = await page
@@ -1067,7 +1118,7 @@ test.describe('Task 2-6: weekend day detail', () => {
           ).backgroundColor,
       );
     expect(spanningBackground).not.toBe(freeBandBackground);
-    const chipColor = await allMemberSpan.evaluate((element) => {
+    const chipColor = await allMemberSpanFace.evaluate((element) => {
       const probe = document.createElement('span');
       probe.style.backgroundColor = 'var(--chip)';
       document.body.appendChild(probe);
@@ -1085,16 +1136,14 @@ test.describe('Task 2-6: weekend day detail', () => {
     await expect(
       page.getByTestId(`weekend-day-personal-event-${ADULT_A}::personal-timed`),
     ).toContainText(A_PERSONAL_TITLE);
-    const selfTitle = page
-      .getByTestId(`weekend-day-personal-event-${ADULT_A}::personal-timed`)
-      .locator('span')
-      .first();
+    const selfTitle = page.getByTestId(`weekend-day-personal-title-${ADULT_A}::personal-timed`);
     const selfCard = page.getByTestId(`weekend-day-personal-event-${ADULT_A}::personal-timed`);
+    const selfFace = page.getByTestId(`weekend-day-personal-event-face-${ADULT_A}::personal-timed`);
     const freeLabels = page.locator('[data-testid^="weekend-day-free-band-"]');
     await expect(freeLabels).not.toHaveCount(0);
     const [selfTitleBounds, selfCardBounds] = await Promise.all([
       selfTitle.boundingBox(),
-      selfCard.boundingBox(),
+      selfFace.boundingBox(),
     ]);
     expect(selfTitleBounds).not.toBeNull();
     expect(selfCardBounds).not.toBeNull();
@@ -1106,9 +1155,9 @@ test.describe('Task 2-6: weekend day detail', () => {
     }
     const candidateTitle = page.getByTestId('weekend-day-event-title-evt-candidate-picnic');
     const [candidateCardBounds, candidateTitleBounds, privateTitleCardBounds] = await Promise.all([
-      candidate.boundingBox(),
+      candidateFace.boundingBox(),
       candidateTitle.boundingBox(),
-      selfCard.boundingBox(),
+      selfFace.boundingBox(),
     ]);
     expect(candidateCardBounds).not.toBeNull();
     expect(candidateTitleBounds).not.toBeNull();
@@ -1183,6 +1232,168 @@ test.describe('Task 2-6: weekend day detail', () => {
       scroll: element.scrollWidth,
     }));
     expect(scrollMetrics.scroll).toBeLessThanOrEqual(scrollMetrics.client);
+  });
+
+  test('keeps visual event faces true to duration and routes expanded transparent hits to the shorter event', async ({
+    page,
+  }) => {
+    await mockDayApis(page);
+    await page.goto(`/day/${SATURDAY}`);
+    await expect(page.getByTestId('weekend-day-timeline')).toBeVisible();
+
+    const face = (id: string, suffix: string) =>
+      page.getByTestId(`weekend-day-event-face-${id}-${suffix}`);
+    const hit = (id: string, suffix: string) =>
+      page.getByTestId(`weekend-day-event-${id}-${suffix}`);
+    const oneHour = face('evt-width-control', ADULT_B);
+    const oneHourCandidate = face('evt-candidate-items-hour', 'all');
+    const thirtyMinutes = face('evt-short-thirty', ADULT_C);
+    const fifteenMinutes = face('evt-short-fifteen', CHILD);
+    for (const [eventFace, expectedHeight] of [
+      [oneHour, 48],
+      [oneHourCandidate, 48],
+      [thirtyMinutes, 24],
+      [fifteenMinutes, 24],
+    ] as const) {
+      const bounds = await eventFace.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (bounds) expect(bounds.height).toBeCloseTo(expectedHeight, 0);
+    }
+    await expect(oneHourCandidate).toContainText('持ち物あり候補');
+    await expect(oneHourCandidate).toContainText('候補');
+    await expect(oneHourCandidate.getByText('水筒', { exact: true })).toBeHidden();
+
+    const longFace = face('evt-short-overlap-long', 'all');
+    const shortFace = thirtyMinutes;
+    const shortHit = hit('evt-short-thirty', ADULT_C);
+    const [longBounds, shortBounds, shortHitBounds] = await Promise.all([
+      longFace.boundingBox(),
+      shortFace.boundingBox(),
+      shortHit.boundingBox(),
+    ]);
+    expect(longBounds).not.toBeNull();
+    expect(shortBounds).not.toBeNull();
+    expect(shortHitBounds).not.toBeNull();
+    if (longBounds && shortBounds && shortHitBounds) {
+      expect(shortHitBounds.height).toBeGreaterThanOrEqual(44);
+      const left = Math.max(longBounds.x, shortHitBounds.x);
+      const right = Math.min(
+        longBounds.x + longBounds.width,
+        shortHitBounds.x + shortHitBounds.width,
+      );
+      const top = Math.max(longBounds.y, shortHitBounds.y);
+      const bottom = Math.min(
+        longBounds.y + longBounds.height,
+        shortHitBounds.y + shortHitBounds.height,
+      );
+      let transparentPoint: { x: number; y: number } | null = null;
+      for (let y = top; y < bottom && !transparentPoint; y += 1) {
+        for (let x = left; x < right; x += 1) {
+          const inShortFace =
+            x >= shortBounds.x &&
+            x <= shortBounds.x + shortBounds.width &&
+            y >= shortBounds.y &&
+            y <= shortBounds.y + shortBounds.height;
+          if (!inShortFace) {
+            transparentPoint = { x: x + 0.5, y: y + 0.5 };
+            break;
+          }
+        }
+      }
+      expect(
+        transparentPoint,
+        'the short event should expose a transparent hit area over the long face',
+      ).not.toBeNull();
+      if (transparentPoint) {
+        const [shortZ, longZ] = await Promise.all([
+          shortHit.evaluate((element) => Number(getComputedStyle(element).zIndex)),
+          hit('evt-short-overlap-long', 'all').evaluate((element) =>
+            Number(getComputedStyle(element).zIndex),
+          ),
+        ]);
+        expect(shortZ).toBeGreaterThan(longZ);
+        const topHit = await page.evaluate(({ x, y }) => {
+          const element = document.elementFromPoint(x, y);
+          return element
+            ?.closest('button[data-testid^="weekend-day-event-"]')
+            ?.getAttribute('data-testid');
+        }, transparentPoint);
+        expect(topHit).toBe(`weekend-day-event-evt-short-thirty-${ADULT_C}`);
+        await page.mouse.click(transparentPoint.x, transparentPoint.y);
+        await expect(page.getByTestId('event-dialog').getByLabel('タイトル')).toHaveValue(
+          '30分の短い予定',
+        );
+        await page.getByTestId('event-dialog').getByRole('button', { name: 'キャンセル' }).click();
+      }
+    }
+
+    const twelveTick = page.getByTestId('weekend-day-timeline').getByText('12', { exact: true });
+    const controlBounds = await oneHour.boundingBox();
+    const tickBounds = await twelveTick.boundingBox();
+    expect(controlBounds).not.toBeNull();
+    expect(tickBounds).not.toBeNull();
+    if (controlBounds && tickBounds) {
+      expect(controlBounds.y + controlBounds.height).toBeLessThanOrEqual(
+        tickBounds.y + tickBounds.height / 2 + 1,
+      );
+    }
+    const noonBandLabel = page
+      .locator('[data-testid^="weekend-day-free-band-"]')
+      .filter({ hasText: '12:00' })
+      .first();
+    await expect(noonBandLabel).toBeVisible();
+    const noonLabelHit = await noonBandLabel.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const bounds = range.getClientRects()[0];
+      if (!bounds) return false;
+      const hitElement = document.elementFromPoint(
+        bounds.left + Math.min(2, bounds.width / 2),
+        bounds.top + bounds.height / 2,
+      );
+      return (
+        hitElement?.closest('[data-testid^="weekend-day-free-add-"]') === element.parentElement &&
+        !hitElement.closest('button[data-testid^="weekend-day-event-"]')
+      );
+    });
+    expect(noonLabelHit).toBe(true);
+
+    const thirtyHitBounds = await hit('evt-short-thirty', ADULT_C).boundingBox();
+    expect(thirtyHitBounds).not.toBeNull();
+    if (thirtyHitBounds) expect(thirtyHitBounds.height).toBeGreaterThanOrEqual(44);
+    await expect(
+      thirtyMinutes.getByTestId('weekend-day-event-title-evt-short-thirty'),
+    ).toBeVisible();
+    const thirtyTitle = thirtyMinutes.getByTestId('weekend-day-event-title-evt-short-thirty');
+    const [thirtyTitleBounds, thirtyFaceBounds] = await Promise.all([
+      thirtyTitle.boundingBox(),
+      thirtyMinutes.boundingBox(),
+    ]);
+    expect(thirtyTitleBounds).not.toBeNull();
+    expect(thirtyFaceBounds).not.toBeNull();
+    if (thirtyTitleBounds && thirtyFaceBounds) {
+      expect(thirtyTitleBounds.y).toBeGreaterThanOrEqual(thirtyFaceBounds.y);
+      expect(thirtyTitleBounds.y + thirtyTitleBounds.height).toBeLessThanOrEqual(
+        thirtyFaceBounds.y + thirtyFaceBounds.height,
+      );
+    }
+    const shortBusyFace = page.getByTestId(`weekend-day-personal-busy-${SATURDAY}-${ADULT_C}-1`);
+    const shortBusyBounds = await shortBusyFace.boundingBox();
+    expect(shortBusyBounds).not.toBeNull();
+    if (shortBusyBounds) expect(shortBusyBounds.height).toBeCloseTo(24, 0);
+
+    const shortPrivate = page.getByTestId(
+      `weekend-day-personal-event-face-${ADULT_A}::personal-short`,
+    );
+    await expect(shortPrivate).toBeVisible();
+    const privateBounds = await shortPrivate.boundingBox();
+    expect(privateBounds).not.toBeNull();
+    if (privateBounds) expect(privateBounds.height).toBeCloseTo(24, 0);
+    await expect(shortPrivate).toContainText('15分の自分だけ予定');
+    await expect(shortPrivate.locator('svg')).toBeVisible();
+    await expect(
+      page.getByTestId(`weekend-day-personal-event-${ADULT_A}::personal-short`),
+    ).toHaveAttribute('aria-label', /自分だけに見える予定/);
   });
 
   test('keeps common free time for not-shared members and disables it when a member is unavailable', async ({

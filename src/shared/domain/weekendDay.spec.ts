@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 import {
   assignEventColumns,
   buildWeekendDayLayout,
+  getDayEventDurationMilliseconds,
   getDayEventGeometry,
+  getDayEventHitGeometry,
+  getDayEventHitPriority,
   getDayIntervalGeometry,
   getDayMemberColumnTracks,
   getDayMemberLaneCounts,
@@ -89,7 +92,7 @@ function familyEvent(overrides: Partial<WeekEvent> = {}): WeekEvent {
 }
 
 describe('weekend day presentation', () => {
-  it('clips timeline blocks at 07:00 and 21:00 with a readable minimum height', () => {
+  it('clips timeline blocks at 07:00 and 21:00 with a 24px visual minimum', () => {
     expect(
       getDayEventGeometry('2026-10-10', {
         kind: 'timed',
@@ -110,14 +113,14 @@ describe('weekend day presentation', () => {
         start: '2026-10-10T06:30:00+09:00',
         endExclusive: '2026-10-10T07:30:00+09:00',
       }),
-    ).toMatchObject({ kind: 'timeline', top: 0, height: 44, start: '2026-10-10T07:00:00+09:00' });
+    ).toMatchObject({ kind: 'timeline', top: 0, height: 24, start: '2026-10-10T07:00:00+09:00' });
     expect(
       getDayEventGeometry('2026-10-10', {
         kind: 'timed',
         start: '2026-10-10T20:30:00+09:00',
         endExclusive: '2026-10-10T21:00:00+09:00',
       }),
-    ).toMatchObject({ kind: 'timeline', top: 628, height: 44, end: '2026-10-10T21:00:00+09:00' });
+    ).toMatchObject({ kind: 'timeline', top: 648, height: 24, end: '2026-10-10T21:00:00+09:00' });
     expect(
       getDayEventGeometry('2026-10-10', {
         kind: 'timed',
@@ -205,18 +208,95 @@ describe('weekend day presentation', () => {
     ).toThrow(RangeError);
   });
 
-  it('reserves card height for candidate metadata and item chips', () => {
+  it('keeps visible event height proportional for every status and item count', () => {
+    const intervals = [
+      ['10:00', '11:00', 48],
+      ['10:00', '10:30', 24],
+      ['10:00', '10:15', 24],
+      ['10:00', '12:00', 96],
+    ] as const;
+    for (const [start, end, height] of intervals) {
+      for (const status of ['confirmed', 'tentative'] as const) {
+        for (const items of [[], ['水筒', '着替え']]) {
+          const event = familyEvent({
+            status,
+            items,
+            time: {
+              kind: 'timed',
+              start: `2026-10-10T${start}:00+09:00`,
+              endExclusive: `2026-10-10T${end}:00+09:00`,
+            },
+          });
+          const layout = buildWeekendDayLayout({
+            date: '2026-10-10',
+            members: week.members,
+            dayEvents: [event],
+            hasFamilyEvents: true,
+            busyResponse: readyBusy,
+            ownMemberId: 'adult-a',
+            ownPersonalEvents: [],
+          });
+          expect(layout.familyBlocks[0]?.geometry.height).toBe(height);
+        }
+      }
+    }
+
+    const privateEvent = personalEventSchema.parse({
+      id: 'private-short',
+      calendarId: 'personal-calendar',
+      title: 'Private',
+      time: {
+        kind: 'timed',
+        start: '2026-10-10T10:00:00+09:00',
+        endExclusive: '2026-10-10T10:30:00+09:00',
+      },
+      isRoutine: false,
+    });
+    const privateLayout = buildWeekendDayLayout({
+      date: '2026-10-10',
+      members: week.members,
+      hasFamilyEvents: true,
+      busyResponse: readyBusy,
+      ownMemberId: 'adult-a',
+      ownPersonalMemberId: 'adult-a',
+      ownPersonalEvents: [privateEvent],
+    });
+    expect(privateLayout.personalBlocks[0]?.geometry.height).toBe(24);
+  });
+
+  it('keeps 44px event hit areas separate and prioritizes the shorter exact duration', () => {
+    const geometry15 = getDayEventGeometry('2026-10-10', {
+      kind: 'timed',
+      start: '2026-10-10T10:00:00+09:00',
+      endExclusive: '2026-10-10T10:15:00+09:00',
+    });
+    const geometry30 = getDayEventGeometry('2026-10-10', {
+      kind: 'timed',
+      start: '2026-10-10T10:00:00+09:00',
+      endExclusive: '2026-10-10T10:30:00+09:00',
+    });
+    expect(geometry15).toMatchObject({ kind: 'timeline', height: 24 });
+    expect(geometry30).toMatchObject({ kind: 'timeline', height: 24 });
+    if (geometry15.kind !== 'timeline' || geometry30.kind !== 'timeline') return;
+    expect(getDayEventDurationMilliseconds(geometry15)).toBe(15 * 60 * 1000);
+    expect(getDayEventDurationMilliseconds(geometry30)).toBe(30 * 60 * 1000);
+    expect(getDayEventHitPriority(geometry15)).toBeGreaterThan(getDayEventHitPriority(geometry30));
+    expect(getDayEventHitGeometry(geometry15).height).toBe(44);
+    expect(getDayEventHitGeometry(geometry30).height).toBe(44);
+    expect(getDayEventHitGeometry({ top: 648, height: 24 })).toEqual({
+      top: 628,
+      height: 44,
+      faceTop: 20,
+    });
     expect(
-      getDayEventGeometry(
-        '2026-10-10',
-        {
-          kind: 'timed',
-          start: '2026-10-10T12:00:00+09:00',
-          endExclusive: '2026-10-10T12:20:00+09:00',
-        },
-        112,
-      ),
-    ).toMatchObject({ kind: 'timeline', height: 112 });
+      layoutDayEventBlocks([
+        { id: 'half-hour', memberIds: ['adult-a'], top: 120, height: 24 },
+        { id: 'hour-after', memberIds: ['adult-a'], top: 144, height: 48 },
+      ]).map(({ lane, laneCount }) => [lane, laneCount]),
+    ).toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
   });
 
   it('assigns empty targets across all columns and avoids duplicate assignee columns', () => {
