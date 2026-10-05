@@ -139,7 +139,16 @@ function event(
   endExclusive: string,
   memberIds: string[],
   options: Partial<
-    Pick<WeekEvent, 'assigneeMemberId' | 'status' | 'isRoutine' | 'items' | 'affectsAvailability'>
+    Pick<
+      WeekEvent,
+      | 'assigneeMemberId'
+      | 'status'
+      | 'isRoutine'
+      | 'isRecurring'
+      | 'movedFrom'
+      | 'items'
+      | 'affectsAvailability'
+    >
   > = {},
 ): WeekEvent {
   return {
@@ -149,6 +158,8 @@ function event(
     memberIds,
     assigneeMemberId: options.assigneeMemberId ?? null,
     status: options.status ?? 'confirmed',
+    isRecurring: options.isRecurring ?? options.isRoutine ?? false,
+    movedFrom: options.movedFrom ?? null,
     isRoutine: options.isRoutine ?? false,
     affectsAvailability: options.affectsAvailability ?? true,
     source: 'manual',
@@ -235,6 +246,14 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       { isRoutine: true },
     ),
     event(
+      'evt-routine-time-change',
+      '時間変更した習い事',
+      `${date}T17:00:00+09:00`,
+      `${date}T18:00:00+09:00`,
+      [],
+      { isRecurring: true, movedFrom: `${date}T16:00:00+09:00` },
+    ),
+    event(
       'evt-nonblocking-routine',
       '空き判定しない家事代行',
       `${date}T19:00:00+09:00`,
@@ -274,6 +293,14 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
     event('evt-after-hours', '夜の家族予定', `${date}T21:30:00+09:00`, `${date}T22:30:00+09:00`, [
       ADULT_C,
     ]),
+    event(
+      'evt-outside-exception',
+      '時間変更した夜の習い事',
+      `${date}T23:00:00+09:00`,
+      `${date}T23:30:00+09:00`,
+      [ADULT_C],
+      { isRecurring: true, movedFrom: `${date}T22:00:00+09:00` },
+    ),
     {
       id: 'evt-all-day',
       title: '終日の家族予定',
@@ -282,6 +309,22 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      isRecurring: false,
+      movedFrom: null,
+      affectsAvailability: true,
+      source: 'manual',
+      items: [],
+    },
+    {
+      id: 'evt-all-day-exception',
+      title: '振替になった終日予定',
+      time: { kind: 'all-day', start: date, endExclusive: nextDate },
+      memberIds: [ADULT_A],
+      assigneeMemberId: null,
+      status: 'confirmed',
+      isRoutine: false,
+      isRecurring: true,
+      movedFrom: `${addCalendarDays(date, -1)}T00:00:00+09:00`,
       affectsAvailability: true,
       source: 'manual',
       items: [],
@@ -600,6 +643,8 @@ async function mockDayApis(page: Page, options: MockOptions = {}): Promise<DayAp
       assigneeMemberId: input.assigneeMemberId,
       status: input.status,
       isRoutine: false,
+      isRecurring: false,
+      movedFrom: null,
       affectsAvailability: true,
       source: 'manual',
       items: input.items,
@@ -850,14 +895,6 @@ test.describe('Task 2-6: weekend day detail', () => {
     const link = page.getByTestId(`weekend-day-link-${EXTENDED_HOLIDAY}`);
     await expect(link).toBeVisible();
     await expect(page.getByTestId('weekend-day-link-2026-10-08')).toHaveCount(0);
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      const fullHeight = await page.evaluate(() =>
-        Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-      );
-      await page.setViewportSize({ width: 390, height: fullHeight + 100 });
-      await page.screenshot({ path: 'docs/screenshots/s1-week-view.png', fullPage: true });
-      await page.setViewportSize({ width: 390, height: 844 });
-    }
     await link.click();
     await expect(page).toHaveURL(`/day/${EXTENDED_HOLIDAY}`);
     await expect(page.getByTestId('weekend-day-timeline')).toBeVisible();
@@ -955,6 +992,17 @@ test.describe('Task 2-6: weekend day detail', () => {
     }
     const adultColumn = page.getByTestId(`weekend-day-column-${ADULT_A}`);
     const childColumn = page.getByTestId(`weekend-day-column-${CHILD}`);
+    const timeChange = page.getByTestId('weekend-day-event-evt-routine-time-change-all');
+    await expect(timeChange).toHaveAttribute('aria-label', /繰り返し予定.*時間変更/);
+    await expect(timeChange.getByText('時間変更', { exact: true })).toBeVisible();
+    const allDayException = page.getByTestId('weekend-day-all-day-evt-all-day-exception');
+    await expect(allDayException.getByText('振替（10/9 から）', { exact: true })).toBeVisible();
+    const outsideException = page.getByTestId('weekend-day-outside-evt-outside-exception');
+    await expect(outsideException.getByText('時間変更', { exact: true })).toBeVisible();
+    const accessibleSchedule = page.locator('section[aria-label="読み上げ用の予定と空きの一覧"]');
+    await expect(accessibleSchedule).toContainText('時間変更した習い事');
+    await expect(accessibleSchedule).toContainText('振替（10/9 から）');
+    await expect(accessibleSchedule).toContainText('時間変更した夜の習い事');
     const narrowRoutine = page.getByTestId(`weekend-day-event-evt-routine-${ADULT_B}`);
     await expect(narrowRoutine.getByText('16:00–17:00 · 大人乙', { exact: true })).toBeHidden();
     const narrowWidthControl = page.getByTestId(`weekend-day-event-evt-width-control-${ADULT_B}`);
@@ -1215,6 +1263,12 @@ test.describe('Task 2-6: weekend day detail', () => {
     expect(body).not.toContain('private_calendar_B');
     await expectVisibleControlsAtLeast44px(page);
     await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 445, height: 844 });
+    await expect(timeChange.getByText('時間変更', { exact: true })).toBeVisible();
+    await expect(allDayException.getByText('振替（10/9 から）', { exact: true })).toBeVisible();
+    await expect(outsideException.getByText('時間変更', { exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 390, height: 844 });
     if (process.env.DANRAN_SCREENSHOTS === '1') {
       const fullHeight = await page.evaluate(() =>
         Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
@@ -1598,6 +1652,9 @@ test.describe('Task 2-6: weekend day detail', () => {
       'href',
       '/routines',
     );
+    await page.getByTestId('weekend-day-event-evt-routine-time-change-all').click();
+    await expect(page.getByTestId('weekend-day-routine-notice')).toBeVisible();
+    await expect(page.getByTestId('event-dialog')).toHaveCount(0);
 
     await page.getByTestId('weekend-day-event-evt-all-members-all').click();
     const deleteDialog = page.getByTestId('event-dialog');

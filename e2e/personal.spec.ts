@@ -62,6 +62,8 @@ const familyEvent: WeekEvent = {
   assigneeMemberId: null,
   status: 'confirmed',
   isRoutine: false,
+  isRecurring: false,
+  movedFrom: null,
   affectsAvailability: true,
   source: 'manual',
   items: [],
@@ -79,6 +81,8 @@ const saturdayFamilyEvent: WeekEvent = {
   assigneeMemberId: null,
   status: 'confirmed',
   isRoutine: false,
+  isRecurring: false,
+  movedFrom: null,
   affectsAvailability: true,
   source: 'manual',
   items: [],
@@ -587,16 +591,6 @@ test.describe('Task 2-1: personal calendar events', () => {
     expect(saturdayText.indexOf('個人予定・朝')).toBeLessThan(
       saturdayText.indexOf('家族の土曜予定'),
     );
-
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      const original = page.viewportSize();
-      const fullHeight = await page.evaluate(() =>
-        Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-      );
-      await page.setViewportSize({ width: 390, height: fullHeight + 100 });
-      await page.screenshot({ path: 'docs/screenshots/s1-week-view.png', fullPage: true });
-      if (original) await page.setViewportSize(original);
-    }
 
     await page.getByTestId('personal-events-more-2026-10-05').click();
     api.setPersonalWeekFailureStatus(403);

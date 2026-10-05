@@ -87,6 +87,7 @@ function familyFixture(account: Account, longNames = false): FamilyPublic {
 function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
   const saturday = addCalendarDays(anchor, 5);
   const wednesday = addCalendarDays(anchor, 2);
+  const tuesday = addCalendarDays(anchor, 1);
   return [
     {
       id: 'evt-family-everyone',
@@ -100,6 +101,8 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      isRecurring: false,
+      movedFrom: null,
       affectsAvailability: true,
       source: 'manual',
       items: [],
@@ -116,6 +119,8 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: true,
+      isRecurring: true,
+      movedFrom: null,
       affectsAvailability: true,
       source: 'manual',
       items: [],
@@ -132,22 +137,44 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: true,
+      isRecurring: true,
+      movedFrom: null,
       affectsAvailability: false,
       source: 'manual',
       items: [],
     },
     {
-      id: 'evt-weekday',
-      title: '水曜の家族予定',
+      id: 'evt-weekday-routine',
+      title: '火曜のルーティン',
       time: {
         kind: 'timed',
-        start: `${wednesday}T09:00:00+09:00`,
-        endExclusive: `${wednesday}T10:00:00+09:00`,
+        start: `${tuesday}T09:00:00+09:00`,
+        endExclusive: `${tuesday}T10:00:00+09:00`,
       },
-      memberIds: [],
+      memberIds: [CHILD],
+      assigneeMemberId: null,
+      status: 'confirmed',
+      isRoutine: true,
+      isRecurring: true,
+      movedFrom: null,
+      affectsAvailability: true,
+      source: 'manual',
+      items: [],
+    },
+    {
+      id: 'evt-weekday-exception',
+      title: '水曜へ振替した習い事',
+      time: {
+        kind: 'timed',
+        start: `${wednesday}T17:00:00+09:00`,
+        endExclusive: `${wednesday}T18:00:00+09:00`,
+      },
+      memberIds: [CHILD],
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      isRecurring: true,
+      movedFrom: `${tuesday}T17:00:00+09:00`,
       affectsAvailability: true,
       source: 'manual',
       items: [],
@@ -175,6 +202,9 @@ function makeWeek(anchor: DateKey, family: FamilyPublic): WeekResponse {
         );
       })
       .map((event) => event.id);
+    const hasNonRoutineEvent = events.some(
+      (event) => eventIds.includes(event.id) && !event.isRoutine,
+    );
     return {
       date,
       weekday,
@@ -182,7 +212,7 @@ function makeWeek(anchor: DateKey, family: FamilyPublic): WeekResponse {
       closures: [],
       layout: isWeekend
         ? ('weekend-card' as const)
-        : eventIds.length > 0
+        : hasNonRoutineEvent
           ? ('expanded' as const)
           : ('compact' as const),
       eventIds,
@@ -483,7 +513,32 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     await expect(page.getByTestId('busy-timeline-2026-10-07')).toHaveCount(0);
     await expect(page.getByTestId('busy-timeline-2026-10-11')).toBeVisible();
     await expect(page.getByTestId('busy-timeline-2026-10-12')).toBeVisible();
-    await expect(page.getByText('水曜の家族予定', { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId('week-day').filter({ hasText: '水曜へ振替した習い事' }),
+    ).toHaveAttribute('data-layout', 'expanded');
+    await expect(
+      page.getByTestId('week-day').filter({ hasText: '火曜のルーティン' }),
+    ).toHaveAttribute('data-layout', 'compact');
+    await expect(page.getByText('振替（10/6 から）', { exact: true })).toBeVisible();
+    await page.getByText('火曜のルーティン', { exact: true }).click();
+    await expect(page.getByTestId('routine-event-notice')).toBeVisible();
+    await expect(page.getByTestId('event-dialog')).toHaveCount(0);
+    await page.getByRole('button', { name: 'ルーティンを隠す' }).click();
+    await expect(page.getByText('火曜のルーティン', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('水曜へ振替した習い事', { exact: true })).toBeVisible();
+    await page.getByText('水曜へ振替した習い事', { exact: true }).click();
+    await expect(page.getByTestId('routine-event-notice')).toContainText(
+      'この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。',
+    );
+    await expect(page.getByTestId('event-dialog')).toHaveCount(0);
+    await page.getByRole('button', { name: 'ルーティンを表示' }).click();
+    await page.reload();
+    await expect(page.getByText('水曜へ振替した習い事', { exact: true })).toBeVisible();
+    await expect(page.getByText('火曜のルーティン', { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 445, height: 844 });
+    await expect(page.getByText('振替（10/6 から）', { exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 390, height: 844 });
     await expectNoHorizontalOverflow(page);
     await expectVisibleControlsAtLeast44px(page);
     if (process.env.DANRAN_SCREENSHOTS === '1') {

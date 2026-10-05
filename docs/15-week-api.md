@@ -64,7 +64,9 @@ GET /api/families/{familyId}/week?start=2026-10-05
       "memberIds": ["m_1"],
       "assigneeMemberId": null,
       "status": "confirmed",
+      "isRecurring": false,
       "isRoutine": false,
+      "movedFrom": null,
       "affectsAvailability": true,
       "source": "manual",
       "items": ["水筒"]
@@ -84,8 +86,10 @@ GET /api/families/{familyId}/week?start=2026-10-05
 - `events`: 週表示範囲と重なる家族カレンダーイベントを、各イベントの完全な時間範囲で返します。時刻は `+09:00` 付き ISO 8601。終日は `{kind: "all-day", start: "YYYY-MM-DD", endExclusive: "YYYY-MM-DD"}` です。終日イベントの `endExclusive` は Google Calendar と同じ排他的終了日です。タイトルが空または空白だけの場合は `（無題）` を返します。
 - `memberIds`: イベント対象メンバーのうち、現在 active な既知のメンバー ID のみ。未知または壊れた ID は除きます。`assigneeMemberId` も同様に既知の active メンバーでなければ `null` です。
 - `status`: `'confirmed' | 'tentative'`。有効な Danran private metadata があればその値を使い、欠落・不正なら Google イベント状態から決めます。Google が tentative と示す場合だけ `tentative`、それ以外は `confirmed` とします。
-- `isRoutine`: Google イベントに `recurringEventId` がある場合 `true`。通常回か例外回かの詳細な判定は後続の繰り返しタスクで扱います。
-- `affectsAvailability`: 必須の真偽値。`routine_settings.affects_availability` が false の繰り返しシリーズの回だけ false。それ以外の家族予定と、設定のない繰り返し予定は true。false の予定も `days[].eventIds` と `events` に含め、週ビュー上に表示します。`getFreeWindows` は false の予定を busy / 共通の空き計算から除外します。
+- `isRecurring`: Google イベントに `recurringEventId` がある場合 `true`。通常回・例外回のどちらも true。単発予定は false。この項目は繰り返しアイコンの表示と単発予定の編集可否に使います。
+- `isRoutine`: 通常の繰り返し回だけ true。開始日時を変えた例外回と単発予定は false。レイアウト、ルーティンのグレー表示、「ルーティンを隠す」の判定に使います。
+- `movedFrom`: 開始日時を変えた例外回では、Google の `originalStartTime` を Asia/Tokyo の `+09:00` 付き ISO 文字列で返します。元の開始が終日なら、元の日付の Asia/Tokyo 午前0時（`getDayBounds(date).startIso`）を表す日時にします。通常回、単発予定、`originalStartTime` が取得できず分類できない繰り返し回は `null`。
+- `affectsAvailability`: 必須の真偽値。`routine_settings.affects_availability` が false の繰り返しシリーズに属する回（通常回・例外回を含む）だけ false。それ以外の家族予定と、設定のない繰り返し予定は true。判定は通常回かどうかではなく `recurringEventId` によるシリーズ照合で行います。false の予定も `days[].eventIds` と `events` に含め、週ビュー上に表示します。`getFreeWindows` は false の予定を busy / 共通の空き計算から除外します。
 - `source`: `'manual' | 'import' | 'publish' | 'external'`。Danran marker がある場合は private metadata の有効な値を使い、値が欠落または不正なら `'manual'`。marker がない場合だけ `'external'`。
 - `items`: `event_meta.itemsJson` が有効な JSON 文字列配列ならその内容、そうでなければ空配列。メタデータ候補は、(1) `(calendarId,eventId)` のイベント行、(2) `(calendarId,recurringEventId,originalStart)` の個別回、(3) `(calendarId,eventId=recurringEventId)` のシリーズ行の順に選びます。個別回の `originalStart` は、終日なら日付の完全一致、時刻付きなら JST に正規化した同一 instant で照合します（例：`Z` と等価な `+09:00` は一致）。見つかった候補の JSON が不正なら空配列とし、下位候補にフォールバックしません。D1 の bind 上限を避けるため、event ID と recurring ID を重複除去したうえで49件ずつ問い合わせます。1クエリの ID 条件は最大98 bind 値（event ID / recurring ID 各49）で、家族・カレンダー条件が加わります。空週では `event_meta` の全件検索をしません。
 
@@ -101,7 +105,8 @@ GET /api/families/{familyId}/week?start=2026-10-05
 - Danran marker のないイベントは外部イベントとして扱い、`memberIds: []`、`assigneeMemberId: null`、`source: "external"` とします。Google イベントのタイトル等は家族カレンダー上のイベント情報として返ります。
 - `assigneeMemberId`、`status`、`source` の返却値は Google private metadata を正本とします。書き込み API はこれらを `event_meta` にも保存しますが、週 API のレスポンスでは Google の値を検証して使います。`event_meta` の読み取りは返却対象イベントに限ります。
 - `closure_days.member_ids` が有効な `[]` の場合は家族全員対象です。非空配列の場合は既知の active ID のみ残します。壊れた JSON や、未知 ID だけを含む配列はその休園日を破棄し、家族全体の休園日として解釈しません。
-- `dayLayout` は `src/shared/domain/dayLayout` の既存ルールを使い、週末・祝日・休園日を `weekend-card`、平日の非ルーティン家族予定があれば `expanded`、それ以外を `compact` とします。キャンセル済み予定は表示対象から外します。
+- 通常回・例外回の判定は既存の `events.list(singleEvents=true)` の応答だけで行い、Google 呼び出しを追加しません。実際の開始日時を `originalStartTime` と比較し、時刻付き日時は同一 instant（`Z` と等価な `+09:00` を含む）に、終日は日付に正規化して比較します。開始が異なれば例外回とします。シリーズ master の長さを取得しないため、終了時刻だけの変更は検出せず通常回として扱います。`originalStartTime` がない回は保守的に通常回（`isRoutine: true`）とし、`movedFrom: null` にします。
+- `dayLayout` は `src/shared/domain/dayLayout` の既存ルールを使い、週末・祝日・休園日を `weekend-card`、平日の非ルーティン家族予定（`isRoutine: false`）があれば `expanded`、それ以外を `compact` とします。キャンセル済み予定は表示対象から外します。
 
 ## Google Calendar 取得条件と上限
 
