@@ -1,5 +1,6 @@
 import {
   type OAuthFamilyAclPayload,
+  type OAuthFreeBusyPayload,
   type OAuthLoginPayload,
   type OAuthPayload,
   type OAuthPersonalEventsPayload,
@@ -13,6 +14,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import {
   type AuthConfig,
   FAMILY_ACL_SCOPE,
+  FREE_BUSY_SCOPE,
   GOOGLE_AUTH_ENDPOINT,
   OAUTH_COOKIE_NAME,
   OAUTH_STATE_TTL_SECONDS,
@@ -49,6 +51,14 @@ export type InitiateOAuthContext =
     }
   | {
       purpose: 'personal-events';
+      userId: string;
+      sessionId: string;
+      familyId: string;
+      memberId: string;
+      loginHint?: string;
+    }
+  | {
+      purpose: 'free-busy';
       userId: string;
       sessionId: string;
       familyId: string;
@@ -116,6 +126,17 @@ export async function initiateOAuthFlow(
       memberId: context.memberId,
     };
     payload = JSON.stringify(personalPayload);
+  } else if (context?.purpose === 'free-busy') {
+    const freeBusyPayload: OAuthFreeBusyPayload = {
+      purpose: 'free-busy',
+      codeVerifier,
+      nonce,
+      userId: context.userId,
+      sessionId: context.sessionId,
+      familyId: context.familyId,
+      memberId: context.memberId,
+    };
+    payload = JSON.stringify(freeBusyPayload);
   } else if (context?.inviteToken) {
     const loginPayload: OAuthLoginPayload = {
       purpose: 'login',
@@ -153,6 +174,7 @@ export async function initiateOAuthFlow(
   const redirectUri = `${config.appOrigin}/api/auth/callback`;
   const isFamilyAcl = context?.purpose === 'family-acl';
   const isPersonalEvents = context?.purpose === 'personal-events';
+  const isFreeBusy = context?.purpose === 'free-busy';
 
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -162,7 +184,9 @@ export async function initiateOAuthFlow(
       ? [...PHASE1_SCOPES, FAMILY_ACL_SCOPE].join(' ')
       : isPersonalEvents
         ? [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE].join(' ')
-        : PHASE1_SCOPES.join(' '),
+        : isFreeBusy
+          ? [...PHASE1_SCOPES, FREE_BUSY_SCOPE].join(' ')
+          : PHASE1_SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     state,
@@ -172,7 +196,7 @@ export async function initiateOAuthFlow(
   });
 
   params.set('include_granted_scopes', 'true');
-  if ((isFamilyAcl || isPersonalEvents) && context.loginHint) {
+  if ((isFamilyAcl || isPersonalEvents || isFreeBusy) && context.loginHint) {
     params.set('login_hint', context.loginHint);
   }
 

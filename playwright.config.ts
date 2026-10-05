@@ -23,6 +23,7 @@ export default defineConfig({
         '**/events.spec.ts',
         '**/settings.spec.ts',
         '**/personal.spec.ts',
+        '**/busy.spec.ts',
       ],
       use: {
         ...devices['Desktop Chrome'],

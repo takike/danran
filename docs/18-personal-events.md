@@ -6,8 +6,8 @@
 
 - 個人予定の取得にはリクエストした本人の Google トークンだけを使います。他のメンバーのトークンでは個人予定を読みません。
 - 個人予定のタイトル、日時、Google event ID、説明、場所、参加者、作成者メールアドレス等は D1、ブラウザの永続ストレージ、HTTP/Service Worker のキャッシュ、ログに保存しません。表示用データは本人単位のメモリ上の query cache に限られ、アカウント・家族・週の切替時に別の利用者へ引き継ぎません。API はタイトル・時刻・繰り返しかどうか・カレンダー ID を本人の `/week/personal` 応答にだけ含めます（Google のカレンダー ID はメール形式の場合があります）。
-- D1 `member_calendars` は本人が選択したカレンダーだけを、最大10行まで保持します。各行の `display_enabled` は常に `true` です。選んでいないカレンダー ID の行は作りません。カレンダー名は保存せず、一覧を表示するときに本人の `calendarList.list` から取得します。個人予定を別の家族へ共有する設定とは結び付けません。
-- 保存は従来どおり既存行の全削除と選択行の挿入を1つの batch で行います。全解除して保存すると0行になり、personal-week は `unselected` で空です。0行から初回と全解除後を区別できないため、カレンダー一覧 API の `hasSavedSelection` は行が1件以上ある場合だけ `true` です。一覧の `selected` は保存済みの有効行だけから決め、`hasSavedSelection` が `false` の場合は primary を含めてすべて `false` です。再読込や再認可後も同じ状態を表示します。
+- D1 `member_calendars` は本人が用途ごとに選択したカレンダー ID と `display_enabled` / `include_in_busy` フラグを保持します。個人予定表示で使うカレンダーは最大10件です。カレンダー名や予定の中身は保存せず、名前は一覧表示時に本人の `calendarList.list` から取得します。2つの用途の選択は独立しています。
+- personal-events の選択保存は `display_enabled` だけを変更し、既存の `include_in_busy` を保持します。両フラグが false になる行は削除します。画面表示用の選択が0件なら `/week/personal` は `unselected` で空です。busy 用の行が残っていても個人予定表示の選択済みとは数えません。カレンダー一覧 API の `hasSavedSelection` は `display_enabled = true` の行が1件以上ある場合だけ `true` で、`selected` はその行だけに基づきます。0件なら primary を含めてすべて `false` で、再読込や再認可後も同じ状態を表示します。
 - 選択中のカレンダーのいずれかで取得失敗またはページング失敗が起きた場合、個人予定の部分一覧は返さず個人予定 API 全体を失敗させます。家族の `/week` API は別取得なので独立して成功・表示を続けます。
 
 ## 段階的認可
@@ -31,7 +31,7 @@ state の消費・検証前に失敗した場合は既存 OAuth callback の規�
 
 ### `GET /api/families/:familyId/personal-calendars`
 
-本人の `calendarList.list` を取得し、Danran の共有家族カレンダーを除いた選択肢を返します。`hasSavedSelection` は D1 に選択行が1件以上ある場合 `true` です。0行の場合（初回または全解除を保存した後）は `false` とし、一覧の `selected` は primary を含めてすべて `false` です。選択がない場合は個人予定を表示しません。未同意状態は通常の結果として返します。
+本人の `calendarList.list` を取得し、Danran の共有家族カレンダーを除いた選択肢を返します。`hasSavedSelection` は D1 に `display_enabled = true` の行が1件以上ある場合 `true` です。該当行がない場合（初回または全解除を保存した後）は `false` とし、一覧の `selected` は primary を含めてすべて `false` です。busy 用の行がある場合も、`selected` は個人予定表示用フラグだけを反映します。表示選択がない場合は個人予定を表示しません。未同意状態は通常の結果として返します。
 
 ```json
 {
@@ -49,11 +49,11 @@ state の消費・検証前に失敗した場合は既存 OAuth callback の規�
 
 ### `PUT /api/families/:familyId/personal-calendars`
 
-リスト全体の選択を置き換えます。`calendarIds` は本人のカレンダー一覧にある ID の一意な配列で、最大10件です。ID は最大1024文字。選択なしも `{"calendarIds":[]}` として保存し、結果として `member_calendars` は0行になります。保存するのは選択された ID の行だけで、各行の `display_enabled` は `true` です。選択なしを保存した後も、0行のため `hasSavedSelection` は `false` となり、一覧の `selected` はすべて `false` です。
+リスト全体の個人予定表示選択を置き換えます。`calendarIds` は本人のカレンダー一覧にある ID の一意な配列で、最大10件です。ID は最大1024文字。選択なしも `{"calendarIds":[]}` として保存します。PUT は `display_enabled` だけを更新し、既存の `include_in_busy` を変更しません。選択されていない ID の `display_enabled` を false にし、`include_in_busy` も false になった行だけ削除します。選択なしを保存した後は表示有効行が0件となり、`hasSavedSelection` は `false`、一覧の `selected` はすべて `false` です。busy 用に選択された行は残ることがあります。
 
 Request body は最大16 KiBです。Google Calendar 一覧は1ページ250件・最大10ページ、予定は1ページ2500件・最大10ページまで取得し、ページ上限に達した場合は部分結果を成功として返しません。
 
-追加スコープが未同意なら `200 {"authorizationRequired":true,"authorizationUrl":"https://..."}` を返し、同意済みなら `200 {"authorizationRequired":false,"status":"ready","memberId":"...","hasSavedSelection":true,"calendars":[...]}` の形で一覧を返します。`hasSavedSelection` は保存後の行が1件以上あれば `true`、選択なしを保存した結果を含む0行なら `false` です。`selected` は保存済みの有効行にある ID だけが `true` で、0行ならすべて `false` です。Google が返した最新の選択肢に存在しない ID は受け付けません。たとえば選択なしの PUT は次の応答になります。
+追加スコープが未同意なら `200 {"authorizationRequired":true,"authorizationUrl":"https://..."}` を返し、同意済みなら `200 {"authorizationRequired":false,"status":"ready","memberId":"...","hasSavedSelection":true,"calendars":[...]}` の形で一覧を返します。`hasSavedSelection` は `display_enabled = true` の保存行が1件以上あれば `true` です。`selected` も `display_enabled` だけを反映し、表示有効行がなければすべて `false` です。Google が返した最新の選択肢に存在しない ID は受け付けません。たとえば選択なしの PUT は次の応答になります。
 
 ```json
 {
@@ -102,7 +102,7 @@ Request body は最大16 KiBです。Google Calendar 一覧は1ページ250件�
 
 Event ID は `<calendarId>::<GoogleEventId>` です。終日イベントは `{ "kind":"all-day", "start":"YYYY-MM-DD", "endExclusive":"YYYY-MM-DD" }` です。`singleEvents=true` で繰り返しを展開し、本人が辞退した予定とキャンセル済み予定を除きます。`description`、`location`、`attendees`、イベント作成者や参加者のメールアドレスは返しません。`calendarId` は API の指定フィールドで、Google の ID がメール形式の場合はその形式を保ちます。
 
-同意が必要な場合は `status: "authorization_required"`、保存した選択が空の場合は `status: "unselected"` を返し、いずれも `events: []` です。取得に失敗したときはエラー応答とし、部分イベントを返しません。
+同意が必要な場合は `status: "authorization_required"`、`display_enabled = true` の保存行がない場合は `status: "unselected"` を返し、いずれも `events: []` です。取得に失敗したときはエラー応答とし、部分イベントを返しません。
 
 ### 固定エラー
 
@@ -135,7 +135,7 @@ Google Cloud OAuth 同意画面に `calendar.events.readonly` が登録済みで
 2. A で `/family` を開き、「自分の予定を表示する」を押します。Google の同意画面では、今回 `calendar.events.readonly` が追加要求されていることを確認し、必要項目にチェックして許可します。`login_hint` によりログイン中の Google アカウントが指定されます。既存の許可も画面に表示されることがあります。未審査アプリの警告が出た場合は、利用を許可されたテストアカウントで警告内容を確認し、「詳細」から「Danran に移動（安全ではないページ）」を選びます。戻った画面では primary を含むすべての選択肢が未選択で、個人予定を表示していない案内が表示されます。
 3. A の画面で primary とテスト用カレンダーを選んで保存し、予定が A の S1 に「自分だけ」と表示されることを確認します。説明や場所は表示されません。
 4. B で同じ週を開き、A の個人予定のタイトルや日時が表示・API 応答されず、家族予定のみ表示されることを確認します。
-5. A で保存済みの選択をすべて外して保存し、D1 の `member_calendars` が0行になり、`/week/personal` が `unselected` であることを確認します。再読込または再認可後もすべて未選択で、「現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。」と案内されます。初回など保存済み選択がないときは何も選ばず保存できないこと、カレンダーを1件選ぶと保存できることも確認します。
+5. A で保存済みの個人予定表示選択をすべて外して保存し、D1 に `display_enabled = true` の行がなく、`/week/personal` が `unselected` であることを確認します。busy 用に選ばれた行は残っていても構いません。再読込または再認可後も個人予定表示はすべて未選択で、「現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。」と案内されます。初回など表示用の保存済み選択がないときは何も選ばず保存できないこと、カレンダーを1件選ぶと保存できることも確認します。
 6. 別のテスト用カレンダーの取得を一時的に拒否し、A の個人予定が部分表示されず固定エラーになり、家族予定は表示されたままであることを確認します。
 
 この文書作成時点で staging の実アカウント確認は未実施です。OAuth スコープの登録・Secret 操作・Google アカウント変更はこのタスクでは行いません。

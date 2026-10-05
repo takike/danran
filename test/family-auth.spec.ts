@@ -8,6 +8,7 @@ import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import {
   type AuthConfig,
   FAMILY_ACL_SCOPE,
+  FREE_BUSY_SCOPE,
   OAUTH_COOKIE_NAME,
   PERSONAL_EVENTS_SCOPE,
   PHASE1_SCOPES,
@@ -646,6 +647,187 @@ describe('Task 1-4: Incremental Family ACL Authorization & Invite Continuation',
       expect(afterNoRefresh.scopes.split(' ')).toEqual(
         expect.arrayContaining([...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE]),
       );
+    });
+  });
+
+  describe('Task 2-2 free-busy calendar authorization', () => {
+    async function requestBusyAuthorization(familyId: string, sessionJar: Record<string, string>) {
+      const response = await app.request(
+        `http://localhost:5173/api/families/${familyId}/busy-calendars`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            Origin: 'http://localhost:5173',
+            Cookie: cookieHeaderFromJar(sessionJar),
+          },
+          body: JSON.stringify({ calendarIds: [] }),
+        },
+        TEST_AUTH_ENV,
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        authorizationRequired: boolean;
+        authorizationUrl: string;
+      };
+      expect(body.authorizationRequired).toBe(true);
+      return { response, authUrl: new URL(body.authorizationUrl) };
+    }
+
+    it('requests incremental consent with login_hint and keeps every granted scope through re-login', async () => {
+      const { user, sessionJar } = await performLogin('busy-owner-sub', 'busy@example.test');
+      const { familyId } = await setupOwnedFamily(user.id);
+      await db
+        .update(googleTokens)
+        .set({ scopes: [...PHASE1_SCOPES, PERSONAL_EVENTS_SCOPE, FAMILY_ACL_SCOPE].join(' ') })
+        .where(eq(googleTokens.userId, user.id));
+
+      const consentResponse = await app.request(
+        `http://localhost:5173/api/families/${familyId}/busy-calendars`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            Origin: 'http://localhost:5173',
+            Cookie: cookieHeaderFromJar(sessionJar),
+          },
+          body: JSON.stringify({ calendarIds: [] }),
+        },
+        TEST_AUTH_ENV,
+      );
+      expect(consentResponse.status).toBe(200);
+      const consentBody = (await consentResponse.json()) as {
+        authorizationRequired: boolean;
+        authorizationUrl: string;
+      };
+      expect(consentBody.authorizationRequired).toBe(true);
+      const authUrl = new URL(consentBody.authorizationUrl);
+      expect(authUrl.searchParams.get('include_granted_scopes')).toBe('true');
+      expect(authUrl.searchParams.get('login_hint')).toBe(user.googleSub);
+      expect(authUrl.searchParams.get('scope')?.split(' ')).toEqual([
+        ...PHASE1_SCOPES,
+        FREE_BUSY_SCOPE,
+      ]);
+
+      const grantedScopes = [
+        ...PHASE1_SCOPES,
+        PERSONAL_EVENTS_SCOPE,
+        FAMILY_ACL_SCOPE,
+        FREE_BUSY_SCOPE,
+      ];
+      const state = required(authUrl.searchParams.get('state'));
+      const nonce = required(authUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: user.googleSub, nonce }),
+        refreshToken: 'busy-consent-refresh',
+        scope: grantedScopes.join(' '),
+      });
+      const callback = await app.request(
+        `http://localhost:5173/api/auth/callback?code=busy-consent&state=${encodeURIComponent(state)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({
+              ...sessionJar,
+              ...extractCookies(consentResponse),
+            }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get('Location')).toBe('/family?busy=granted');
+      const tokenAfterConsent = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(tokenAfterConsent.scopes.split(' ')).toEqual(expect.arrayContaining(grantedScopes));
+
+      const loginResponse = await app.request(
+        'http://localhost:5173/api/auth/login',
+        {},
+        TEST_AUTH_ENV,
+      );
+      expect(loginResponse.status).toBe(302);
+      const loginUrl = new URL(required(loginResponse.headers.get('Location')));
+      expect(loginUrl.searchParams.get('scope')?.split(' ')).toEqual([...PHASE1_SCOPES]);
+      const loginNonce = required(loginUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: user.googleSub, nonce: loginNonce }),
+        refreshToken: null,
+        scope: grantedScopes.join(' '),
+      });
+      const relogin = await app.request(
+        `http://localhost:5173/api/auth/callback?code=busy-relogin&state=${encodeURIComponent(required(loginUrl.searchParams.get('state')))}`,
+        { headers: { Cookie: cookieHeaderFromJar(extractCookies(loginResponse)) } },
+        TEST_AUTH_ENV,
+      );
+      expect(relogin.status).toBe(302);
+      const tokenAfterRelogin = required(
+        (await db.select().from(googleTokens).where(eq(googleTokens.userId, user.id)))[0],
+      );
+      expect(tokenAfterRelogin.scopes.split(' ')).toEqual(expect.arrayContaining(grantedScopes));
+      expect(tokenAfterRelogin.refreshTokenEnc).toBe(tokenAfterConsent.refreshTokenEnc);
+    });
+
+    it('uses fixed cancellation, token-failure, and account-mismatch redirects', async () => {
+      const { user, sessionJar } = await performLogin(
+        'busy-branch-sub',
+        'busy-branch@example.test',
+      );
+      const { familyId } = await setupOwnedFamily(user.id);
+
+      const cancelledFlow = await requestBusyAuthorization(familyId, sessionJar);
+      const cancelledState = required(cancelledFlow.authUrl.searchParams.get('state'));
+      const cancelled = await app.request(
+        `http://localhost:5173/api/auth/callback?error=access_denied&error_description=private&state=${encodeURIComponent(cancelledState)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({
+              ...sessionJar,
+              ...extractCookies(cancelledFlow.response),
+            }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(cancelled, '/family?error=busy_denied');
+      expect(await cancelled.text()).not.toContain('private');
+
+      const failedFlow = await requestBusyAuthorization(familyId, sessionJar);
+      const failedState = required(failedFlow.authUrl.searchParams.get('state'));
+      setupGoogleFetchMock({ tokenStatus: 500 });
+      const failed = await app.request(
+        `http://localhost:5173/api/auth/callback?code=busy-failed&state=${encodeURIComponent(failedState)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({ ...sessionJar, ...extractCookies(failedFlow.response) }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(failed, '/family?error=busy_failed');
+
+      const mismatchFlow = await requestBusyAuthorization(familyId, sessionJar);
+      const mismatchState = required(mismatchFlow.authUrl.searchParams.get('state'));
+      const mismatchNonce = required(mismatchFlow.authUrl.searchParams.get('nonce'));
+      setupGoogleFetchMock({
+        idToken: await signTestIdToken({ sub: 'different-google-sub', nonce: mismatchNonce }),
+        scope: [...PHASE1_SCOPES, FREE_BUSY_SCOPE].join(' '),
+      });
+      const mismatch = await app.request(
+        `http://localhost:5173/api/auth/callback?code=busy-mismatch&state=${encodeURIComponent(mismatchState)}`,
+        {
+          headers: {
+            Cookie: cookieHeaderFromJar({
+              ...sessionJar,
+              ...extractCookies(mismatchFlow.response),
+            }),
+          },
+        },
+        TEST_AUTH_ENV,
+      );
+      await expectCallbackFailure(mismatch, '/family?error=busy_account_mismatch');
     });
   });
 

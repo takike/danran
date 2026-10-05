@@ -200,6 +200,17 @@ async function mockSettingsApis(page: import('@playwright/test').Page) {
       }),
     }),
   );
+  await page.route(`**/api/families/${FAMILY_ID}/busy-calendars`, async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'authorization_required',
+        memberId: MEMBER_B_ID,
+        calendars: [],
+      }),
+    }),
+  );
   await page.route(`**/api/families/${FAMILY_ID}/members/*`, async (route) => {
     if (route.request().method() !== 'PATCH') {
       await route.fallback();

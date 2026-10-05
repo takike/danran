@@ -22,6 +22,7 @@ export const PHASE1_SCOPES = [
 export const FAMILY_ACL_SCOPE = 'https://www.googleapis.com/auth/calendar.acls' as const;
 export const PERSONAL_EVENTS_SCOPE =
   'https://www.googleapis.com/auth/calendar.events.readonly' as const;
+export const FREE_BUSY_SCOPE = 'https://www.googleapis.com/auth/calendar.freebusy' as const;
 
 /**
  * Validates and extracts pure application origin from configured APP_ORIGIN.

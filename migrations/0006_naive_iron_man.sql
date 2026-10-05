@@ -1,0 +1,1 @@
+ALTER TABLE `member_calendars` ADD `include_in_busy` integer DEFAULT false NOT NULL;

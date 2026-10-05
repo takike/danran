@@ -82,9 +82,9 @@ Danran では最小権限の原則（Least Privilege）を遵守し、Phase 1 �
 - `email`: ユーザーのアカウントメールアドレス
 - `profile`: ユーザーの表示名
 - `https://www.googleapis.com/auth/calendar.app.created`: 家族共有カレンダーの作成および作成カレンダー上の予定の読み書き
-- `https://www.googleapis.com/auth/calendar.calendarlist.readonly`: カレンダー一覧の読み取り（Phase 1-4/2-1 向け）
+- `https://www.googleapis.com/auth/calendar.calendarlist.readonly`: カレンダー一覧の読み取り（Phase 1-4/2-1/2-2 向け）
 
-※ 空き時間取得用の `calendar.freebusy` や本人の個人予定読み取り用の `calendar.events.readonly` は、Phase 1 では要求せず、**Phase 2 以降で追加の同意を求める段階的認可（Incremental Authorization）**とします。`calendar.events` の書き込み権限は要求しません。
+※ 空き時間取得用の `calendar.freebusy` や本人の個人予定読み取り用の `calendar.events.readonly` は、Phase 1 では要求せず、**Phase 2 以降で各機能を有効にするとき追加の同意を求める段階的認可（Incremental Authorization）**とします。Task 2-2 の `calendar.freebusy` は Google Cloud に2026-10-05人間が登録済みです。`calendar.events` の書き込み権限は要求しません。
 
 ---
 
@@ -130,7 +130,7 @@ RETURNING payload_enc;
 
 ### Callback の失敗応答契約
 
-`GET /api/auth/callback` の成功時は通常ログインを `/`、招待付きログインを `/invite#<token>`、家族カレンダー ACL の追加認可を `/onboarding?acl=granted`、本人個人予定の追加認可を `/family?personal=granted` にリダイレクトします。失敗時に使用できるコードは `auth_expired`、`access_denied`、`auth_failed`、`acl_denied`、`acl_failed`、`acl_account_mismatch`、`personal_denied`、`personal_failed`、`personal_account_mismatch` です。招待付きログインだけは、暗号化 payload から復元した検証済み招待トークンを `/invite` のフラグメントへ付けます。
+`GET /api/auth/callback` の成功時は通常ログインを `/`、招待付きログインを `/invite#<token>`、家族カレンダー ACL の追加認可を `/onboarding?acl=granted`、本人個人予定の追加認可を `/family?personal=granted`、空き状況共有の追加認可を `/family?busy=granted` にリダイレクトします。失敗時に使用できるコードは `auth_expired`、`access_denied`、`auth_failed`、`acl_denied`、`acl_failed`、`acl_account_mismatch`、`personal_denied`、`personal_failed`、`personal_account_mismatch`、`busy_denied`、`busy_failed`、`busy_account_mismatch` です。招待付きログインだけは、暗号化 payload から復元した検証済み招待トークンを `/invite` のフラグメントへ付けます。
 
 | 状況 | リダイレクト先 |
 |---|---|
@@ -145,10 +145,13 @@ RETURNING payload_enc;
 | state 消費後の本人個人予定の追加同意キャンセル | `/family?error=personal_denied` |
 | state 消費後の本人個人予定の追加認可失敗 | `/family?error=personal_failed` |
 | 検証済み Google アカウントが本人個人予定の認可対象アカウントと異なる | `/family?error=personal_account_mismatch` |
+| state 消費後の空き状況共有の追加同意キャンセル | `/family?error=busy_denied` |
+| state 消費後の空き状況共有の追加認可失敗 | `/family?error=busy_failed` |
+| 検証済み Google アカウントが空き状況共有の認可対象アカウントと異なる | `/family?error=busy_account_mismatch` |
 
 `acl_denied` / `acl_failed` が表示された場合は、Google の許可画面で「カレンダーの共有」の項目にチェックを入れ、招待を発行できる権限を許可してください。通常ログインまたは招待ログインで `auth_failed` が表示された場合は、Google の許可画面で必要な項目にチェックが入っているか確認してください。
 
-- state の暗号化 payload が正常に復号され、単一消費された後に限りログイン目的か ACL 目的かを判定します。消費・検証前に callback query の値などから目的を信用して遷移先を選ぶことはありません。
+- state の暗号化 payload が正常に復号され、単一消費された後に限り payload の purpose（ログイン、招待、family-acl、personal-events、free-busy）を判定します。消費・検証前に callback query の値などから目的を信用して遷移先を選ぶことはありません。
 - 検証済み payload の復号後、処理中に構成・origin の異常または例外が起きた場合は、その payload で確認済みのフローに対応する固定エラーへ送ります。payload を確認する前の異常は `/?error=auth_expired` です。
 - 招待付きログインのキャンセル・失敗先に使うトークンは、state を正常に単一消費して復号・スキーマ検証した payload 内の `inviteToken` だけです。callback query の token / inviteToken / return URL、Google のエラー説明は遷移先に使わず、エラー文字列も反映しません。消費前の失敗ではトークンを付けません。callback の応答はすべて `Cache-Control: no-store`、`Pragma: no-cache`、`Referrer-Policy: no-referrer` を持ち、OAuth binding Cookie を削除します。
 - `auth_expired` は「有効期限切れ」だけでなく「すでに完了・消費済み」の可能性も表します。画面では「手続きの有効期限が切れたか、すでに完了しています。必要ならもう一度操作してください。」と案内します。
@@ -179,9 +182,10 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
 > - **登録済みリダイレクト URI**:
 >   - `http://localhost:5173/api/auth/callback`
 >   - `https://danran-staging.tak-ikemachi.workers.dev/api/auth/callback`
-> - **登録済みスコープ**:
+> - **ログイン時の基本スコープ**:
 >   `openid`, `email`, `profile`, `https://www.googleapis.com/auth/calendar.app.created`, `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
 > - **Task 2-1 追加スコープ**: `https://www.googleapis.com/auth/calendar.events.readonly` の Google Cloud 登録はタスク開始時点で完了済みの想定ですが、人間による登録確認は未記録です。staging 手動確認の前に Google Cloud Console の同意画面で有効になっていることを人間が確認してください。
+> - **Task 2-2 追加スコープ**: `https://www.googleapis.com/auth/calendar.freebusy` は Google Cloud Console へ人間が2026-10-05に登録済みです。実アカウントを使った staging の認可確認は未実施です。
 > - **Secret 登録状況**:
 >   - local: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` が `.dev.vars` に設定済み。
 >   - staging: すべての Secret（`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `TOKEN_ENC_KEY`）が Cloudflare Secrets に登録済み（2026-10-01 人間により確認）。
@@ -200,6 +204,7 @@ Google Calendar REST クライアント（Task 1-2 以降）向けに、`getGoog
    - アプリ名: `Danran`
    - 基本スコープ: `openid`, `email`, `profile`, `.../auth/calendar.app.created`, `.../auth/calendar.calendarlist.readonly` を追加。
    - Task 2-1 の段階的認可を staging で試す前に `.../auth/calendar.events.readonly` を追加登録する（人間の操作。登録済みか未確認）。この読み取り専用スコープは初回ログインでは要求しない。
+   - Task 2-2 の `.../auth/calendar.freebusy` は2026-10-05に人間が追加登録済み。このスコープも機能を有効にしたときだけ要求し、初回ログインでは要求しない。
    - プライバシーポリシー URL（staging）: `https://danran-staging.tak-ikemachi.workers.dev/privacy`
    - 公開ステータス: 家族利用時は「本番（未確認）」を選択（※「テスト」のままだとトークンが 7 日で失効します）。
 4. **OAuth 2.0 クライアント ID** を作成：
@@ -331,6 +336,13 @@ Task 1-4 において、最小権限の原則（Least Privilege）を維持し�
 - 認可 URL には `include_granted_scopes=true` を付け、既存の基本スコープ、`calendar.calendarlist.readonly`、必要に応じて `calendar.acls` など既に同意した権限を維持します。追加同意後も、Google から返されたスコープ集合を保存し、基本スコープ検証は維持します。
 - 成功時は固定の `/family?personal=granted` に戻ります。キャンセルは `/family?error=personal_denied`、その他の追加認可失敗は `/family?error=personal_failed`、認可対象とは異なる Google アカウントで完了した場合は `/family?error=personal_account_mismatch` に戻します。state 消費・検証前の失敗は通常ログインと同じ `/?error=auth_expired` です。エラー文や Google の応答内容を URL や画面へ反映しません。
 - 同意前の personal-week は空イベントと `authorization_required` 状態を返します。これは通常の未同意状態で、家族週 API の結果には影響しません。
+
+### 4. 空き状況共有の追加認可（Task 2-2）
+
+- 通常ログインでは `https://www.googleapis.com/auth/calendar.freebusy` を要求しません。本人が `/family` の「空き状況の共有」を有効にしたときに限り、本人の Google アカウントへ追加要求します。このスコープで予定内容を取得したり、今回のタスクで `freeBusy.query` を呼んだりはしません。
+- OAuth state の `purpose` は `free-busy` とします。認可 URL には `include_granted_scopes=true` とログイン中ユーザーの Google `sub` を使う `login_hint` を指定し、既存の認可スコープを維持します。
+- 成功時は固定の `/family?busy=granted` に戻ります。キャンセルは `/family?error=busy_denied`、その他の追加認可失敗は `/family?error=busy_failed`、認可対象と異なる Google アカウントで完了した場合は `/family?error=busy_account_mismatch` に戻します。state 消費・検証前の失敗は `/?error=auth_expired` です。生の Google エラーや任意の callback 値は URL・画面に反映しません。
+- 同意後に保存されるのはカレンダー ID と用途別の選択フラグだけです。callback は Google が返した許可スコープ集合を保存し、次回ログインでもその集合を使います。Google Cloud への `calendar.freebusy` 登録は人間が2026-10-05に確認済みです。Google アカウントを使った staging の実機確認は未実施です。
 
 ---
 

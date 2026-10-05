@@ -335,6 +335,17 @@ async function mockPersonalApis(
       }),
     });
   });
+  await page.route('**/api/families/*/busy-calendars', async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'authorization_required',
+        memberId: MEMBER_A,
+        calendars: [],
+      }),
+    }),
+  );
   await page.route('**/api/families/*/week**', async (route) => {
     const url = new URL(route.request().url());
     const anchor = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
@@ -491,21 +502,6 @@ test.describe('Task 2-1: personal calendar events', () => {
     );
     const save = page.getByTestId('save-personal-calendars');
     await expect(save).toBeDisabled();
-
-    if (process.env.DANRAN_SCREENSHOTS === '1') {
-      await page.goto('/family');
-      await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
-      await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).not.toBeChecked();
-      await expect(page.getByTestId(`personal-calendar-${WORK_ID}`)).not.toBeChecked();
-      await expect(page.getByTestId('save-personal-calendars')).toBeDisabled();
-      const original = page.viewportSize();
-      const fullHeight = await page.evaluate(() =>
-        Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-      );
-      await page.setViewportSize({ width: 390, height: fullHeight + 100 });
-      await page.screenshot({ path: 'docs/screenshots/family.png', fullPage: true });
-      if (original) await page.setViewportSize(original);
-    }
 
     await primary.check();
     await expect(save).toBeEnabled();
