@@ -25,6 +25,6 @@
 | 8 | [2-2-busy-calendars.md](2-2-busy-calendars.md) | 空き状況に使うカレンダーの選択と、追加の同意（`calendar.freebusy`。取得 API は次の 2-3） | 完了（PR #22） |
 | 9 | [2-3-busy-api.md](2-3-busy-api.md) | 家族の空き状況を取得する API（開始・終了だけを返す。画面は変えない） | 完了（PR #23） |
 | 10 | [2-5-weekend-timeline.md](2-5-weekend-timeline.md) | 週末カードの空きタイムライン（メンバーごとの埋まっている時間、共通の空き、「みんな空き N時間」） | 完了（PR #24） |
-| 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | PR #25（レビュー済み・修正待ち：[2-6-review-fixes.md](2-6-review-fixes.md)） |
+| 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | PR #25（修正待ち・2回目：[2-6-review-fixes.md](2-6-review-fixes.md) の後半） |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
