@@ -210,10 +210,12 @@ Google の家族カレンダー `events.list` は、リクエストユーザー�
 
 ### freeWindows：共通の空き
 
-- 対象時間帯は `families.day_start_hour` 〜 `day_end_hour`（既定 8〜20時）。
-- 各メンバーの busy = 個人の free/busy（大人）＋ そのメンバーが `members` に含まれる家族予定 ＋ 担当になっている予定（送迎。前後に余裕を持たせる）。`affects_availability=false` は除外。
-- 共通の空き = 全対象メンバーの busy の和集合の補集合。30分未満の空きは切り捨てる（設定値）。
-- 「みんな空き N時間」は、その合計時間を表示する。
+- `getFreeWindows(options)` は `src/shared/domain` の純粋関数とする。入力は `{ date, memberIds, personalBusy?, familyEvents?, startHour = 8, endHour = 20, minFreeMinutes = 30, assigneeBufferMinutes = 0 }`。`personalBusy` はメンバー ID ごとの ISO 区間、`familyEvents` は `WeekEvent` の計算に必要な項目と省略可能な `affectsAvailability`（既定 `true`）を持つ。大人の `personalBusy` は呼び出し側から渡し、子どもは家族予定だけで busy を計算する。
+- 時刻は `src/shared/time` を使った Asia/Tokyo の日付範囲で計算する。入力区間の instant は `Z` や任意の UTC offset を含むタイムゾーン付き ISO 文字列を受け入れ、区間は `{ start, end }` で表す。出力の instant は canonical な `+09:00` ISO 文字列に正規化する。対象範囲は対象日の `startHour` から `endHour`。既定は8時〜20時で、時間は整数、`0 <= startHour < endHour <= 24`。`endHour: 24` は翌日0時を終了時刻とする。担当者の前後の余裕は既定0分、`minFreeMinutes` は既定30分。どちらも有限・0以上の分単位の数値で指定し、端数も丸めない。不正な設定値や開始が終了以降の区間は拒否する。
+- メンバーごとの busy は、個人の busy 区間と、そのメンバーが対象の確定済み・時刻指定の家族予定、およびそのメンバーが担当の確定済み・時刻指定の家族予定（担当者には前後の余裕を適用）の和集合。予定の `memberIds` が空なら家族全員を対象とする。候補（`tentative`）、終日予定、`affectsAvailability: false` の予定は除外する。対象外の未知メンバー ID は無視し、`memberIds` 入力の重複 ID は一意化する。
+- busy 区間は対象日の時間範囲に切り取り、重複または端点が接する区間をまとめる。共通の空きは全対象メンバーの busy の和集合を対象時間範囲から除いた区間。`minFreeMinutes` 未満は破棄し、ちょうどの長さは残す。対象メンバーが0人なら共通の空きは空で、合計も0分。
+- 出力は `{ memberBusy: [{ memberId, busy: [{ start, end }] }], commonFreeWindows: [{ start, end }], totalFreeMinutes }`。予定のタイトルなどは含めず、ID、canonical `+09:00` ISO 区間、分単位の合計だけを返す。後続の API アダプターはこの結果を使い、予定 metadata をこのドメイン関数の出力に持ち込まない。
+- 「みんな空き N時間」は、`totalFreeMinutes` を表示する。
 
 ### conflicts：重複検出
 
