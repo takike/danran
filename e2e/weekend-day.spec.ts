@@ -47,6 +47,7 @@ interface MockOptions {
   busyFailure?: boolean;
   delayBusy?: boolean;
   manyMembers?: boolean;
+  memberCount?: 2 | 4;
 }
 
 interface DayApiControl {
@@ -68,7 +69,11 @@ function adultId(account: Account): string {
   return account === 'A' ? ADULT_A : ADULT_B;
 }
 
-function familyFixture(account: Account, manyMembers = false): FamilyPublic {
+function familyFixture(
+  account: Account,
+  manyMembers = false,
+  memberCount: 2 | 4 = 4,
+): FamilyPublic {
   const ordered: Array<
     Pick<FamilyPublic['members'][number], 'id' | 'userId' | 'kind' | 'name' | 'color'>
   > = [
@@ -109,7 +114,8 @@ function familyFixture(account: Account, manyMembers = false): FamilyPublic {
     }
   }
   const selfId = adultId(account);
-  const members: FamilyPublic['members'] = ordered.map((member, sortOrder) => ({
+  const visibleMembers = manyMembers ? ordered : ordered.slice(0, memberCount);
+  const members: FamilyPublic['members'] = visibleMembers.map((member, sortOrder) => ({
     ...member,
     name: manyMembers ? `${member.name}${'長'.repeat(16)}` : member.name,
     sortOrder,
@@ -174,6 +180,14 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       { status: 'tentative' },
     ),
     event(
+      'evt-width-control',
+      '買い物の予定',
+      `${date}T11:00:00+09:00`,
+      `${date}T12:00:00+09:00`,
+      [ADULT_B],
+      { isRoutine: true },
+    ),
+    event(
       'evt-all-members',
       '家族全員の昼予定',
       `${date}T14:00:00+09:00`,
@@ -201,7 +215,11 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       `${date}T15:00:00+09:00`,
       `${date}T17:00:00+09:00`,
       [],
-      { status: 'tentative', items: ['レジャーシート', '着替え'] },
+      {
+        status: 'tentative',
+        items: ['レジャーシート', '着替え'],
+        assigneeMemberId: ADULT_A,
+      },
     ),
     event('evt-before-hours', '朝の家族予定', `${date}T06:00:00+09:00`, `${date}T06:30:00+09:00`, [
       ADULT_B,
@@ -432,7 +450,9 @@ async function mockDayApis(page: Page, options: MockOptions = {}): Promise<DayAp
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ families: [familyFixture(account, options.manyMembers)] }),
+      body: JSON.stringify({
+        families: [familyFixture(account, options.manyMembers, options.memberCount)],
+      }),
     });
   });
 
@@ -440,7 +460,7 @@ async function mockDayApis(page: Page, options: MockOptions = {}): Promise<DayAp
     const url = new URL(route.request().url());
     const requestedFamilyId = url.pathname.split('/')[3] ?? familyId(account);
     const requestedAccount: Account = requestedFamilyId === FAMILY_B ? 'B' : 'A';
-    const family = familyFixture(requestedAccount, options.manyMembers);
+    const family = familyFixture(requestedAccount, options.manyMembers, options.memberCount);
     const events = eventsByFamily.get(requestedFamilyId) ?? fixtureEvents(SATURDAY);
     const anchor = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
     requests.push(`${url.pathname}?start=${anchor}`);
@@ -698,6 +718,31 @@ async function expectCardTitleAboveOverlappingFreeLabel(
   await expect(freeLabels).not.toHaveCount(0);
 }
 
+async function expectTextFirstGlyphHitWithinCard(text: Locator, card: Locator) {
+  await text.scrollIntoViewIfNeeded();
+  const expectedCard = await card.getAttribute('data-testid');
+  const result = await text.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const bounds = range.getClientRects()[0];
+    if (!bounds) return { foundText: false, hitCard: null };
+    const hit = document.elementFromPoint(
+      bounds.left + Math.min(2, bounds.width / 2),
+      bounds.top + bounds.height / 2,
+    );
+    return {
+      foundText: true,
+      hitCard:
+        hit?.closest('button[data-testid^="weekend-day-event-"]')?.getAttribute('data-testid') ??
+        null,
+    };
+  });
+  expect(result.foundText).toBe(true);
+  expect(result.hitCard, `first glyph of ${await text.textContent()} was occluded`).toBe(
+    expectedCard,
+  );
+}
+
 async function expectBaseWeekScreen(page: Page) {
   await expect(page.getByTestId('home-screen')).toBeVisible();
   await expect(page.getByRole('heading', { name: '10/5 – 10/12', exact: true })).toBeVisible();
@@ -819,6 +864,7 @@ test.describe('Task 2-6: weekend day detail', () => {
     expect(columnBounds.every((bounds) => bounds !== null)).toBe(true);
     const widths = columnBounds.map((bounds) => bounds?.width ?? 0);
     for (const width of widths.slice(1)) expect(width).toBeCloseTo(widths[0] ?? 0, 0);
+    for (const width of widths) expect(width).toBeLessThan(90);
     if (scrollportBounds) {
       for (const name of memberNames) {
         const heading = scroller.getByText(name, { exact: true }).first();
@@ -850,6 +896,12 @@ test.describe('Task 2-6: weekend day detail', () => {
     }
     const adultColumn = page.getByTestId(`weekend-day-column-${ADULT_A}`);
     const childColumn = page.getByTestId(`weekend-day-column-${CHILD}`);
+    const narrowRoutine = page.getByTestId(`weekend-day-event-evt-routine-${ADULT_B}`);
+    await expect(narrowRoutine.getByText('16:00–17:00 · 大人乙', { exact: true })).toBeHidden();
+    const narrowWidthControl = page.getByTestId(`weekend-day-event-evt-width-control-${ADULT_B}`);
+    await expect(
+      narrowWidthControl.getByText('11:00–12:00 · 大人乙', { exact: true }),
+    ).toBeHidden();
     const assignedAdult = page.getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`);
     await expect(assignedAdult).toHaveAttribute('aria-label', /担当 大人甲/);
     await expect(page.getByTestId(`weekend-day-event-evt-assigned-piano-${CHILD}`)).toContainText(
@@ -882,6 +934,21 @@ test.describe('Task 2-6: weekend day detail', () => {
       'aria-label',
       /候補.*持ち物 レジャーシート、着替え/,
     );
+    const picnic = page.getByTestId('weekend-day-event-evt-candidate-picnic-all');
+    await expect(picnic.getByText('候補', { exact: true })).toBeVisible();
+    await expect(picnic.getByText('15:00–17:00 · 家族全員', { exact: true })).toBeVisible();
+    await expect(picnic.getByText('担当：大人甲', { exact: true })).toBeVisible();
+    await expect(picnic.getByText('レジャーシート', { exact: true })).toBeVisible();
+    await expect(picnic.getByText('着替え', { exact: true })).toBeVisible();
+    for (const label of [
+      picnic.getByText('候補', { exact: true }),
+      picnic.getByText('15:00–17:00 · 家族全員', { exact: true }),
+      picnic.getByText('担当：大人甲', { exact: true }),
+      picnic.getByText('レジャーシート', { exact: true }),
+      picnic.getByText('着替え', { exact: true }),
+    ]) {
+      await expectTextFirstGlyphHitWithinCard(label, picnic);
+    }
     const assignedBounds = await page
       .getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`)
       .boundingBox();
@@ -907,6 +974,32 @@ test.describe('Task 2-6: weekend day detail', () => {
       expect(singleCandidate.y).toBeLessThan(overlapBounds.y + overlapBounds.height);
       expect(overlapBounds.y).toBeLessThan(singleCandidate.y + singleCandidate.height);
       expect(singleCandidate.x).not.toBe(overlapBounds.x);
+    }
+    const narrowCandidate = page.getByTestId(`weekend-day-event-evt-candidate-overlap-${ADULT_A}`);
+    const narrowCandidateBounds = await narrowCandidate.boundingBox();
+    expect(narrowCandidateBounds).not.toBeNull();
+    if (narrowCandidateBounds) expect(narrowCandidateBounds.width).toBeLessThan(90);
+    const narrowCandidateBorder = await narrowCandidate.evaluate(
+      (element) => getComputedStyle(element).borderTopStyle,
+    );
+    const narrowCandidateMark = narrowCandidate.getByText('候', { exact: true });
+    expect(narrowCandidateBorder === 'dashed' || (await narrowCandidateMark.count()) > 0).toBe(
+      true,
+    );
+    if ((await narrowCandidateMark.count()) > 0) {
+      await expect(narrowCandidateMark).toBeVisible();
+      const [markBounds, cardBounds] = await Promise.all([
+        narrowCandidateMark.boundingBox(),
+        narrowCandidate.boundingBox(),
+      ]);
+      expect(markBounds).not.toBeNull();
+      expect(cardBounds).not.toBeNull();
+      if (markBounds && cardBounds) {
+        expect(markBounds.x).toBeGreaterThanOrEqual(cardBounds.x);
+        expect(markBounds.x + markBounds.width).toBeLessThanOrEqual(
+          cardBounds.x + cardBounds.width,
+        );
+      }
     }
     const shortBusy = page.getByTestId(`weekend-day-personal-busy-${SATURDAY}-${ADULT_C}-0`);
     const [shortBusyBounds, busyTimelineBounds] = await Promise.all([
@@ -962,6 +1055,27 @@ test.describe('Task 2-6: weekend day detail', () => {
       );
     }
     await expect(allMemberSpan).toContainText('家族全員で見る予定');
+    const spanningBackground = await allMemberSpan.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    );
+    const freeBandBackground = await page
+      .getByTestId('weekend-day-free-band-0')
+      .evaluate(
+        (element) =>
+          getComputedStyle(
+            element.parentElement?.querySelector('span[aria-hidden="true"]') ?? element,
+          ).backgroundColor,
+      );
+    expect(spanningBackground).not.toBe(freeBandBackground);
+    const chipColor = await allMemberSpan.evaluate((element) => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = 'var(--chip)';
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    expect(spanningBackground).toBe(chipColor);
     await expect(
       page.getByTestId(`weekend-day-personal-busy-${SATURDAY}-${ADULT_B}-0`),
     ).toBeVisible();
@@ -1043,6 +1157,32 @@ test.describe('Task 2-6: weekend day detail', () => {
       await page.screenshot({ path: 'docs/screenshots/s2-weekend-day.png', fullPage: true });
       await page.setViewportSize({ width: 390, height: 844 });
     }
+  });
+
+  test('shows event details when the rendered card has enough width', async ({ page }) => {
+    await mockDayApis(page, { memberCount: 2 });
+    await page.goto(`/day/${SATURDAY}`);
+    await expect(page.getByTestId('weekend-day-timeline')).toBeVisible();
+    const scroller = page.getByTestId('weekend-day-scroll');
+    const columnBounds = await Promise.all(
+      [ADULT_A, ADULT_B].map((memberId) =>
+        page.getByTestId(`weekend-day-column-${memberId}`).boundingBox(),
+      ),
+    );
+    expect(columnBounds.every((bounds) => bounds !== null)).toBe(true);
+    const widths = columnBounds.map((bounds) => bounds?.width ?? 0);
+    for (const width of widths) {
+      expect(width).toBeGreaterThanOrEqual(140);
+      expect(width).toBeLessThan(180);
+    }
+    expect(widths[0]).toBeCloseTo(widths[1] ?? 0, 0);
+    const widthControl = page.getByTestId(`weekend-day-event-evt-width-control-${ADULT_B}`);
+    await expect(widthControl.getByText('11:00–12:00 · 大人乙', { exact: true })).toBeVisible();
+    const scrollMetrics = await scroller.evaluate((element) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    }));
+    expect(scrollMetrics.scroll).toBeLessThanOrEqual(scrollMetrics.client);
   });
 
   test('keeps common free time for not-shared members and disables it when a member is unavailable', async ({

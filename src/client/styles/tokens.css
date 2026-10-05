@@ -113,3 +113,51 @@ body {
   font-family: var(--font-family);
   -webkit-font-smoothing: antialiased;
 }
+
+.day-timeline-event {
+  container-name: day-event;
+  container-type: inline-size;
+}
+
+.day-timeline-event__query-container {
+  container-name: day-event;
+  container-type: inline-size;
+}
+
+.day-timeline-event__wide-details {
+  display: none;
+}
+
+.day-timeline-event__wide-labels {
+  display: none;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+}
+
+.day-timeline-event__compact-candidate {
+  display: inline-flex;
+}
+
+.day-timeline-event__routine {
+  display: none;
+}
+
+/* Container queries measure the card content box, keeping the usable-width threshold near 120px. */
+@container day-event (min-width: 120px) {
+  .day-timeline-event__wide-details {
+    display: flex;
+  }
+
+  .day-timeline-event__wide-labels {
+    display: flex;
+  }
+
+  .day-timeline-event__routine {
+    display: inline-flex;
+  }
+
+  .day-timeline-event__compact-candidate {
+    display: none;
+  }
+}

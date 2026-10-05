@@ -73,13 +73,11 @@ function FamilyEventDetails({
   date,
   members,
   spanning = false,
-  titleOnly = false,
 }: {
   block: PositionedDayEvent<WeekEvent>;
   date: DateKey;
   members: readonly WeekMember[];
   spanning?: boolean;
-  titleOnly?: boolean;
 }): React.ReactElement {
   const event = block.event;
   const assignee = event.assigneeMemberId
@@ -93,54 +91,61 @@ function FamilyEventDetails({
     isAssignedPlacement ? `担当${assignee ? `：${assignee.name}` : ''}` : undefined,
   ].filter((label): label is string => Boolean(label));
 
-  if (titleOnly) {
-    return (
-      <span
-        data-testid={`weekend-day-event-title-${event.id}`}
-        className="block w-full min-w-0 truncate whitespace-nowrap font-semibold"
-      >
-        {event.title}
-      </span>
-    );
-  }
-
   return (
     <>
-      <span
-        data-testid={`weekend-day-event-title-${event.id}`}
-        className="flex w-full min-w-0 items-center gap-[var(--spacing-2xs)] font-semibold"
-      >
-        {event.isRoutine && <Repeat size={12} aria-label="繰り返し予定" className="shrink-0" />}
-        <span className="min-w-0 truncate">{event.title}</span>
-      </span>
-      <span className="max-w-full break-words text-[length:var(--nav-caption-size)] text-muted [overflow-wrap:anywhere]">
-        {eventTime(event, date)} · {eventTargets(event, members)}
-      </span>
-      {labels.length > 0 && (
-        <span className="flex max-w-full flex-wrap gap-[var(--spacing-2xs)]">
-          {labels.map((label) => (
-            <span
-              key={label}
-              className="rounded-[var(--radius-sm)] bg-accent-tint px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)] text-accent"
-            >
-              {label}
-            </span>
-          ))}
+      <span className="flex w-full min-w-0 items-center gap-[var(--spacing-2xs)]">
+        {event.isRoutine && (
+          <Repeat
+            size={12}
+            aria-label="繰り返し予定"
+            className="day-timeline-event__routine shrink-0"
+          />
+        )}
+        <span
+          data-testid={`weekend-day-event-title-${event.id}`}
+          className="min-w-0 flex-1 truncate whitespace-nowrap font-semibold"
+        >
+          {event.title}
         </span>
-      )}
-      {event.items.length > 0 && (
-        <span className="flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-2xs)]">
-          {event.items.map((item, index) => (
-            <span
-              key={`${event.id}-item-${index}`}
-              className="inline-flex min-w-0 items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)]"
-            >
-              <ShoppingBag size={10} aria-hidden="true" className="shrink-0" />
-              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{item}</span>
-            </span>
-          ))}
+        {event.status === 'tentative' && (
+          <span
+            aria-hidden="true"
+            className="day-timeline-event__compact-candidate shrink-0 rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-center text-[length:var(--nav-caption-size)] leading-tight text-accent"
+          >
+            候
+          </span>
+        )}
+        {labels.length > 0 && (
+          <span className="day-timeline-event__wide-labels shrink-0 items-center gap-[var(--spacing-2xs)]">
+            {labels.map((label) => (
+              <span
+                key={label}
+                className="max-w-full truncate whitespace-nowrap rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)] text-accent"
+              >
+                {label}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+      <span className="day-timeline-event__wide-details flex min-w-0 max-w-full flex-col items-start gap-[var(--spacing-2xs)]">
+        <span className="max-w-full break-words text-[length:var(--nav-caption-size)] text-muted [overflow-wrap:anywhere]">
+          {eventTime(event, date)} · {eventTargets(event, members)}
         </span>
-      )}
+        {event.items.length > 0 && (
+          <span className="flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-2xs)]">
+            {event.items.map((item, index) => (
+              <span
+                key={`${event.id}-item-${index}`}
+                className="inline-flex min-w-0 items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-2xs)] text-[length:var(--nav-caption-size)]"
+              >
+                <ShoppingBag size={10} aria-hidden="true" className="shrink-0" />
+                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{item}</span>
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
     </>
   );
 }
@@ -165,21 +170,17 @@ function FamilyEventButton({
     event.status === 'tentative'
       ? 'var(--surface)'
       : `color-mix(in srgb, var(--member-${member?.color ?? 'indigo'}) 14%, var(--surface))`;
+  const tentative = event.status === 'tentative';
   return (
     <button
       type="button"
       data-testid={`weekend-day-event-${event.id}-${member?.id ?? 'all'}`}
       aria-label={familyEventAccessibleLabel(event, date, members, block.column.assigneeMemberId)}
       onClick={(eventTarget) => onEdit(event, eventTarget.currentTarget)}
-      className={`day-timeline-event absolute z-20 flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] border px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${event.status === 'tentative' ? 'border-accent bg-surface' : 'border-line'}`}
+      className={`day-timeline-event absolute z-20 flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${tentative ? 'border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus`}
       style={{ ...blockStyle(block), backgroundColor: background }}
     >
-      <FamilyEventDetails
-        block={block}
-        date={date}
-        members={members}
-        titleOnly={members.length >= 4 || block.laneCount > 1}
-      />
+      <FamilyEventDetails block={block} date={date} members={members} />
     </button>
   );
 }
@@ -198,7 +199,7 @@ function SpanningFamilyEventButton({
   onEdit: (event: WeekEvent, trigger: HTMLButtonElement) => void;
 }): React.ReactElement {
   const event = block.event;
-  const background = event.status === 'tentative' ? 'var(--surface)' : 'var(--accent-tint)';
+  const background = event.status === 'tentative' ? 'var(--surface)' : 'var(--chip)';
   const label = familyEventAccessibleLabel(event, date, members, block.column.assigneeMemberId);
   return (
     <button
@@ -206,7 +207,7 @@ function SpanningFamilyEventButton({
       data-testid={`weekend-day-event-${event.id}-all`}
       aria-label={label}
       onClick={(eventTarget) => onEdit(event, eventTarget.currentTarget)}
-      className="day-timeline-event pointer-events-auto absolute inset-x-0 z-[15] flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] border px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      className={`day-timeline-event pointer-events-auto absolute inset-x-0 z-[15] flex min-h-[var(--tap-target-min)] min-w-0 flex-col items-start overflow-hidden rounded-[var(--radius-sm)] ${event.status === 'tentative' ? 'border-2 border-dashed border-accent px-[var(--spacing-2xs)]' : 'border border-line px-[var(--spacing-xs)]'} py-[var(--spacing-2xs)] text-left text-xs leading-tight shadow-[var(--week-card-shadow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus`}
       style={{
         top: `${block.geometry.top}px`,
         height: `${block.geometry.height}px`,
@@ -216,13 +217,13 @@ function SpanningFamilyEventButton({
     >
       {titleArea.titleOnly ? (
         <span
-          className="absolute top-[var(--spacing-2xs)] min-w-0 overflow-hidden"
+          className="day-timeline-event__query-container absolute top-[var(--spacing-2xs)] min-w-0 overflow-hidden"
           style={{
             left: `calc(${titleArea.left * 100}% + var(--spacing-sm))`,
             width: `calc(${titleArea.width * 100}% - var(--spacing-sm))`,
           }}
         >
-          <FamilyEventDetails block={block} date={date} members={members} spanning titleOnly />
+          <FamilyEventDetails block={block} date={date} members={members} spanning />
         </span>
       ) : (
         <FamilyEventDetails block={block} date={date} members={members} spanning />
