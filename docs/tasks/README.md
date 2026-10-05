@@ -20,6 +20,7 @@
 | 3 | [1-8-event-editing.md](1-8-event-editing.md) | 予定の作成・編集・削除 | 完了（PR #17。[1-8-review-fixes.md](1-8-review-fixes.md) 反映済み） |
 | 4 | [1-9-settings.md](1-9-settings.md) | 設定：メンバーの名前・色、休園日 | 完了（PR #18） |
 | 5 | [2-1-personal-events.md](2-1-personal-events.md) | 自分の個人予定を自分の画面にだけ表示（要：人間による Google Cloud のスコープ登録） | 完了（PR #19。[2-1-review-fixes.md](2-1-review-fixes.md) 反映済み） |
-| 6 | [2-1-followup-calendar-picker.md](2-1-followup-calendar-picker.md) | カレンダー選択の初期状態を「すべて未選択」にする（実機確認の指摘。マージは人間） | 未着手 |
+| 6 | [2-1-followup-calendar-picker.md](2-1-followup-calendar-picker.md) | カレンダー選択の初期状態を「すべて未選択」にする（実機確認の指摘） | 完了（PR #20）。実機確認待ち |
+| 7 | [2-4-free-windows.md](2-4-free-windows.md) | 共通の空きを計算するドメインロジック（API・画面には触らない。2-2・2-3 より先に実施） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
