@@ -28,6 +28,7 @@
 | 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | 完了（PR #25。[2-6-review-fixes.md](2-6-review-fixes.md) の3回分を反映済み） |
 | 12 | [ci-skip-docs-deploy.md](ci-skip-docs-deploy.md) | ドキュメントだけの push では staging のデプロイを走らせない（Tailwind の読み取り範囲の限定を含む） | 完了（PR #26） |
 | 13 | [3-1-routine-creation.md](3-1-routine-creation.md) | 繰り返し予定の作成（毎週・隔週。最小の一覧とシリーズ全体の削除を含む） | 完了（PR #27） |
-| 14 | [3-2-routine-instances.md](3-2-routine-instances.md) | 繰り返し予定の直近の回、「この回を休む」、「振替」 | 完了（PR #28。[3-2-review-fixes.md](3-2-review-fixes.md) 反映済み）。実機確認待ち |
+| 14 | [3-2-routine-instances.md](3-2-routine-instances.md) | 繰り返し予定の直近の回、「この回を休む」、「振替」 | 完了（PR #28。[3-2-review-fixes.md](3-2-review-fixes.md) 反映済み） |
+| 15 | [3-2-followup-move-save-button.md](3-2-followup-move-save-button.md) | 振替の「保存」ボタンが空白に見える問題の修正（実機確認の指摘） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
