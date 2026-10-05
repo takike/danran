@@ -121,6 +121,9 @@ export function PersonalCalendarsSettings({
     selectionDraft !== null &&
     (selectionDraft.length !== savedSelection.length ||
       selectionDraft.some((calendarId) => !savedSelection.includes(calendarId)));
+  const canSaveSelection =
+    calendarsQuery.data?.status === 'ready' &&
+    (calendarsQuery.data.hasSavedSelection || selectedIds.length > 0);
   useReloadProtection(selectionDirty || pending, pending);
 
   const submitCalendarSelection = async (calendarIds: string[]): Promise<void> => {
@@ -275,7 +278,7 @@ export function PersonalCalendarsSettings({
               data-testid="personal-calendar-not-displaying"
               className="mt-[var(--spacing-md)] mb-0 block rounded-[var(--radius-md)] border border-line bg-chip p-[var(--spacing-sm)] text-sm leading-relaxed text-ink"
             >
-              現在、自分の予定は表示していません。カレンダーを選んで保存すると表示が始まります。
+              現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。
             </output>
           )}
           <p className="mt-[var(--spacing-md)] mb-0 text-sm leading-relaxed text-muted">
@@ -321,7 +324,7 @@ export function PersonalCalendarsSettings({
           <button
             type="button"
             data-testid="save-personal-calendars"
-            disabled={pending}
+            disabled={pending || !canSaveSelection}
             onClick={() => void submitCalendarSelection(selectedIds)}
             className={`${buttonClass} mt-[var(--spacing-sm)] w-full bg-accent text-surface hover:opacity-90`}
           >

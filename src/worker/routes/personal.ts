@@ -187,14 +187,13 @@ function makeCalendarList(
   savedRows: Array<typeof memberCalendars.$inferSelect>,
 ) {
   const savedSelection = new Map(savedRows.map((row) => [row.calendarId, row.displayEnabled]));
-  const hasSavedSelection = savedRows.some((row) => row.displayEnabled);
   return entries
     .filter((entry) => entry.id !== familyCalendarId)
     .map((entry) => ({
       id: entry.id,
       name: entry.summary?.trim() || '（名前のないカレンダー）',
       isPrimary: entry.primary === true,
-      selected: hasSavedSelection ? savedSelection.get(entry.id) === true : entry.primary === true,
+      selected: savedSelection.get(entry.id) === true,
     }));
 }
 

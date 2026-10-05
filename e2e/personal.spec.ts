@@ -288,7 +288,7 @@ async function mockPersonalApis(
           calendarList(
             currentFamily.members.find((member) => member.userId === currentUserId)?.id ?? MEMBER_A,
             authorized ? 'ready' : 'authorization_required',
-            hasSavedSelection ? savedCalendarIds : [PRIMARY_ID],
+            savedCalendarIds,
             hasSavedSelection,
           ),
         ),
@@ -329,7 +329,7 @@ async function mockPersonalApis(
         ...calendarList(
           currentFamily.members.find((member) => member.userId === currentUserId)?.id ?? MEMBER_A,
           'ready',
-          hasSavedSelection ? savedCalendarIds : [PRIMARY_ID],
+          savedCalendarIds,
           hasSavedSelection,
         ),
       }),
@@ -483,17 +483,21 @@ test.describe('Task 2-1: personal calendar events', () => {
     await expect(page.getByTestId('personal-consent-success')).toBeVisible();
     const primary = page.getByTestId(`personal-calendar-${PRIMARY_ID}`);
     const work = page.getByTestId(`personal-calendar-${WORK_ID}`);
-    await expect(primary).toBeChecked();
+    await expect(primary).not.toBeChecked();
     await expect(work).not.toBeChecked();
     const notDisplayingNotice = page.getByTestId('personal-calendar-not-displaying');
     await expect(notDisplayingNotice).toHaveText(
-      '現在、自分の予定は表示していません。カレンダーを選んで保存すると表示が始まります。',
+      '現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。',
     );
+    const save = page.getByTestId('save-personal-calendars');
+    await expect(save).toBeDisabled();
 
     if (process.env.DANRAN_SCREENSHOTS === '1') {
       await page.goto('/family');
       await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
-      await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).toBeChecked();
+      await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).not.toBeChecked();
+      await expect(page.getByTestId(`personal-calendar-${WORK_ID}`)).not.toBeChecked();
+      await expect(page.getByTestId('save-personal-calendars')).toBeDisabled();
       const original = page.viewportSize();
       const fullHeight = await page.evaluate(() =>
         Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
@@ -503,7 +507,7 @@ test.describe('Task 2-1: personal calendar events', () => {
       if (original) await page.setViewportSize(original);
     }
 
-    const save = page.getByTestId('save-personal-calendars');
+    await primary.check();
     await expect(save).toBeEnabled();
     await save.click();
     expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [PRIMARY_ID] });
@@ -516,15 +520,22 @@ test.describe('Task 2-1: personal calendar events', () => {
 
     await primary.uncheck();
     await work.uncheck();
+    await expect(save).toBeEnabled();
     await page.getByTestId('save-personal-calendars').click();
     expect(api.personalPutBodies.at(-1)).toEqual({ calendarIds: [] });
-    await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
-    await expect(primary).toBeChecked();
+    await expect(notDisplayingNotice).toHaveText(
+      '現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。',
+    );
+    await expect(primary).not.toBeChecked();
     await expect(work).not.toBeChecked();
+    await expect(save).toBeDisabled();
     await page.reload();
-    await expect(page.getByTestId('personal-calendar-not-displaying')).toBeVisible();
-    await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).toBeChecked();
+    await expect(page.getByTestId('personal-calendar-not-displaying')).toHaveText(
+      '現在、自分の予定は表示していません。表示するカレンダーを選んで保存してください。',
+    );
+    await expect(page.getByTestId(`personal-calendar-${PRIMARY_ID}`)).not.toBeChecked();
     await expect(page.getByTestId(`personal-calendar-${WORK_ID}`)).not.toBeChecked();
+    await expect(page.getByTestId('save-personal-calendars')).toBeDisabled();
     await page.goto(`/?week=${BASE_WEEK}`);
     await expect(page.getByTestId('personal-events-status')).toContainText(
       '表示する個人カレンダーを家族ページで選んでください。',
