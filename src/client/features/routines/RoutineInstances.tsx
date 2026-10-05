@@ -7,8 +7,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import type React from 'react';
 import { useRef, useState } from 'react';
 
-const buttonClass =
-  'inline-flex min-h-[var(--tap-target-min)] items-center justify-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-sm)] text-sm font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50';
+const buttonBaseClass =
+  'inline-flex min-h-[var(--tap-target-min)] items-center justify-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] border px-[var(--spacing-sm)] text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50';
+const secondaryButtonClass = `${buttonBaseClass} border-line bg-surface text-ink`;
+const primaryButtonClass = `${buttonBaseClass} border-accent bg-accent text-surface`;
 const fieldClass =
   'mt-[var(--spacing-2xs)] min-h-[var(--tap-target-min)] w-full rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-sm)] text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
 const OPERATION_ERROR = '変更を保存できませんでした。時間をおいて再度お試しください。';
@@ -148,7 +150,7 @@ export function RoutineInstances({
               setDirty(false);
               setError('');
             }}
-            className={`${buttonClass} max-w-full text-left ${selected?.id === instance.id ? 'border-focus ring-1 ring-focus' : ''}`}
+            className={`${buttonBaseClass} ${selected?.id === instance.id ? 'border-focus ring-1 ring-focus' : 'border-line'} bg-surface text-ink max-w-full text-left`}
           >
             <span className={instance.status === 'skipped' ? 'line-through decoration-2' : ''}>
               {formatRoutineInstanceChip(instance)}
@@ -245,7 +247,7 @@ export function RoutineInstances({
                   type="submit"
                   data-testid="routine-instance-move-save"
                   disabled={controlsDisabled}
-                  className={`${buttonClass} bg-accent text-surface`}
+                  className={primaryButtonClass}
                 >
                   {pending ? '保存中...' : '保存'}
                 </button>
@@ -258,7 +260,7 @@ export function RoutineInstances({
                     setDirty(false);
                     setError('');
                   }}
-                  className={buttonClass}
+                  className={secondaryButtonClass}
                 >
                   やめる
                 </button>
@@ -272,7 +274,7 @@ export function RoutineInstances({
                   data-testid="routine-instance-skip"
                   disabled={controlsDisabled}
                   onClick={() => void perform('skip')}
-                  className={buttonClass}
+                  className={secondaryButtonClass}
                 >
                   この回を休む
                 </button>
@@ -283,7 +285,7 @@ export function RoutineInstances({
                   data-testid="routine-instance-restore"
                   disabled={controlsDisabled}
                   onClick={() => void perform('restore')}
-                  className={buttonClass}
+                  className={secondaryButtonClass}
                 >
                   休みを取り消す
                 </button>
@@ -294,7 +296,7 @@ export function RoutineInstances({
                   data-testid="routine-instance-restore"
                   disabled={controlsDisabled}
                   onClick={() => void perform('restore')}
-                  className={buttonClass}
+                  className={secondaryButtonClass}
                 >
                   振替を取り消す（元の日時に戻す）
                 </button>
@@ -313,7 +315,7 @@ export function RoutineInstances({
                   setDirty(false);
                   setError('');
                 }}
-                className={buttonClass}
+                className={secondaryButtonClass}
               >
                 {selected.status === 'moved' ? '振替先を変える' : '振替を設定'}
               </button>

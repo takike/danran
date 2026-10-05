@@ -111,7 +111,11 @@ function jsonResponse(status: number, body: unknown) {
 
 async function mockRoutineApis(
   page: import('@playwright/test').Page,
-  options: { routines?: Routine[]; failNextInstanceMutation?: boolean } = {},
+  options: {
+    routines?: Routine[];
+    failNextInstanceMutation?: boolean;
+    holdInstanceMutation?: boolean;
+  } = {},
 ) {
   let routines = [...(options.routines ?? [])];
   const createBodies: Array<Record<string, unknown>> = [];
@@ -124,6 +128,14 @@ async function mockRoutineApis(
   }> = [];
   let listCalls = 0;
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
+  let signalInstanceMutationStarted: () => void = () => {};
+  let releaseInstanceMutation: () => void = () => {};
+  const instanceMutationStarted = new Promise<void>((resolve) => {
+    signalInstanceMutationStarted = resolve;
+  });
+  const instanceMutationGate = new Promise<void>((resolve) => {
+    releaseInstanceMutation = resolve;
+  });
   await page.route('**/api/auth/me', (route) =>
     route.fulfill(
       jsonResponse(200, {
@@ -150,6 +162,10 @@ async function mockRoutineApis(
         const [, routineId = '', instanceId = '', action = ''] = instanceMatch;
         const body = request.postDataJSON() as unknown;
         instanceMutations.push({ routineId, instanceId, action, body });
+        if (options.holdInstanceMutation) {
+          signalInstanceMutationStarted();
+          await instanceMutationGate;
+        }
         if (failNextInstanceMutation) {
           failNextInstanceMutation = false;
           await route.fulfill(
@@ -219,6 +235,8 @@ async function mockRoutineApis(
     createBodies,
     deletedIds,
     instanceMutations,
+    instanceMutationStarted,
+    releaseInstanceMutation,
     get listCalls() {
       return listCalls;
     },
@@ -254,6 +272,36 @@ async function expectVisibleTargetsAtLeast44px(page: import('@playwright/test').
       expect(box.height).toBeGreaterThanOrEqual(44);
     }
   }
+}
+
+async function expectButtonPalette(
+  button: import('@playwright/test').Locator,
+  backgroundToken: 'accent' | 'surface',
+  textToken: 'ink' | 'surface',
+) {
+  const colors = await button.evaluate(
+    (element, tokens) => {
+      const resolveToken = (token: string) => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(--${token})`;
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const styles = getComputedStyle(element);
+      return {
+        background: styles.backgroundColor,
+        text: styles.color,
+        expectedBackground: resolveToken(tokens.background),
+        expectedText: resolveToken(tokens.text),
+      };
+    },
+    { background: backgroundToken, text: textToken },
+  );
+  expect(colors.background).not.toBe(colors.text);
+  expect(colors.background).toBe(colors.expectedBackground);
+  expect(colors.text).toBe(colors.expectedText);
 }
 
 test.describe('Task 3-1: recurring routines', () => {
@@ -349,8 +397,12 @@ test.describe('Task 3-1: recurring routines', () => {
         '10/29',
       );
       await pianoCard.getByTestId('routine-instance-chip-piano-moved').click();
-      await expect(pianoCard.getByTestId('routine-instance-actions-piano-moved')).toBeVisible();
-      await page.screenshot({ path: 'docs/screenshots/s4-routines.png' });
+      const movedActions = pianoCard.getByTestId('routine-instance-actions-piano-moved');
+      await expect(movedActions).toBeVisible();
+      await movedActions.getByTestId('routine-instance-change-move').click();
+      await expect(movedActions.getByTestId('routine-instance-move-save')).toBeVisible();
+      await expect(movedActions.getByTestId('routine-instance-move-cancel')).toBeVisible();
+      await page.screenshot({ path: 'docs/screenshots/s4-routines.png', fullPage: true });
     }
   });
 
@@ -618,6 +670,44 @@ test.describe('Task 3-1: recurring routines', () => {
     );
     expect(api.instanceMutations).toHaveLength(7);
     expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
+  });
+
+  test('keeps move save and cancel readable while saving', async ({ page }) => {
+    const api = await mockRoutineApis(page, {
+      holdInstanceMutation: true,
+      routines: [
+        routine({
+          id: 'routine-move-colors',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            instances: [instance('instance-move-colors', '2026-10-13')],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card');
+    await card.getByTestId('routine-instance-chip-instance-move-colors').click();
+    const actions = card.getByTestId('routine-instance-actions-instance-move-colors');
+    await actions.getByTestId('routine-instance-set-move').click();
+    const save = actions.getByTestId('routine-instance-move-save');
+    const cancel = actions.getByTestId('routine-instance-move-cancel');
+    await expect(save).toHaveText('保存');
+    await expectButtonPalette(save, 'accent', 'surface');
+    await expect(cancel).toHaveText('やめる');
+    await expectButtonPalette(cancel, 'surface', 'ink');
+
+    const saveRequest = save.click();
+    await api.instanceMutationStarted;
+    await expect(save).toHaveText('保存中...');
+    await expect(save).toBeDisabled();
+    await expectButtonPalette(save, 'accent', 'surface');
+    await expect(cancel).toBeDisabled();
+    await expectButtonPalette(cancel, 'surface', 'ink');
+    api.releaseInstanceMutation();
+    await saveRequest;
+    expect(api.instanceMutations).toHaveLength(1);
   });
 
   test('keeps the prior chip state after a failed operation and offers retry after unavailable upcoming data', async ({
