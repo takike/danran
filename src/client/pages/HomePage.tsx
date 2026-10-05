@@ -200,12 +200,16 @@ export default function HomePage(): React.ReactElement {
     (item) => item.creationStatus === 'ready' && item.familyCalendarId,
   );
   if (family) {
+    const selfMemberId = family.members.find(
+      (member) => member.kind === 'adult' && member.userId === user.id,
+    )?.id;
     return (
       <WeekPage
         key={`${user.id}:${family.id}`}
         userId={user.id}
         familyId={family.id}
         familyName={family.name}
+        selfMemberId={selfMemberId}
       />
     );
   }

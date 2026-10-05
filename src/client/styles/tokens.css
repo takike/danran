@@ -32,6 +32,10 @@
   --week-date-column: 52px;
   --event-time-column: 72px;
   --week-chip-min-height: 32px;
+  --busy-name-column: 7rem;
+  --busy-bar-min-width: 8.75rem;
+  --busy-bar-height: 20px;
+  --busy-scale-font-size: 0.625rem;
   --week-card-shadow: 0 2px 10px rgba(31, 29, 26, 0.05);
   --nav-caption-size: 10px;
   --member-dot-size: 10px;
