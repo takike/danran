@@ -25,8 +25,9 @@
 | 8 | [2-2-busy-calendars.md](2-2-busy-calendars.md) | 空き状況に使うカレンダーの選択と、追加の同意（`calendar.freebusy`。取得 API は次の 2-3） | 完了（PR #22） |
 | 9 | [2-3-busy-api.md](2-3-busy-api.md) | 家族の空き状況を取得する API（開始・終了だけを返す。画面は変えない） | 完了（PR #23） |
 | 10 | [2-5-weekend-timeline.md](2-5-weekend-timeline.md) | 週末カードの空きタイムライン（メンバーごとの埋まっている時間、共通の空き、「みんな空き N時間」） | 完了（PR #24） |
-| 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | 完了（PR #25。[2-6-review-fixes.md](2-6-review-fixes.md) の3回分を反映済み）。実機確認待ち |
+| 11 | [2-6-weekend-day.md](2-6-weekend-day.md) | S2「週末の1日」（メンバー列のタイムライン、共通の空きから予定を作る） | 完了（PR #25。[2-6-review-fixes.md](2-6-review-fixes.md) の3回分を反映済み） |
 | 12 | [ci-skip-docs-deploy.md](ci-skip-docs-deploy.md) | ドキュメントだけの push では staging のデプロイを走らせない（Tailwind の読み取り範囲の限定を含む） | 完了（PR #26） |
-| 13 | [3-1-routine-creation.md](3-1-routine-creation.md) | 繰り返し予定の作成（毎週・隔週。最小の一覧とシリーズ全体の削除を含む） | 完了（PR #27）。実機確認待ち |
+| 13 | [3-1-routine-creation.md](3-1-routine-creation.md) | 繰り返し予定の作成（毎週・隔週。最小の一覧とシリーズ全体の削除を含む） | 完了（PR #27） |
+| 14 | [3-2-routine-instances.md](3-2-routine-instances.md) | 繰り返し予定の直近の回、「この回を休む」、「振替」 | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
