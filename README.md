@@ -136,3 +136,4 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 1-9（家族設定）**: `/family` で active な大人によるメンバー名・色変更、休園日の登録・削除を実装。API と権限の仕様は [docs/17-settings.md](docs/17-settings.md)。API モック E2E と390px スクリーンショット（`docs/screenshots/family.png`）を整備。Staging の人間による確認は未実施です。
 - Phase 2：本人の個人予定、free/busy、週末計画：
   - **タスク 2-1（本人の個人予定）**: `/family` での段階的認可とカレンダー選択、本人の S1 に限った予定表示を実装。API・保存範囲・staging の確認手順は [docs/18-personal-events.md](docs/18-personal-events.md)。API モック E2E と合成データの 390px スクリーンショット（`docs/screenshots/family.png`, `docs/screenshots/s1-week-view.png`）を整備。Google Cloud の追加スコープ登録状況と staging 実機確認は人間による確認待ちです。
+  - **タスク 2-2（空き状況に使うカレンダー）**: `/family` に free/busy 用の追加同意と本人のカレンダー選択を実装。`include_in_busy` は個人予定の `display_enabled` と独立し、選択保存までを扱います（busy 取得は Task 2-3）。仕様と staging 手順は [docs/19-busy-sharing.md](docs/19-busy-sharing.md)。Google Cloud の `calendar.freebusy` 登録は人間が2026-10-05に確認済みで、実 Google アカウントによる staging 確認は未実施です。

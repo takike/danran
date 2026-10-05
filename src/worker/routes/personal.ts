@@ -126,7 +126,7 @@ function pageTokenIsInvalid(value: string): boolean {
   return value.trim().length === 0;
 }
 
-async function fetchCalendarList(client: ReturnType<typeof createGoogleCalendarClient>) {
+export async function fetchCalendarList(client: ReturnType<typeof createGoogleCalendarClient>) {
   const entries: GooglePersonalCalendarListEntry[] = [];
   const seenTokens = new Set<string>();
   let pageToken: string | undefined;
@@ -197,7 +197,7 @@ function makeCalendarList(
     }));
 }
 
-function getRouteError(err: unknown): { status: RouteStatus; code: RouteErrorCode } {
+export function getRouteError(err: unknown): { status: RouteStatus; code: RouteErrorCode } {
   if (err instanceof ReauthNeededError) return { status: 401, code: 'REAUTH_REQUIRED' };
   if (!(err instanceof GoogleCalendarError)) return { status: 500, code: 'INTERNAL_ERROR' };
   if (err.code === 'AUTH_ERROR') return { status: 401, code: 'REAUTH_REQUIRED' };
@@ -312,25 +312,44 @@ personalRoute.put('/:id/personal-calendars', bodyLimit16KiB, async (c) => {
     ) AND EXISTS (
       SELECT 1 FROM families WHERE id = ${familyId}
     )`;
-    const deleteStatement = auth.db
-      .delete(memberCalendars)
-      .where(and(eq(memberCalendars.memberId, memberId), writeGuard));
     const selectedEntries = eligible.filter((entry) => requestedIds.has(entry.id));
-    const selectedRowQueries = selectedEntries.map((entry, index) =>
-      index === 0
-        ? sql`SELECT ${memberId}, ${entry.id}, 1`
-        : sql`UNION ALL SELECT ${memberId}, ${entry.id}, 1`,
-    );
-    const insertStatements =
+    const notSelectedCondition =
       selectedEntries.length === 0
-        ? []
-        : [
-            auth.db
-              .insert(memberCalendars)
-              .select(
-                sql`SELECT * FROM (${sql.join(selectedRowQueries, sql` `)}) AS incoming WHERE (${writeGuard})`,
-              ),
-          ];
+        ? sql`1 = 1`
+        : sql`${memberCalendars.calendarId} NOT IN (${sql.join(
+            selectedEntries.map((entry) => sql`${entry.id}`),
+            sql`, `,
+          )})`;
+    const clearDisplaySelection = auth.db
+      .update(memberCalendars)
+      .set({ displayEnabled: false })
+      .where(
+        and(
+          eq(memberCalendars.memberId, memberId),
+          eq(memberCalendars.displayEnabled, true),
+          notSelectedCondition,
+          writeGuard,
+        ),
+      );
+    const upsertDisplaySelections = selectedEntries.map((entry) =>
+      auth.db
+        .insert(memberCalendars)
+        .select(sql`SELECT ${memberId}, ${entry.id}, 1, 0 WHERE (${writeGuard})`)
+        .onConflictDoUpdate({
+          target: [memberCalendars.memberId, memberCalendars.calendarId],
+          set: { displayEnabled: true },
+        }),
+    );
+    const deleteUnusedRows = auth.db
+      .delete(memberCalendars)
+      .where(
+        and(
+          eq(memberCalendars.memberId, memberId),
+          eq(memberCalendars.displayEnabled, false),
+          eq(memberCalendars.includeInBusy, false),
+          writeGuard,
+        ),
+      );
 
     const currentSession = await getSessionUser(c, auth.db, auth.config.sessionSecret);
     if (
@@ -353,7 +372,7 @@ personalRoute.put('/:id/personal-calendars', bodyLimit16KiB, async (c) => {
         ),
       );
     if (!activeMembers[0]) return errorResponse(c, 404, 'NOT_FOUND');
-    const batchStatements = [deleteStatement, ...insertStatements];
+    const batchStatements = [clearDisplaySelection, ...upsertDisplaySelections, deleteUnusedRows];
     await auth.db.batch(
       batchStatements as [(typeof batchStatements)[number], ...typeof batchStatements],
     );

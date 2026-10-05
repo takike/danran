@@ -87,8 +87,8 @@ danran/
 ### ① 個人カレンダー（free/busy）
 
 - 他の家族に見せるのは **busy の区間だけ**。API のレスポンスに他人の予定タイトルが含まれないことを、テストで保証する。
-- 他人の個人カレンダーは自分のトークンでは読めないので、**サーバーが各大人のトークンでそれぞれ `freeBusy.query` を呼ぶ**。
-- 対象カレンダーは本人が設定画面で選ぶ（`calendarList` から選択。既定は primary）。
+- 他人の個人カレンダーは自分のトークンでは読めないので、**サーバーが各大人のトークンでそれぞれ `freeBusy.query` を呼ぶ**。対象カレンダーの選択と同意は Task 2-2、実取得は Task 2-3 で行う。
+- 対象カレンダーは本人が設定画面で `calendarList` から選ぶ。初期状態はすべて未選択で、primary を自動選択しない。
 - **会社の Google Workspace の予定**：会社アカウント側で、個人アカウントに「予定の有無のみ」を共有してもらえば、個人アカウントの `calendarList` に現れ、free/busy の対象にできる。会社の管理者が外部共有を禁止している場合は、手動の「仕事ブロック」予定で代替する。オンボーディングにこの案内を入れる。
 - **二重表示の回避**：Danran が個人カレンダーに書き出した予定（送迎ブロック等）も free/busy に含まれてしまう。free/busy は中身を返さないので、**D1 に記録した「書き出し済み区間」と完全一致する busy 区間を差し引く**。
 - `transparency: transparent`（「予定なし」扱い）の予定は、Google 側で busy に含まれない。
@@ -96,7 +96,7 @@ danran/
 ### ① 個人カレンダー（本人の画面）
 
 - Task 2-1 では、本人が段階的認可に同意し、本人が選択した個人カレンダーだけを本人のトークンで読む。予定の内容を返すのはその本人への `/week/personal` 応答だけであり、家族用 `/week` API や他のメンバーの API には混ぜない。
-- `member_calendars` は本人が選択したカレンダー ID だけを最大10行まで保持し、行の `display_enabled` は常に `true` とする。選択していない ID の行は作らず、全解除を保存すると行は0件になる。0件では初回と全解除後を区別できないため、カレンダー一覧の `hasSavedSelection` は0件なら `false`。一覧の `selected` は保存済み有効行だけから決め、0件なら primary を含む全カレンダーが `false` になる。画面には個人予定を表示していない旨を案内し、保存済み選択がないまま何も選んでいない場合は保存操作を無効にする。保存済み選択をすべて外した場合は0件で保存できる。personal-week は選択行がない間 `unselected` とする。この本人表示設定は将来の free/busy 共有選択・同意とは独立する。
+- `member_calendars` は本人が用途ごとに選んだカレンダー ID と独立した `display_enabled` / `include_in_busy` フラグを保持する。画面表示用と busy 共有用の各選択は最大10件で、選んでいないカレンダー ID の行は作らない。既存の personal-events 選択は `display_enabled` だけを変更し、`include_in_busy` を保持する。本人画面で予定を表示するかは `display_enabled` のみで決まる。busy の選択は Task 2-2 で追加され、実際の free/busy 取得は Task 2-3 で行う。
 - 個人予定は D1、キャッシュ、ログに保存しない。選択カレンダーのいずれかが取得に失敗した場合、部分的なイベント一覧を返さず個人予定 API 全体を失敗させる。家族予定 API と画面は独立して表示を続ける。
 
 ### ② 家族カレンダー
@@ -129,7 +129,7 @@ families         id, name, family_calendar_id, owner_user_id, day_start_hour(8),
                  creation_status(creating|ready|uncertain|failed), calendar_creation_id, created_at
 members          id, family_id, user_id NULL, kind(adult|child), name,
                  color(indigo|green|ochre|purple|coral|teal|rose|slate), sort_order, status(active|pending)
-member_calendars member_id, calendar_id, display_enabled(bool)          -- 本人画面で表示する個人カレンダー（free/busy共有同意とは独立）
+member_calendars member_id, calendar_id, display_enabled(bool), include_in_busy(bool NOT NULL DEFAULT false) -- 用途別の本人選択。両方falseなら行を削除
 invites          id, family_id, token_hash, expires_at, used_at, claimed_user_id NULL,
                  status(available|claiming|uncertain|used), created_at
 closure_days     id, family_id, date, label, member_ids                -- 保育園の休園日など
@@ -166,8 +166,8 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
 - スコープ（Phase 1 最小限）：
   - `openid email profile`
   - `https://www.googleapis.com/auth/calendar.app.created`：家族カレンダーの作成と、その上の予定の読み書き
-  - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：free/busy 対象カレンダーの選択
-  - ※ `https://www.googleapis.com/auth/calendar.freebusy`（空き状況取得）および `https://www.googleapis.com/auth/calendar.events.readonly`（本人の個人予定の読み取り）は **Phase 2 以降で追加の同意を求める incremental authorization とする**。読み取り専用のため `calendar.events` は要求しない。
+  - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`：本人が free/busy または個人予定の対象カレンダーを選択するときの一覧取得
+  - ※ `https://www.googleapis.com/auth/calendar.freebusy`（予定の有無の取得、Task 2-2）および `https://www.googleapis.com/auth/calendar.events.readonly`（本人の個人予定の読み取り、Task 2-1）は通常ログインでは要求せず、それぞれの機能を本人が有効にした時点で追加の同意を求める。Task 2-2 は purpose `free-busy`、`include_granted_scopes=true`、ログイン中の Google `sub` を使う `login_hint` を用い、callback で Google が返す許可スコープ集合を保存する。`calendar.events` の書き込み権限は要求しない。`calendar.freebusy` の Google Cloud 登録は人間が2026-10-05に確認済み。
   - Task 2-1 の `personal-events` 追加認可 URL は、現在ログイン中の Google `sub` を `login_hint` に指定する。callback の既存アカウント照合と不一致時の安全処理は維持する。
   - `https://www.googleapis.com/auth/calendar.acls`：**招待リンクを発行するオーナーだけ**に、発行時に追加で同意を求める（incremental authorization）。家族カレンダーの共有設定にのみ使う
 - **公開ステータスの落とし穴**：OAuth 同意画面を「テスト」ステータスのままにすると、テストユーザーの同意とリフレッシュトークンが **7日で失効**する。家族利用の段階では「本番（未確認）」に切り替え、「未確認のアプリ」の警告を許容する（センシティブスコープ使用時は最大100ユーザーまで）。一般公開前に Google の審査（センシティブスコープの確認）を受ける。

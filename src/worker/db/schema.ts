@@ -171,6 +171,7 @@ export const memberCalendars = sqliteTable(
       .references(() => members.id, { onDelete: 'cascade' }),
     calendarId: text('calendar_id').notNull(),
     displayEnabled: integer('display_enabled', { mode: 'boolean' }).notNull().default(false),
+    includeInBusy: integer('include_in_busy', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [
     primaryKey({ columns: [table.memberId, table.calendarId] }),

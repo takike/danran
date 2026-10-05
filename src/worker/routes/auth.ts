@@ -11,6 +11,7 @@ import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import {
   type AuthConfig,
   FAMILY_ACL_SCOPE,
+  FREE_BUSY_SCOPE,
   PERSONAL_EVENTS_SCOPE,
   SESSION_TTL_SECONDS,
   getAuthConfig,
@@ -49,6 +50,10 @@ type CallbackFailureDestination =
   | '/family?error=personal_denied'
   | '/family?error=personal_account_mismatch'
   | '/family?personal=granted'
+  | '/family?error=busy_failed'
+  | '/family?error=busy_denied'
+  | '/family?error=busy_account_mismatch'
+  | '/family?busy=granted'
   | { kind: 'invite'; error: 'auth_failed' | 'access_denied'; inviteToken: string };
 
 function callbackDestination(
@@ -65,6 +70,10 @@ function callbackDestination(
     return outcome === 'cancelled'
       ? '/family?error=personal_denied'
       : '/family?error=personal_failed';
+  }
+
+  if (payload.purpose === 'free-busy') {
+    return outcome === 'cancelled' ? '/family?error=busy_denied' : '/family?error=busy_failed';
   }
 
   if (payload.inviteToken) {
@@ -521,8 +530,16 @@ authRoute.get('/auth/callback', async (c) => {
     return c.redirect('/onboarding?acl=granted', 302);
   }
 
-  if (consumed.purpose === 'personal-events') {
-    const personalFailure = '/family?error=personal_failed' as const;
+  if (consumed.purpose === 'personal-events' || consumed.purpose === 'free-busy') {
+    const isFreeBusy = consumed.purpose === 'free-busy';
+    const incrementalFailure = isFreeBusy
+      ? ('/family?error=busy_failed' as const)
+      : ('/family?error=personal_failed' as const);
+    const accountMismatch = isFreeBusy
+      ? ('/family?error=busy_account_mismatch' as const)
+      : ('/family?error=personal_account_mismatch' as const);
+    const requiredScope = isFreeBusy ? FREE_BUSY_SCOPE : PERSONAL_EVENTS_SCOPE;
+    const successDestination = isFreeBusy ? '/family?busy=granted' : '/family?personal=granted';
     try {
       const currentSession = await getSessionUser(c, db, config.sessionSecret);
       if (
@@ -530,7 +547,7 @@ authRoute.get('/auth/callback', async (c) => {
         currentSession.sessionId !== consumed.sessionId ||
         currentSession.user.id !== consumed.userId
       ) {
-        return callbackFailure(c, personalFailure);
+        return callbackFailure(c, incrementalFailure);
       }
 
       const eligibleMember = and(
@@ -544,35 +561,35 @@ authRoute.get('/auth/callback', async (c) => {
         db.select().from(families).where(eq(families.id, consumed.familyId)),
         db.select().from(members).where(eligibleMember),
       ]);
-      if (!boundFamily[0] || !boundMember[0]) return callbackFailure(c, personalFailure);
+      if (!boundFamily[0] || !boundMember[0]) return callbackFailure(c, incrementalFailure);
 
       let tokenResponse: Awaited<ReturnType<typeof exchangeCodeForTokens>>;
       try {
         tokenResponse = await exchangeCodeForTokens(query.code, codeVerifier, config);
       } catch {
-        return callbackFailure(c, personalFailure);
+        return callbackFailure(c, incrementalFailure);
       }
-      if (!tokenResponse.id_token) return callbackFailure(c, personalFailure);
+      if (!tokenResponse.id_token) return callbackFailure(c, incrementalFailure);
 
       let claims: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
       try {
         claims = await verifyGoogleIdToken(tokenResponse.id_token, config.clientId, nonce);
       } catch {
-        return callbackFailure(c, personalFailure);
+        return callbackFailure(c, incrementalFailure);
       }
       if (claims.sub !== currentSession.user.googleSub) {
-        return callbackFailure(c, '/family?error=personal_account_mismatch');
+        return callbackFailure(c, accountMismatch);
       }
 
       let canonicalScopes: string;
       try {
         const scopeData = validateAndNormalizeScopes(tokenResponse.scope);
-        if (!scopeData.normalizedScopes.includes(PERSONAL_EVENTS_SCOPE)) {
-          return callbackFailure(c, personalFailure);
+        if (!scopeData.normalizedScopes.includes(requiredScope)) {
+          return callbackFailure(c, incrementalFailure);
         }
         canonicalScopes = scopeData.canonicalScopeString;
       } catch {
-        return callbackFailure(c, personalFailure);
+        return callbackFailure(c, incrementalFailure);
       }
 
       const recheckedSession = await getSessionUser(c, db, config.sessionSecret);
@@ -581,7 +598,7 @@ authRoute.get('/auth/callback', async (c) => {
         recheckedSession.sessionId !== consumed.sessionId ||
         recheckedSession.user.id !== consumed.userId
       ) {
-        return callbackFailure(c, personalFailure);
+        return callbackFailure(c, incrementalFailure);
       }
       const existingTokenRows = await db
         .select()
@@ -596,7 +613,7 @@ authRoute.get('/auth/callback', async (c) => {
           `google-refresh:${consumed.userId}`,
         );
       }
-      if (!encryptedRefresh && !existingToken) return callbackFailure(c, personalFailure);
+      if (!encryptedRefresh && !existingToken) return callbackFailure(c, incrementalFailure);
 
       const now = Math.floor(Date.now() / 1000);
       const guard = sql`EXISTS (
@@ -617,7 +634,7 @@ authRoute.get('/auth/callback', async (c) => {
         WHERE user_id = ${consumed.userId}
           AND refresh_token_enc = ${existingToken.refreshTokenEnc}
           AND (${guard}) RETURNING user_id`);
-        if (!updated || updated.length !== 1) return callbackFailure(c, personalFailure);
+        if (!updated || updated.length !== 1) return callbackFailure(c, incrementalFailure);
       } else if (encryptedRefresh) {
         const inserted = await db.all<{ user_id: string }>(sql`INSERT INTO google_tokens
         (user_id, refresh_token_enc, scopes, updated_at)
@@ -625,12 +642,12 @@ authRoute.get('/auth/callback', async (c) => {
         WHERE (${guard}) AND NOT EXISTS (
           SELECT 1 FROM google_tokens WHERE user_id = ${consumed.userId}
         ) RETURNING user_id`);
-        if (!inserted || inserted.length !== 1) return callbackFailure(c, personalFailure);
+        if (!inserted || inserted.length !== 1) return callbackFailure(c, incrementalFailure);
       }
 
-      return c.redirect('/family?personal=granted', 302);
+      return c.redirect(successDestination, 302);
     } catch {
-      return callbackFailure(c, personalFailure);
+      return callbackFailure(c, incrementalFailure);
     }
   }
 

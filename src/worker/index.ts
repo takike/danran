@@ -1,6 +1,7 @@
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import type { WorkerEnv } from '@worker/env';
 import { authRoute } from '@worker/routes/auth';
+import { busyRoute } from '@worker/routes/busy';
 import { eventsRoute } from '@worker/routes/events';
 import { familiesRoute, invitesRoute } from '@worker/routes/families';
 import { healthRoute } from '@worker/routes/health';
@@ -22,6 +23,7 @@ export function createApp() {
   application.route('/api/families', eventsRoute);
   application.route('/api/families', settingsRoute);
   application.route('/api/families', personalRoute);
+  application.route('/api/families', busyRoute);
   application.route('/api/invites', invitesRoute);
 
   // Global sanitized error handler ensuring sensitive payloads/tokens are never leaked
