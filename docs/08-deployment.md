@@ -42,6 +42,15 @@ GitHub Actions にて 3 つのワークフローで構成されています。
    └─ wrangler deploy --config dist/danran_local/wrangler.json
 ```
 
+`main` への push では、`docs/**` とリポジトリ直下の `*.md`（`README.md`、`AGENTS.md`、`CLAUDE.md` など）だけが変更された場合、CI と staging デプロイを起動しません。これら以外の変更が1つでも含まれる push は従来どおり検証・デプロイされます。Pull request の検証は変更内容にかかわらず実行します。
+
+ドキュメントをアプリのビルド入力にしないため、Tailwind CSS v4 は [`src/client/styles/tokens.css`](../src/client/styles/tokens.css) で読み取り元を `src/` とリポジトリ直下の `index.html` に限定しています。`docs/**` とリポジトリ直下の `*.md` は Tailwind のクラス名スキャン対象ではありません。
+
+マージ後は、次の2点を GitHub Actions で確認します。
+
+1. ドキュメントだけを変更した main への push では「CI & Staging Deployment」が起動しないこと。
+2. アプリのコードを含む次の pull request では検証が成功し、main へのマージ後に検証と staging デプロイが起動すること。
+
 ---
 
 ## 環境とリソース定義
