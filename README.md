@@ -44,6 +44,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/16-event-editing.md](docs/16-event-editing.md) | 家族予定の作成・編集・削除 API、保存・再試行、制限と staging 確認手順 |
 | [docs/17-settings.md](docs/17-settings.md) | メンバー設定・休園日 API、権限、制限と staging 確認手順 |
 | [docs/18-personal-events.md](docs/18-personal-events.md) | 本人だけに表示する個人予定 API・段階的認可・プライバシー保証 |
+| [docs/19-busy-sharing.md](docs/19-busy-sharing.md) | free/busy 用カレンダー選択、家族 busy 週 API・プライバシー保証・staging 手順 |
 
 ## 前提条件
 
@@ -137,3 +138,4 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
 - Phase 2：本人の個人予定、free/busy、週末計画：
   - **タスク 2-1（本人の個人予定）**: `/family` での段階的認可とカレンダー選択、本人の S1 に限った予定表示を実装。API・保存範囲・staging の確認手順は [docs/18-personal-events.md](docs/18-personal-events.md)。API モック E2E と合成データの 390px スクリーンショット（`docs/screenshots/family.png`, `docs/screenshots/s1-week-view.png`）を整備。Google Cloud の追加スコープ登録状況と staging 実機確認は人間による確認待ちです。
   - **タスク 2-2（空き状況に使うカレンダー）**: `/family` に free/busy 用の追加同意と本人のカレンダー選択を実装。`include_in_busy` は個人予定の `display_enabled` と独立し、選択保存までを扱います（busy 取得は Task 2-3）。仕様と staging 手順は [docs/19-busy-sharing.md](docs/19-busy-sharing.md)。Google Cloud の `calendar.freebusy` 登録は人間が2026-10-05に確認済みで、実 Google アカウントによる staging 確認は未実施です。
+  - **タスク 2-3（家族の busy 週 API）**: 各 active 大人自身のトークンで busy 区間を取得する別 API を実装。未共有・取得失敗をメンバー単位の状態で区別し、区間以外の予定・カレンダー情報を返しません。契約と staging 手順は [docs/19-busy-sharing.md](docs/19-busy-sharing.md)。実 Google アカウントによる staging 確認は未実施です。

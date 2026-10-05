@@ -7,6 +7,7 @@ import { familiesRoute, invitesRoute } from '@worker/routes/families';
 import { healthRoute } from '@worker/routes/health';
 import { personalRoute } from '@worker/routes/personal';
 import { settingsRoute } from '@worker/routes/settings';
+import { weekBusyRoute } from '@worker/routes/week-busy';
 import { Hono } from 'hono';
 
 /**
@@ -24,6 +25,7 @@ export function createApp() {
   application.route('/api/families', settingsRoute);
   application.route('/api/families', personalRoute);
   application.route('/api/families', busyRoute);
+  application.route('/api/families', weekBusyRoute);
   application.route('/api/invites', invitesRoute);
 
   // Global sanitized error handler ensuring sensitive payloads/tokens are never leaked

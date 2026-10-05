@@ -1,6 +1,6 @@
-# 19. 空き状況の共有設定（Task 2-2）
+# 19. 空き状況の共有設定と取得（Task 2-2・2-3）
 
-このタスクでは、大人のメンバーが追加同意を行い、空き状況に使う個人カレンダーを選んで保存します。カレンダーの busy 取得 API や週ビューへの反映は Task 2-3 以降で行います。このタスクでは `freeBusy.query` を呼びません。
+Task 2-2 では大人のメンバーが追加同意を行い、空き状況に使う個人カレンダーを選んで保存します。Task 2-3 では別 API で各メンバーの busy 区間を取得します。選択保存 API 自体は `freeBusy.query` を呼びません。
 
 ## プライバシーと保存範囲
 
@@ -57,7 +57,7 @@ Google Cloud の `calendar.freebusy` 登録は人間が2026-10-05に確認済み
 
 この PUT は `include_in_busy` だけを変更し、`display_enabled` は保ちます。`include_in_busy` と `display_enabled` の両方が false になる行は削除します。同意が必要なら `200 { "authorizationRequired": true, "authorizationUrl": "https://..." }` を返して追加認可へ進みます。同意済みなら `200` で `{ "authorizationRequired": false, "status": "ready", "memberId": "...", "hasSavedSelection": true, "calendars": [...] }` を返します。`calendars[].selected` は busy 用の保存状態のみを表します。
 
-この API は選択を保存するだけです。個人カレンダーの free/busy を取得する処理は Task 2-3 の責務です。
+この API は選択を保存するだけです。個人カレンダーの free/busy を取得するのは後述の Task 2-3 の別 API です。
 
 ### 固定エラー
 
@@ -74,6 +74,68 @@ Google Cloud の `calendar.freebusy` 登録は人間が2026-10-05に確認済み
 | 502 | `GOOGLE_ERROR` / `CALENDAR_PAGE_LIMIT` | Google の不正応答、または一覧のページ上限 |
 | 503 | `GOOGLE_TEMPORARY_ERROR` | Google の一時障害が再試行後も継続 |
 | 500 / 503 | `INTERNAL_ERROR` | 想定外の内部障害／middleware の構成不足 |
+
+## 家族の busy 週 API（Task 2-3）
+
+`GET /api/families/:id/week/busy?start=YYYY-MM-DD` は `familySecurityMiddleware` を通し、指定家族の active な大人（`user_id` があるメンバー）だけが利用できます。リクエスト本人も含め、メンバーは `sortOrder`、次に `id` の昇順で返します。`start` は省略可能で、省略時は JST の今日を含む週です。指定時は `/week` と同じ実在日付、重複指定、`getWeekRange` および 1970–2050 年の検証を適用します。
+
+成功応答は `/week` のイベント一覧とは別の共有 Zod 契約です。例では busy 区間以外の予定情報を含めません。
+
+```json
+{
+  "family": { "id": "fam_synthetic_123" },
+  "week": {
+    "start": "2026-10-05",
+    "endInclusive": "2026-10-12",
+    "prevWeekStart": "2026-09-28",
+    "nextWeekStart": "2026-10-12",
+    "today": "2026-10-06"
+  },
+  "members": [
+    {
+      "memberId": "mem_adult_a",
+      "status": "ready",
+      "busy": [
+        { "start": "2026-10-07T09:00:00+09:00", "end": "2026-10-07T10:00:00+09:00" }
+      ]
+    },
+    { "memberId": "mem_adult_b", "status": "not_shared", "busy": [] },
+    { "memberId": "mem_adult_c", "status": "unavailable", "busy": [] }
+  ]
+}
+```
+
+`family` は家族 ID のみ、`week` は家族 `/week` と同じ週メタデータです。各 `members[]` は `{ memberId, status, busy }` だけを返し、`status` は `ready` / `not_shared` / `unavailable` のいずれかです。`ready` は取得できた区間（0件もあり）、`not_shared` は free/busy の追加同意がないか `include_in_busy = true` の保存選択がない状態、`unavailable` は本人の取得に失敗した状態です。後二者の `busy` は空配列ですが、予定なしや空き時間を意味しません。`ready` と `busy: []` の組み合わせだけが、取得済みで busy 区間がなかった状態です。失敗理由は返しません。
+
+各本人の保存済みトークンで、その本人の `include_in_busy = true` のカレンダー ID だけを `freeBusy.query` します。未同意・未選択の場合は Google を呼びません。選択一覧のうち1件でも Google の calendar error がある、要求したカレンダーが応答から欠落している、週境界が要求と一致しない、または応答が不正な場合、その本人全体を `unavailable` とし、成功分だけを返しません。1人の失敗は他のメンバーの取得を妨げません。家族カレンダーは問い合わせから除外します。
+
+busy 区間は週の JST 境界に切り取り、重複または端点が接する区間を統合して返します。時刻は Asia/Tokyo の `+09:00` 付き ISO 形式です。予定のタイトル・場所・説明・参加者、カレンダー ID・名前・件数・busy の由来、個々の Google エラー理由は API レスポンスに含めません。取得した busy 区間は D1・キャッシュ・ログに保存しません。D1 には 2-2 の選択状態としてカレンダー ID と用途別フラグを保存します。成功・失敗とも `Cache-Control: no-store` です。既存の `/week` と `/week/personal` の応答は変更せず、共通空き時間の計算と `mirrored_blocks` の差し引きは行いません。
+
+リクエスト全体のエラーは固定 `{ "error": "<固定文>", "code": "<code>" }` 形式です。認証・家族 membership は既存 middleware と週 API に従います。メンバーごとの Google 取得失敗は HTTP エラーにせず、そのメンバーを `unavailable` にします。
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 400 | `INVALID_INPUT` | `start` が不正、重複指定、または週が対応年の範囲外 |
+| 401 | `UNAUTHORIZED` | リクエストセッションがない、無効、または期限切れ |
+| 403 | `FORBIDDEN` | Origin/CSRF 検証で拒否 |
+| 404 | `NOT_FOUND` | 家族がない、または利用者がその家族の active な大人メンバーではない |
+| 500 | `INTERNAL_ERROR` | 想定外の内部エラー |
+| 503 | `INTERNAL_ERROR` | security middleware の構成不足 |
+
+### Staging の人間による busy 取得確認
+
+Google Cloud への `calendar.freebusy` スコープ登録は人間が確認済みですが、実アカウントでの staging 検証は未実施です。合成の予定・カレンダーと staging 用のテストアカウントだけを使い、実在の個人予定を使わずに確認します。
+
+1. A・B を同じ家族の active な大人として用意します。A は `calendar.freebusy` に同意し、週内に重複・接触・週境界をまたぐ合成予定を含む複数のテストカレンダーを選択・保存済みにします。B は未同意の状態から始めます。実在の個人予定は使いません。
+2. B が未同意のまま `GET /api/families/{familyId}/week/busy?start=2026-10-05` を呼び、B が `not_shared`・空区間、A は `ready` になることを確認します。未同意・未選択時に Google を呼ばないこと、および各人の選択 ID と本人のトークンを組み合わせて問い合わせることは自動テストで保証します（画面から Google 呼び出し件数は確認できません）。
+3. B に free/busy の追加同意を行います。カレンダー選択を保存する前に同じ API を再度確認し、B が引き続き `not_shared` であることを確認します。
+4. B に複数のテスト busy カレンダーと、A の区間と重なる合成予定を用意し、選択・保存します。A・B がともに `ready` になり、各人の区間が週境界で切り取られ、重複・接触区間を統合して返ることを確認します。
+5. B の保存済み選択をすべて解除して保存し、B が `not_shared`・空区間、A は `ready` のままであることを確認します。
+6. B がテスト用カレンダーを再選択・保存します。そのカレンダーが別のテスト用 Google アカウントの所有・共有なら、その所有アカウントから B への共有を解除します。B 自身が作った追加カレンダーなら、primary や実在カレンダーには触れず、そのテスト専用カレンダーだけを Google 側で削除します。いずれも D1 の選択行は残し、選択を保存し直さずに API を呼び、B だけ `unavailable`・空区間、A は `ready` のままであることを確認します。Google の生のエラー理由は表示されません。実在の個人カレンダーや予定は使いません。
+7. B から同 API を取得し、A のメンバー項目に返るのが busy 区間だけであること、A の予定情報・カレンダー ID・名前・件数・由来・エラー情報が含まれないことを確認します。成功・エラー応答に `Cache-Control: no-store` があり、HTTP キャッシュに保存されないことも確認します。
+8. 通常週、連休で延長される週、および前週・次週へ移動した `start` を指定し、`/week` と同じ週境界・メタデータになることを確認します。不正・重複・対応年外の `start` は `400 INVALID_INPUT` になります。
+
+このタスクで追加するのは取得 API と共有 schema までです。週画面への表示・クライアント query・共通空き時間は後続タスクの範囲です。
 
 ## 画面
 
@@ -94,11 +156,12 @@ PR マージ後に staging へデプロイして、合成データとテスト�
 5. A の `/family` で「自分の予定の表示」に個人予定用カレンダーを選んで保存します。次に busy 用のテストカレンダーを選んで保存し、再読込後も両方の選択が残ることを確認します。
 6. busy 用の保存済み選択をすべて外して保存し、busy 選択が空に戻る一方、個人予定表示の選択が残ることを確認します。busy 用にテストカレンダーを再選択・保存したあと、個人予定表示の選択を変更または全解除し、busy 用選択は変わらないことを確認します。必要なら個人予定表示も再選択して保存します。
 7. 個人予定用・busy 用の両方に選択済みカレンダーがある状態で再ログインします。両方の認可が維持され、`/personal-calendars` と `/busy-calendars` でそれぞれの保存済み選択だけが表示されることを確認します。
-8. B の画面と `/busy-calendars`、`/personal-calendars`、`/week`、`/week/personal` の応答に、A のカレンダー名・IDや選択状態が出ないことを確認します。このタスクでは free/busy 取得はまだ行いません。
+8. B の画面と `/busy-calendars`、`/personal-calendars`、`/week`、`/week/personal` の応答に、A のカレンダー名・IDや選択状態が出ないことを確認します。この手順は Task 2-2 の認可と選択設定の確認です。busy 取得 API は下記 Task 2-3 の手順を参照します。
 
 ## 参考
 
 - [Google Calendar API: Choose Google Calendar API scopes](https://developers.google.com/workspace/calendar/api/auth)
+- [Google Calendar API: Freebusy query](https://developers.google.com/workspace/calendar/api/v3/reference/freebusy/query)
 - [Google Identity: Incremental authorization](https://developers.google.com/identity/protocols/oauth2/web-server#incremental-auth)
 - [認証・段階的認可の詳細](10-authentication.md)
 - [本人の個人予定表示の選択と保存](18-personal-events.md)
