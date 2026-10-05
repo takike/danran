@@ -502,7 +502,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
       expect(await navigationCount(page)).toBe(1);
 
       releaseSave?.();
-      await expect(dialog).toHaveCount(0);
+      await expect(dialog).toBeHidden();
       await expect(updateButton).toBeEnabled();
       await expectVersionAndReloadCount(page, 'A', 1);
       await updateButton.click();
@@ -575,6 +575,162 @@ test.describe('PWA update handover with a real Service Worker', () => {
       await expectVersionAndReloadCount(page, 'B', 2);
     } finally {
       releaseSave?.();
+      await fixture.close();
+    }
+  });
+
+  test('an edited instance move protects its draft from a PWA update', async ({ page }) => {
+    const fixture = await createPwaFixtureServer();
+    try {
+      await mockOnboardingApis(page, makeFamily());
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/routines`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            routines: [
+              {
+                id: 'routine_pwa_move',
+                title: '更新中に守る繰り返し',
+                weekdays: ['TU'],
+                interval: 1,
+                startDate: '2026-10-13',
+                endDate: null,
+                startTime: '17:00',
+                endTime: '18:00',
+                memberIds: [],
+                assigneeMemberId: null,
+                category: 'lesson',
+                affectsAvailability: true,
+                status: 'ready',
+                upcoming: {
+                  status: 'ready',
+                  instances: [
+                    {
+                      id: 'instance_pwa_move',
+                      originalStart: '2026-10-13T17:00:00+09:00',
+                      originalEnd: '2026-10-13T18:00:00+09:00',
+                      start: '2026-10-13T17:00:00+09:00',
+                      end: '2026-10-13T18:00:00+09:00',
+                      status: 'normal',
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        });
+      });
+      await page.goto(`${fixture.origin}/routines`);
+      await expect(page.getByTestId('routines-screen')).toBeVisible();
+      await page.getByTestId('routine-instance-chip-instance_pwa_move').click();
+      const actions = page.getByTestId('routine-instance-actions-instance_pwa_move');
+      await actions.getByTestId('routine-instance-set-move').click();
+      await actions.getByTestId('routine-instance-move-date').fill('2026-10-14');
+      await waitForActiveController(page);
+
+      await requestWorkerUpdate(page, fixture);
+      await expect(page.getByTestId('pwa-update-banner')).toBeVisible();
+      await expect(actions.getByTestId('routine-instance-move-date')).toHaveValue('2026-10-14');
+      expect(await navigationCount(page)).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test('a pending instance mutation blocks reload until the response settles', async ({ page }) => {
+    const fixture = await createPwaFixtureServer();
+    let releaseMutation: (() => void) | undefined;
+    let mutationStarted: (() => void) | undefined;
+    const mutationStartedPromise = new Promise<void>((resolve) => {
+      mutationStarted = resolve;
+    });
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    try {
+      await mockOnboardingApis(page, makeFamily());
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/routines`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            routines: [
+              {
+                id: 'routine_pwa_pending',
+                title: '更新中に守る繰り返し',
+                weekdays: ['TU'],
+                interval: 1,
+                startDate: '2026-10-13',
+                endDate: null,
+                startTime: '17:00',
+                endTime: '18:00',
+                memberIds: [],
+                assigneeMemberId: null,
+                category: 'lesson',
+                affectsAvailability: true,
+                status: 'ready',
+                upcoming: {
+                  status: 'ready',
+                  instances: [
+                    {
+                      id: 'instance_pwa_pending',
+                      originalStart: '2026-10-13T17:00:00+09:00',
+                      originalEnd: '2026-10-13T18:00:00+09:00',
+                      start: '2026-10-13T17:00:00+09:00',
+                      end: '2026-10-13T18:00:00+09:00',
+                      status: 'normal',
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        });
+      });
+      await page.route(
+        `**/api/families/${TEST_FAMILY_ID}/routines/routine_pwa_pending/instances/instance_pwa_pending/skip`,
+        async (route) => {
+          mutationStarted?.();
+          await mutationGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              instance: {
+                id: 'instance_pwa_pending',
+                originalStart: '2026-10-13T17:00:00+09:00',
+                originalEnd: '2026-10-13T18:00:00+09:00',
+                start: null,
+                end: null,
+                status: 'skipped',
+              },
+            }),
+          });
+        },
+      );
+      await page.goto(`${fixture.origin}/routines`);
+      await expect(page.getByTestId('routines-screen')).toBeVisible();
+      await page.getByTestId('routine-instance-chip-instance_pwa_pending').click();
+      await waitForActiveController(page);
+      const updateButton = page.getByRole('button', { name: '更新', exact: true });
+      await page
+        .getByTestId('routine-instance-actions-instance_pwa_pending')
+        .getByTestId('routine-instance-skip')
+        .click();
+      await mutationStartedPromise;
+      await requestWorkerUpdate(page, fixture);
+      await expect(page.getByTestId('pwa-update-banner')).toBeVisible();
+      await expect(updateButton).toBeDisabled();
+      expect(await navigationCount(page)).toBe(1);
+      releaseMutation?.();
+      await expect(page.getByTestId('routine-instance-chip-instance_pwa_pending')).toContainText(
+        'お休み',
+      );
+      await expect(updateButton).toBeEnabled();
+      expect(await navigationCount(page)).toBe(1);
+    } finally {
+      releaseMutation?.();
       await fixture.close();
     }
   });

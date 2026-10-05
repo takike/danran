@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { FamilyPublic } from '../src/shared/schemas/family';
-import type { Routine } from '../src/shared/schemas/routines';
+import type { Routine, RoutineInstance } from '../src/shared/schemas/routines';
 
 test.use({
   serviceWorkers: 'block',
@@ -71,8 +71,38 @@ function routine(
     category: 'lesson',
     affectsAvailability: true,
     status: 'ready',
+    upcoming: { status: 'ready', instances: sampleInstances(`instance-${id}`) },
     ...fields,
   };
+}
+
+function instance(
+  id: string,
+  originalDate: string,
+  status: RoutineInstance['status'] = 'normal',
+  actualDate: string | null = originalDate,
+  startTime = '17:00',
+  endTime = '18:00',
+): RoutineInstance {
+  const originalStart = `${originalDate}T17:00:00+09:00`;
+  const originalEnd = `${originalDate}T18:00:00+09:00`;
+  return {
+    id,
+    originalStart,
+    originalEnd,
+    start: actualDate === null ? null : `${actualDate}T${startTime}:00+09:00`,
+    end: actualDate === null ? null : `${actualDate}T${endTime}:00+09:00`,
+    status,
+  };
+}
+
+function sampleInstances(prefix: string): RoutineInstance[] {
+  return [
+    instance(`${prefix}-1`, '2026-10-13'),
+    instance(`${prefix}-2`, '2026-10-20'),
+    instance(`${prefix}-3`, '2026-10-27'),
+    instance(`${prefix}-4`, '2026-11-03'),
+  ];
 }
 
 function jsonResponse(status: number, body: unknown) {
@@ -81,12 +111,19 @@ function jsonResponse(status: number, body: unknown) {
 
 async function mockRoutineApis(
   page: import('@playwright/test').Page,
-  options: { routines?: Routine[] } = {},
+  options: { routines?: Routine[]; failNextInstanceMutation?: boolean } = {},
 ) {
   let routines = [...(options.routines ?? [])];
   const createBodies: Array<Record<string, unknown>> = [];
   const deletedIds: string[] = [];
+  const instanceMutations: Array<{
+    routineId: string;
+    instanceId: string;
+    action: string;
+    body: unknown;
+  }> = [];
   let listCalls = 0;
+  let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   await page.route('**/api/auth/me', (route) =>
     route.fulfill(
       jsonResponse(200, {
@@ -105,6 +142,62 @@ async function mockRoutineApis(
       return;
     }
     if (request.method() === 'POST') {
+      const pathname = new URL(request.url()).pathname;
+      const instanceMatch = pathname.match(
+        /\/routines\/([^/]+)\/instances\/([^/]+)\/(skip|restore|move)$/,
+      );
+      if (instanceMatch) {
+        const [, routineId = '', instanceId = '', action = ''] = instanceMatch;
+        const body = request.postDataJSON() as unknown;
+        instanceMutations.push({ routineId, instanceId, action, body });
+        if (failNextInstanceMutation) {
+          failNextInstanceMutation = false;
+          await route.fulfill(
+            jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+          );
+          return;
+        }
+        const item = routines.find((candidate) => candidate.id === routineId);
+        const current = item?.upcoming.instances.find((candidate) => candidate.id === instanceId);
+        if (!item || !current) {
+          await route.fulfill(jsonResponse(404, { code: 'NOT_FOUND', error: 'Not found' }));
+          return;
+        }
+        let updated: RoutineInstance;
+        if (action === 'skip') {
+          updated = { ...current, start: null, end: null, status: 'skipped' };
+        } else if (action === 'restore') {
+          updated = {
+            ...current,
+            start: current.originalStart,
+            end: current.originalEnd,
+            status: 'normal',
+          };
+        } else {
+          const move = body as { date: string; startTime: string; endTime: string };
+          updated = {
+            ...current,
+            start: `${move.date}T${move.startTime}:00+09:00`,
+            end: `${move.date}T${move.endTime}:00+09:00`,
+            status: 'moved',
+          };
+        }
+        routines = routines.map((candidate) =>
+          candidate.id !== routineId
+            ? candidate
+            : {
+                ...candidate,
+                upcoming: {
+                  ...candidate.upcoming,
+                  instances: candidate.upcoming.instances.map((entry) =>
+                    entry.id === instanceId ? updated : entry,
+                  ),
+                },
+              },
+        );
+        await route.fulfill(jsonResponse(200, { instance: updated }));
+        return;
+      }
       const body = request.postDataJSON() as Record<string, unknown>;
       createBodies.push(body);
       const result = routine({
@@ -125,11 +218,15 @@ async function mockRoutineApis(
   return {
     createBodies,
     deletedIds,
+    instanceMutations,
     get listCalls() {
       return listCalls;
     },
     setRoutines: (next: Routine[]) => {
       routines = [...next];
+    },
+    setFailNextInstanceMutation: () => {
+      failNextInstanceMutation = true;
     },
   };
 }
@@ -162,7 +259,7 @@ async function expectVisibleTargetsAtLeast44px(page: import('@playwright/test').
 test.describe('Task 3-1: recurring routines', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
-      Date.now = () => Date.parse('2026-10-07T12:00:00+09:00');
+      Date.now = () => Date.parse('2026-10-06T12:00:00+09:00');
     });
   });
 
@@ -208,7 +305,20 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.listCalls).toBeGreaterThanOrEqual(2);
     if (process.env.DANRAN_SCREENSHOTS === '1') {
       api.setRoutines([
-        routine({ id: 'routine-piano', title: 'ピアノ', weekdays: ['TU', 'FR'] }),
+        routine({
+          id: 'routine-piano',
+          title: 'ピアノ',
+          weekdays: ['TU', 'FR'],
+          upcoming: {
+            status: 'ready',
+            instances: [
+              instance('piano-normal', '2026-10-13'),
+              instance('piano-skipped', '2026-10-20', 'skipped', null),
+              instance('piano-moved', '2026-10-27', 'moved', '2026-10-29'),
+              instance('piano-next', '2026-11-03'),
+            ],
+          },
+        }),
         routine({
           id: 'routine-cleaning',
           title: '家事代行',
@@ -225,6 +335,21 @@ test.describe('Task 3-1: recurring routines', () => {
       await expect(page.getByRole('heading', { name: '家事代行', exact: true })).toBeVisible();
       const biweeklyCard = page.getByTestId('routine-card').filter({ hasText: '隔週' });
       await expect(biweeklyCard).toContainText('隔週 土');
+      const pianoCard = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-normal')).toContainText(
+        '10/13',
+      );
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-skipped')).toContainText(
+        'お休み',
+      );
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-moved')).toContainText(
+        '10/27',
+      );
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-moved')).toContainText(
+        '10/29',
+      );
+      await pianoCard.getByTestId('routine-instance-chip-piano-moved').click();
+      await expect(pianoCard.getByTestId('routine-instance-actions-piano-moved')).toBeVisible();
       await page.screenshot({ path: 'docs/screenshots/s4-routines.png' });
     }
   });
@@ -279,7 +404,9 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(dialog.getByTestId('routine-end-time')).toBeFocused();
     expect(postCalls).toBe(0);
     await dialog.getByTestId('routine-end-time').fill('18:30');
-    await dialog.getByTestId('routine-weekday-WE').uncheck();
+    for (const weekday of ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']) {
+      await dialog.getByTestId(`routine-weekday-${weekday}`).uncheck();
+    }
     await dialog.getByTestId('routine-weekday-MO').check();
     await dialog.getByTestId('routine-weekday-FR').check();
     await dialog.getByTestId('routine-interval-2').check();
@@ -328,7 +455,7 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(firstBody?.clientRequestId).toEqual(expect.any(String));
 
     await save.click();
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog).toBeHidden();
     expect(postCalls).toBe(2);
     expect(api.createBodies[1]).toEqual(firstBody);
     await expect(page.getByText('隔週の水泳', { exact: true })).toBeVisible();
@@ -364,7 +491,7 @@ test.describe('Task 3-1: recurring routines', () => {
     const firstDialog = page.getByTestId('routine-dialog');
     await firstDialog.getByTestId('routine-form-title').fill('最初の習い事');
     await firstDialog.getByTestId('routine-save').click();
-    await expect(firstDialog).toHaveCount(0);
+    await expect(firstDialog).toBeHidden();
     await expect(page.getByText('最初の習い事', { exact: true })).toBeVisible();
 
     await page.getByTestId('routine-add-button').click();
@@ -377,7 +504,7 @@ test.describe('Task 3-1: recurring routines', () => {
     await nextDialog.getByTestId('routine-weekday-WE').uncheck();
     await nextDialog.getByTestId('routine-weekday-MO').check();
     await nextDialog.getByTestId('routine-save').click();
-    await expect(nextDialog).toHaveCount(0);
+    await expect(nextDialog).toBeHidden();
     await expect(page.getByText('次の家族ルーティン', { exact: true })).toBeVisible();
 
     expect(api.createBodies).toHaveLength(2);
@@ -386,6 +513,153 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.createBodies[0]?.clientRequestId).toEqual(expect.any(String));
     expect(api.createBodies[1]?.clientRequestId).toEqual(expect.any(String));
     expect(api.createBodies[1]?.clientRequestId).not.toBe(api.createBodies[0]?.clientRequestId);
+  });
+
+  test('shows four upcoming states and supports skip, restore, move, change, and restore without false updates', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-instances',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            instances: [
+              instance('instance-normal', '2026-10-13'),
+              instance('instance-skipped', '2026-10-20', 'skipped', null),
+              instance('instance-moved', '2026-10-27', 'moved', '2026-10-29'),
+              instance('instance-next', '2026-11-03'),
+            ],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const normal = card.getByTestId('routine-instance-chip-instance-normal');
+    const skipped = card.getByTestId('routine-instance-chip-instance-skipped');
+    const moved = card.getByTestId('routine-instance-chip-instance-moved');
+    await expect(card.locator('[data-testid^="routine-instance-chip-"]')).toHaveCount(4);
+    await expect(normal).toContainText('10/13');
+    await expect(skipped).toContainText('お休み');
+    await expect(moved).toContainText('10/27');
+    await expect(moved).toContainText('10/29');
+
+    await normal.click();
+    const normalActions = card.getByTestId('routine-instance-actions-instance-normal');
+    await normalActions.getByTestId('routine-instance-skip').evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(card.getByTestId('routine-instance-chip-instance-normal')).toContainText('お休み');
+    expect(api.instanceMutations).toHaveLength(1);
+    expect(api.instanceMutations[0]).toMatchObject({
+      routineId: 'routine-instances',
+      instanceId: 'instance-normal',
+      action: 'skip',
+      body: {},
+    });
+
+    await card.getByTestId('routine-instance-chip-instance-normal').click();
+    await card
+      .getByTestId('routine-instance-actions-instance-normal')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(card.getByTestId('routine-instance-chip-instance-normal')).not.toContainText(
+      'お休み',
+    );
+
+    await skipped.click();
+    await card
+      .getByTestId('routine-instance-actions-instance-skipped')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(card.getByTestId('routine-instance-chip-instance-skipped')).not.toContainText(
+      'お休み',
+    );
+
+    await card.getByTestId('routine-instance-chip-instance-normal').click();
+    const normalMove = card.getByTestId('routine-instance-actions-instance-normal');
+    await normalMove.getByTestId('routine-instance-set-move').click();
+    await expect(normalMove.getByTestId('routine-instance-move-date')).toHaveValue('2026-10-13');
+    await normalMove.getByTestId('routine-instance-move-date').fill('2026-10-16');
+    await normalMove.getByTestId('routine-instance-move-start').fill('18:00');
+    await normalMove.getByTestId('routine-instance-move-end').fill('19:30');
+    await normalMove.getByTestId('routine-instance-move-save').click();
+    await expect(card.getByTestId('routine-instance-chip-instance-normal')).toContainText('10/16');
+    expect(api.instanceMutations.at(-1)).toMatchObject({
+      action: 'move',
+      body: { date: '2026-10-16', startTime: '18:00', endTime: '19:30' },
+    });
+    await card.getByTestId('routine-instance-chip-instance-normal').click();
+    await card
+      .getByTestId('routine-instance-actions-instance-normal')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(card.getByTestId('routine-instance-chip-instance-normal')).toContainText('10/13');
+
+    await moved.click();
+    const movedActions = card.getByTestId('routine-instance-actions-instance-moved');
+    await movedActions.getByTestId('routine-instance-change-move').click();
+    await movedActions.getByTestId('routine-instance-move-date').fill('2026-10-30');
+    await movedActions.getByTestId('routine-instance-move-start').fill('19:00');
+    await movedActions.getByTestId('routine-instance-move-end').fill('20:00');
+    await movedActions.getByTestId('routine-instance-move-save').click();
+    await expect(card.getByTestId('routine-instance-chip-instance-moved')).toContainText('10/30');
+    await card.getByTestId('routine-instance-chip-instance-moved').click();
+    await card
+      .getByTestId('routine-instance-actions-instance-moved')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(card.getByTestId('routine-instance-chip-instance-moved')).toContainText('10/27');
+    await expect(card.getByTestId('routine-instance-chip-instance-moved')).not.toContainText(
+      '10/30',
+    );
+    expect(api.instanceMutations).toHaveLength(7);
+    expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
+  });
+
+  test('keeps the prior chip state after a failed operation and offers retry after unavailable upcoming data', async ({
+    page,
+  }) => {
+    const unavailable = routine({
+      id: 'routine-unavailable',
+      title: '水泳',
+      upcoming: { status: 'unavailable', instances: [] },
+    });
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-error',
+          title: 'ピアノ',
+          upcoming: { status: 'ready', instances: [instance('instance-error', '2026-10-13')] },
+        }),
+        unavailable,
+      ],
+      failNextInstanceMutation: true,
+    });
+    await openRoutinePage(page);
+    const errorCard = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const chip = errorCard.getByTestId('routine-instance-chip-instance-error');
+    await expect(chip).toContainText('10/13');
+    await chip.click();
+    const actions = errorCard.getByTestId('routine-instance-actions-instance-error');
+    await actions.getByTestId('routine-instance-skip').click();
+    await expect(actions.getByRole('alert')).toHaveText(
+      '変更を保存できませんでした。時間をおいて再度お試しください。',
+    );
+    await expect(chip).toContainText('10/13');
+    await expect(chip).not.toContainText('お休み');
+    expect(api.instanceMutations).toHaveLength(1);
+
+    const unavailableCard = page.getByTestId('routine-card').filter({ hasText: '水泳' });
+    await expect(unavailableCard).toContainText('直近の回を取得できませんでした。');
+    const retry = unavailableCard.getByRole('button', { name: '再試行' });
+    const callsBeforeRetry = api.listCalls;
+    await retry.click();
+    await expect(retry).toBeVisible();
+    await expect.poll(() => api.listCalls).toBeGreaterThan(callsBeforeRetry);
   });
 
   test('fits 390px and 445px, keeps controls at least 44px, and only the routine tab is ready', async ({

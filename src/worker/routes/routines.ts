@@ -1,3 +1,4 @@
+import { getRoutineInstanceStatus } from '@shared/domain/routineInstances';
 import {
   buildRoutineRecurrence,
   getFirstRoutineDate,
@@ -7,19 +8,28 @@ import { familyIdSchema } from '@shared/schemas/family';
 import type { GoogleEvent, InsertEventInput } from '@shared/schemas/google-calendar';
 import {
   type RoutineInput,
+  type RoutineInstance,
+  type RoutineMoveInput,
   createRoutineInputSchema,
   routineCreateResponseSchema,
   routineDeleteResponseSchema,
   routineErrorResponseSchema,
+  routineInstanceActionInputSchema,
+  routineInstanceMutationResponseSchema,
+  routineInstanceSchema,
   routineListResponseSchema,
+  routineMoveInputSchema,
 } from '@shared/schemas/routines';
 import { toTokyoDateKey, toTokyoIsoString } from '@shared/time';
+import { getTodayDateKey } from '@shared/time';
+import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
 import { families, members, routineSettings } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import {
+  type GoogleCalendarClient,
   GoogleCalendarError,
   createGoogleCalendarClient,
   validatePathSegment,
@@ -43,6 +53,11 @@ type ErrorCode =
   | 'GOOGLE_ERROR'
   | 'INTERNAL_ERROR';
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 502 | 503 | 413;
+
+const INSTANCE_PAGE_SIZE = 2500;
+const INSTANCE_PAGE_LIMIT = 25;
+const INSTANCE_RANGE_START = '1970-01-01T00:00:00+09:00';
+const INSTANCE_RANGE_END = '2051-01-01T00:00:00+09:00';
 
 const ERROR_TEXT: Record<ErrorCode, string> = {
   UNAUTHORIZED: 'Unauthorized',
@@ -252,6 +267,259 @@ function parseUntilDate(recurrence: readonly string[]): string | null {
   }
 }
 
+function instant(value: GoogleEvent['start']): string | null {
+  return value?.dateTime ? toTokyoIsoString(value.dateTime) : null;
+}
+
+function masterDurationMs(master: GoogleEvent): number | null {
+  const start = instant(master.start);
+  const end = instant(master.end);
+  if (!start || !end) return null;
+  const duration = parseIsoInstantMilliseconds(end) - parseIsoInstantMilliseconds(start);
+  return duration > 0 ? duration : null;
+}
+
+function addDuration(start: string, duration: number): string {
+  return toTokyoIsoString(parseIsoInstantMilliseconds(start) + duration);
+}
+
+function originalTimes(
+  event: GoogleEvent,
+  duration: number,
+): { originalStart: string; originalEnd: string } | null {
+  const start = instant(event.originalStartTime);
+  if (!start) return null;
+  return { originalStart: start, originalEnd: addDuration(start, duration) };
+}
+
+function routineInstanceFromGoogle(event: GoogleEvent, duration: number) {
+  const original = originalTimes(event, duration);
+  if (!original) return null;
+  if (event.status === 'cancelled') {
+    return {
+      id: event.id,
+      ...original,
+      start: null,
+      end: null,
+      status: 'skipped' as const,
+    };
+  }
+  const start = instant(event.start);
+  const end = instant(event.end);
+  if (!start || !end) return null;
+  return {
+    id: event.id,
+    ...original,
+    start,
+    end,
+    status: getRoutineInstanceStatus({ ...original, start, end }),
+  };
+}
+
+async function listUpcomingInstances(
+  client: GoogleCalendarClient,
+  calendarId: string,
+  master: GoogleEvent,
+): Promise<{ status: 'ready' | 'unavailable'; instances: RoutineInstance[] }> {
+  const duration = masterDurationMs(master);
+  if (duration === null) return { status: 'unavailable', instances: [] };
+  const today = getTodayDateKey();
+  const topInstances: RoutineInstance[] = [];
+  const seenInstanceIds = new Set<string>();
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+  try {
+    for (let page = 0; page < INSTANCE_PAGE_LIMIT; page += 1) {
+      const result = await client.events.instances(calendarId, master.id, {
+        timeMin: INSTANCE_RANGE_START,
+        timeMax: INSTANCE_RANGE_END,
+        showDeleted: true,
+        maxResults: INSTANCE_PAGE_SIZE,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      for (const event of result.items) {
+        if (event.recurringEventId !== master.id) continue;
+        if (seenInstanceIds.has(event.id)) continue;
+        seenInstanceIds.add(event.id);
+        const originalStart = instant(event.originalStartTime);
+        if (!originalStart) return { status: 'unavailable', instances: [] };
+        const originalDate = toTokyoDateKey(originalStart);
+        if (originalDate < today || originalDate > '2050-12-31') continue;
+        const instance = routineInstanceFromGoogle(event, duration);
+        if (!instance) return { status: 'unavailable', instances: [] };
+        const parsedInstance = routineInstanceSchema.safeParse(instance);
+        if (!parsedInstance.success) return { status: 'unavailable', instances: [] };
+        topInstances.push(parsedInstance.data);
+        topInstances.sort((a, b) => a.originalStart.localeCompare(b.originalStart));
+        topInstances.splice(4);
+      }
+      pageToken = result.nextPageToken;
+      if (!pageToken) break;
+      if (seenPageTokens.has(pageToken)) return { status: 'unavailable', instances: [] };
+      seenPageTokens.add(pageToken);
+    }
+    if (pageToken) return { status: 'unavailable', instances: [] };
+    return { status: 'ready', instances: topInstances };
+  } catch {
+    return { status: 'unavailable', instances: [] };
+  }
+}
+
+async function withConcurrency<T, U>(
+  items: readonly T[],
+  limit: number,
+  operation: (item: T) => Promise<U>,
+): Promise<U[]> {
+  const output = new Array<U>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next;
+        next += 1;
+        const item = items[index];
+        if (item !== undefined) output[index] = await operation(item);
+      }
+    }),
+  );
+  return output;
+}
+
+type InstanceMutation = 'skip' | 'restore' | 'move';
+
+async function mutateRoutineInstance(c: RouteContext, action: InstanceMutation): Promise<Response> {
+  const access = await authorizeFamily(c);
+  if ('response' in access && access.response) return access.response;
+  const rawRoutineId = c.req.param('routineId');
+  const rawInstanceId = c.req.param('instanceId');
+  if (!rawRoutineId || !rawInstanceId) return errorResponse(c, 404, 'NOT_FOUND');
+  try {
+    validatePathSegment('routineId', rawRoutineId);
+    validatePathSegment('instanceId', rawInstanceId);
+  } catch {
+    return errorResponse(c, 400, 'INVALID_INPUT');
+  }
+  let move: RoutineMoveInput | undefined;
+  if (action === 'move') {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return errorResponse(c, 400, 'INVALID_INPUT');
+    }
+    const parsed = routineMoveInputSchema.safeParse(body);
+    if (!parsed.success) return errorResponse(c, 400, 'INVALID_INPUT');
+    move = parsed.data;
+  } else {
+    let body: unknown;
+    try {
+      const text = await c.req.text();
+      body = text.trim() === '' ? {} : JSON.parse(text);
+    } catch {
+      return errorResponse(c, 400, 'INVALID_INPUT');
+    }
+    if (!routineInstanceActionInputSchema.safeParse(body).success) {
+      return errorResponse(c, 400, 'INVALID_INPUT');
+    }
+  }
+  const row = (
+    await access.db
+      .select()
+      .from(routineSettings)
+      .where(
+        and(
+          eq(routineSettings.id, rawRoutineId),
+          eq(routineSettings.familyId, access.family.id),
+          eq(routineSettings.calendarId, access.calendarId),
+        ),
+      )
+  )[0];
+  if (!row) return errorResponse(c, 404, 'NOT_FOUND');
+  const client = createGoogleCalendarClient(c.env, access.session.user.id);
+  let instance: GoogleEvent;
+  let master: GoogleEvent;
+  try {
+    instance = await client.events.get(access.calendarId, rawInstanceId);
+    if (instance.id !== rawInstanceId || instance.recurringEventId !== row.recurringEventId) {
+      return errorResponse(c, 404, 'NOT_FOUND');
+    }
+    master = await client.events.get(access.calendarId, row.recurringEventId);
+  } catch (err) {
+    if (isGoogleMissing(err)) return errorResponse(c, 404, 'NOT_FOUND');
+    return responseForGoogleFailure(c, err);
+  }
+  if (
+    master.id !== row.recurringEventId ||
+    master.status === 'cancelled' ||
+    !master.recurrence?.length
+  ) {
+    return errorResponse(c, 404, 'NOT_FOUND');
+  }
+  const duration = masterDurationMs(master);
+  const original = duration === null ? null : originalTimes(instance, duration);
+  if (!original) return errorResponse(c, 404, 'NOT_FOUND');
+
+  let patch: Parameters<typeof client.events.patch>[2];
+  let resulting: {
+    start: string | null;
+    end: string | null;
+    status: 'normal' | 'skipped' | 'moved';
+  };
+  if (action === 'skip') {
+    patch = { status: 'cancelled' };
+    resulting = { start: null, end: null, status: 'skipped' };
+  } else {
+    const start =
+      action === 'restore' ? original.originalStart : `${move?.date}T${move?.startTime}:00+09:00`;
+    const end =
+      action === 'restore' ? original.originalEnd : `${move?.date}T${move?.endTime}:00+09:00`;
+    patch = {
+      status: 'confirmed',
+      start: { date: null, dateTime: start, timeZone: 'Asia/Tokyo' },
+      end: { date: null, dateTime: end, timeZone: 'Asia/Tokyo' },
+    };
+    resulting = {
+      start,
+      end,
+      status: getRoutineInstanceStatus({ ...original, start, end }),
+    };
+  }
+  let patched: GoogleEvent;
+  try {
+    patched = await client.events.patch(access.calendarId, rawInstanceId, patch, {
+      sendUpdates: 'none',
+    });
+  } catch (err) {
+    if (isGoogleMissing(err)) return errorResponse(c, 404, 'NOT_FOUND');
+    return responseForGoogleFailure(c, err);
+  }
+  if (
+    patched.id !== rawInstanceId ||
+    (patched.recurringEventId !== undefined && patched.recurringEventId !== row.recurringEventId)
+  ) {
+    return errorResponse(c, 502, 'GOOGLE_ERROR');
+  }
+  if (action === 'skip') {
+    if (patched.status !== 'cancelled') return errorResponse(c, 502, 'GOOGLE_ERROR');
+    resulting = { start: null, end: null, status: 'skipped' };
+  } else {
+    if (patched.status === 'cancelled') return errorResponse(c, 502, 'GOOGLE_ERROR');
+    const start = instant(patched.start);
+    const end = instant(patched.end);
+    if (!start || !end) return errorResponse(c, 502, 'GOOGLE_ERROR');
+    resulting = {
+      start,
+      end,
+      status: getRoutineInstanceStatus({ ...original, start, end }),
+    };
+  }
+  const parsedResponse = routineInstanceMutationResponseSchema.safeParse({
+    instance: { id: rawInstanceId, ...original, ...resulting },
+  });
+  if (!parsedResponse.success) return errorResponse(c, 502, 'GOOGLE_ERROR');
+  return c.json(parsedResponse.data, 200);
+}
+
 function routineFromGoogle(
   row: typeof routineSettings.$inferSelect,
   event: GoogleEvent,
@@ -426,12 +694,11 @@ routinesRoute.get('/:id/routines', async (c) => {
         ),
       );
     const client = createGoogleCalendarClient(c.env, access.session.user.id);
-    const results = [];
-    for (const row of rows) {
+    const results = await withConcurrency(rows, 4, async (row) => {
       try {
         const event = await client.events.get(access.calendarId, row.recurringEventId);
         if (event.status === 'cancelled') {
-          results.push({
+          return {
             id: row.id,
             title: null,
             weekdays: [],
@@ -445,11 +712,11 @@ routinesRoute.get('/:id/routines', async (c) => {
             category: row.category,
             affectsAvailability: row.affectsAvailability,
             status: 'missing' as const,
-          });
-          continue;
+            upcoming: { status: 'ready' as const, instances: [] },
+          };
         }
         if (!event.recurrence?.length) {
-          results.push({
+          return {
             id: row.id,
             title: event.summary ?? null,
             weekdays: [],
@@ -463,15 +730,24 @@ routinesRoute.get('/:id/routines', async (c) => {
             category: row.category,
             affectsAvailability: row.affectsAvailability,
             status: 'unsupported' as const,
-          });
-        } else {
-          results.push(
-            routineFromGoogle(row, event, new Set(access.activeMembers.map((member) => member.id))),
-          );
+            upcoming: { status: 'ready' as const, instances: [] },
+          };
         }
+        const routine = routineFromGoogle(
+          row,
+          event,
+          new Set(access.activeMembers.map((member) => member.id)),
+        );
+        return {
+          ...routine,
+          upcoming:
+            routine.status === 'ready'
+              ? await listUpcomingInstances(client, access.calendarId, event)
+              : { status: 'ready' as const, instances: [] },
+        };
       } catch (err) {
-        if (!isGoogleMissing(err)) return responseForGoogleFailure(c, err);
-        results.push({
+        if (!isGoogleMissing(err)) throw err;
+        return {
           id: row.id,
           title: null,
           weekdays: [],
@@ -485,10 +761,41 @@ routinesRoute.get('/:id/routines', async (c) => {
           category: row.category,
           affectsAvailability: row.affectsAvailability,
           status: 'missing' as const,
-        });
+          upcoming: { status: 'ready' as const, instances: [] },
+        };
       }
-    }
+    });
     return c.json(routineListResponseSchema.parse({ routines: results }), 200);
+  } catch (err) {
+    return err instanceof GoogleCalendarError
+      ? responseForGoogleFailure(c, err)
+      : errorResponse(c, 500, 'INTERNAL_ERROR');
+  }
+});
+
+routinesRoute.post('/:id/routines/:routineId/instances/:instanceId/skip', async (c) => {
+  try {
+    return await mutateRoutineInstance(c, 'skip');
+  } catch (err) {
+    return err instanceof GoogleCalendarError
+      ? responseForGoogleFailure(c, err)
+      : errorResponse(c, 500, 'INTERNAL_ERROR');
+  }
+});
+
+routinesRoute.post('/:id/routines/:routineId/instances/:instanceId/restore', async (c) => {
+  try {
+    return await mutateRoutineInstance(c, 'restore');
+  } catch (err) {
+    return err instanceof GoogleCalendarError
+      ? responseForGoogleFailure(c, err)
+      : errorResponse(c, 500, 'INTERNAL_ERROR');
+  }
+});
+
+routinesRoute.post('/:id/routines/:routineId/instances/:instanceId/move', async (c) => {
+  try {
+    return await mutateRoutineInstance(c, 'move');
   } catch (err) {
     return err instanceof GoogleCalendarError
       ? responseForGoogleFailure(c, err)
