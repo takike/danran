@@ -2,13 +2,14 @@
 
 計画・レビュー担当（[CLAUDE.md](../CLAUDE.md) の役割）が交代するときのためのメモ。会話の履歴がなくても続けられるように、状況・経緯・未解決の事項をまとめる。**状況が変わったら更新すること。**
 
-最終更新：2026-10-05（タスク 2-1 とフォローアップ完了、2-4 を Codex に依頼中）
+最終更新：2026-10-05（2-4 まで完了、2-2 を Codex に依頼中）
 
 ## 1. いま最初にやること
 
-1. **タスク 2-4（共通の空きの計算）** の PR をレビューする。指示書は [tasks/2-4-free-windows.md](tasks/2-4-free-windows.md)。純粋関数だけで、API・画面・Google・D1 に触らない。計画では 2-2 → 2-3 → 2-4 の順だが、単独で作れるので先に実施する。
-2. **その次は 2-2・2-3（空き状況の対象カレンダーの選択と `freeBusy.query` の取得）**。他人の個人カレンダーに関わる、プライバシーの核心。スコープ `calendar.freebusy` の追加は人間が了承済み。Google Cloud への登録は「やった気がする」との回答で、確実ではない。指示書には前提として書き、実機確認で同意画面がエラーになったら最初に疑う。
+1. **タスク 2-2（空き状況に使うカレンダーの選択と追加の同意）** の PR をレビューする。指示書は [tasks/2-2-busy-calendars.md](tasks/2-2-busy-calendars.md)。スコープ `calendar.freebusy`、認証、マイグレーション（列の追加）を含む。見るところ：ほかのメンバーの選択が漏れないこと、「自分の予定の表示」の選択と互いに消し合わないこと、このタスクでは `freeBusy.query` を呼ばないこと。
+2. **その次は 2-3（空き状況の取得 API）**。各大人のトークンで `freeBusy.query` を呼び、ほかの家族には開始・終了だけを返す。プライバシーの核心。指示書に入れる予定の方針：家族の `/week` とは別の API にする（失敗が互いに影響しない）、カレンダー ID を応答に出さない（ID はメールアドレスの形が多い）、取得に失敗したメンバーを「予定なし」として扱わない、共通の空きの計算は 2-4 の `getFreeWindows` を使う。
 3. その後、2-5（週末カードの空きタイムライン）、2-6（S2 週末の1日）。
+4. スコープ `calendar.freebusy` は、人間が Google Cloud に登録済み（2026-10-05 に確認）。
 
 ### 実機確認待ち
 
@@ -49,6 +50,7 @@
 | 1-8 | 予定の作成・編集・削除 | #17 |
 | 1-9 | 設定（メンバーの名前・色、休園日） | #18 |
 | 2-1 | 自分の個人予定を自分の画面にだけ表示 | #19、実機確認後の修正 #20（#20 の実機確認はまだ） |
+| 2-4 | 共通の空きを計算するドメインロジック（画面の変更なし。実機確認は不要） | #21 |
 
 Phase 1 のゴール（大人2人がログインし、同じ家族カレンダーの予定を週ビューで見て、追加・編集できる）は達成済み。
 
@@ -57,7 +59,7 @@ Phase 1 のゴール（大人2人がログインし、同じ家族カレンダ�
 実機確認で「自分の Google カレンダーの予定が出ない」という指摘があり、人間の合意のうえで順序を変えた。docs/05 の更新は PR #19 に入っている。
 
 1. **2-1**：個人カレンダーの選択と、自分の予定の表示（自分の画面だけ、タイトル付き）← マージ済み（PR #19）
-2. 家族の空き状況（各大人のトークンで `freeBusy.query`、ほかの家族には斜線の「予定あり」だけ。元の 2-2〜2-4）。スコープ `calendar.freebusy` の追加が必要になる見込み（人間の作業と判断が要る）
+2. 家族の空き状況（各大人のトークンで `freeBusy.query`、ほかの家族には斜線の「予定あり」だけ。元の 2-2〜2-4）。スコープ `calendar.freebusy` を追加する（人間が了承・登録済み）
 3. S2「週末の1日」（元の 2-5）
 
 その後は docs/05 のとおり：Phase 3 繰り返し予定、Phase 4 プリント取り込み、Phase 5 やること、Phase 6 公開ルール・週1まとめ・通知、Phase 7 仕上げ。
@@ -73,7 +75,7 @@ Phase 1 のゴール（大人2人がログインし、同じ家族カレンダ�
 | Secret | staging の Worker に `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`SESSION_SECRET`、`TOKEN_ENC_KEY`。GitHub Secrets に Cloudflare のトークンとアカウント ID。値は誰もチャットやリポジトリに出さない |
 | アカウント操作 | Cloudflare（wrangler）と Google Cloud Console の操作は、人間が自分の Mac とブラウザで行う。サーバー上のエージェントは行わない |
 | Google の同意画面 | 外部公開・未審査。同意時に「Google hasn't verified this app」の警告が出るので、Advanced → Go to … で進む。審査は一般公開の前（Phase 7） |
-| 登録済みスコープ | `openid` `email` `profile` `calendar.app.created` `calendar.calendarlist.readonly` `calendar.acls`。`calendar.events.readonly` は登録を依頼済み（実施は未確認） |
+| 登録済みスコープ | `openid` `email` `profile` `calendar.app.created` `calendar.calendarlist.readonly` `calendar.acls` `calendar.events.readonly` `calendar.freebusy`（後ろの2つは人間が登録済みと回答。`calendar.events.readonly` は実機で同意画面が通ることを確認済み） |
 | 実機 | 人間の Android（Chrome、CSS 幅 約445px）。大人2人分の Google アカウントで確認している |
 
 ## 4. 仕組みの要点（レビューで前提になること）
