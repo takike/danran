@@ -513,6 +513,72 @@ test.describe('PWA update handover with a real Service Worker', () => {
     }
   });
 
+  test('an open routine form protects its draft and a pending save blocks manual reload', async ({
+    page,
+  }) => {
+    const fixture = await createPwaFixtureServer();
+    let releaseSave: (() => void) | undefined;
+    let saveStarted: (() => void) | undefined;
+    const saveStartedPromise = new Promise<void>((resolve) => {
+      saveStarted = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    try {
+      const family = makeFamily({ id: 'mem_pwa_routine_child', name: 'ひな', color: 'ochre' });
+      await mockOnboardingApis(page, family);
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/routines`, async (route) => {
+        if (route.request().method() === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ routines: [] }),
+          });
+          return;
+        }
+        saveStarted?.();
+        await saveGate;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            routineId: 'routine_pwa_saved',
+            eventId: 'evt_pwa_routine_saved',
+          }),
+        });
+      });
+
+      await page.goto(`${fixture.origin}/routines`);
+      await expect(page.getByTestId('routines-screen')).toBeVisible();
+      await page.getByTestId('routine-add-button').click();
+      const dialog = page.getByTestId('routine-dialog');
+      await dialog.getByTestId('routine-form-title').fill('更新中に守る繰り返し');
+      await waitForActiveController(page);
+
+      await requestWorkerUpdate(page, fixture);
+      await expect(page.getByTestId('pwa-update-banner')).toBeVisible();
+      await expect(dialog.getByTestId('routine-form-title')).toHaveValue('更新中に守る繰り返し');
+      expect(await navigationCount(page)).toBe(1);
+
+      const updateButton = page.getByRole('button', { name: '更新', exact: true });
+      await dialog.getByTestId('routine-save').click();
+      await saveStartedPromise;
+      await expect(updateButton).toBeDisabled();
+      expect(await navigationCount(page)).toBe(1);
+
+      releaseSave?.();
+      await expect(dialog).toHaveCount(0);
+      await expect(updateButton).toBeEnabled();
+      await expectVersionAndReloadCount(page, 'A', 1);
+      await updateButton.click();
+      await expectVersionAndReloadCount(page, 'B', 2);
+    } finally {
+      releaseSave?.();
+      await fixture.close();
+    }
+  });
+
   test('a typed family name is retained while the update banner waits for explicit apply', async ({
     page,
   }) => {

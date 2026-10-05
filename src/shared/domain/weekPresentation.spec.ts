@@ -22,6 +22,7 @@ function event(id: string, isRoutine: boolean, source: WeekEvent['source'] = 'ma
     assigneeMemberId: null,
     status: 'confirmed',
     isRoutine,
+    affectsAvailability: true,
     source,
     items: [],
   };

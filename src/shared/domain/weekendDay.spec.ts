@@ -85,6 +85,7 @@ function familyEvent(overrides: Partial<WeekEvent> = {}): WeekEvent {
     assigneeMemberId: null,
     status: 'confirmed',
     isRoutine: false,
+    affectsAvailability: true,
     source: 'manual',
     items: [],
     ...overrides,

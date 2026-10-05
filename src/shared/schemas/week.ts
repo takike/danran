@@ -54,6 +54,7 @@ export const weekEventSchema = z
     assigneeMemberId: z.string().min(1).nullable(),
     status: z.enum(['confirmed', 'tentative']),
     isRoutine: z.boolean(),
+    affectsAvailability: z.boolean(),
     source: z.enum(['manual', 'import', 'publish', 'external']),
     items: eventItemsSchema,
   })

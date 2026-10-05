@@ -62,6 +62,7 @@ const familyEvent: WeekEvent = {
   assigneeMemberId: null,
   status: 'confirmed',
   isRoutine: false,
+  affectsAvailability: true,
   source: 'manual',
   items: [],
 };
@@ -78,6 +79,7 @@ const saturdayFamilyEvent: WeekEvent = {
   assigneeMemberId: null,
   status: 'confirmed',
   isRoutine: false,
+  affectsAvailability: true,
   source: 'manual',
   items: [],
 };
@@ -660,7 +662,7 @@ test.describe('Task 2-1: personal calendar events', () => {
     api.setIdentity(USER_B, familyB);
     await page.goto(`/?week=${BASE_WEEK}`);
     await expect(page.getByText('家族の予定')).toHaveCount(0);
-    await expect(page.getByText('別の家族')).toBeVisible();
+    await expect(page.getByText('別の家族', { exact: true })).toBeVisible();
     await expect(page.getByText('歯科の予約')).toHaveCount(0);
     await expect(page.locator('body')).not.toContainText('手続きの予定');
   });

@@ -65,6 +65,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
       "assigneeMemberId": null,
       "status": "confirmed",
       "isRoutine": false,
+      "affectsAvailability": true,
       "source": "manual",
       "items": ["水筒"]
     }
@@ -84,6 +85,7 @@ GET /api/families/{familyId}/week?start=2026-10-05
 - `memberIds`: イベント対象メンバーのうち、現在 active な既知のメンバー ID のみ。未知または壊れた ID は除きます。`assigneeMemberId` も同様に既知の active メンバーでなければ `null` です。
 - `status`: `'confirmed' | 'tentative'`。有効な Danran private metadata があればその値を使い、欠落・不正なら Google イベント状態から決めます。Google が tentative と示す場合だけ `tentative`、それ以外は `confirmed` とします。
 - `isRoutine`: Google イベントに `recurringEventId` がある場合 `true`。通常回か例外回かの詳細な判定は後続の繰り返しタスクで扱います。
+- `affectsAvailability`: 必須の真偽値。`routine_settings.affects_availability` が false の繰り返しシリーズの回だけ false。それ以外の家族予定と、設定のない繰り返し予定は true。false の予定も `days[].eventIds` と `events` に含め、週ビュー上に表示します。`getFreeWindows` は false の予定を busy / 共通の空き計算から除外します。
 - `source`: `'manual' | 'import' | 'publish' | 'external'`。Danran marker がある場合は private metadata の有効な値を使い、値が欠落または不正なら `'manual'`。marker がない場合だけ `'external'`。
 - `items`: `event_meta.itemsJson` が有効な JSON 文字列配列ならその内容、そうでなければ空配列。メタデータ候補は、(1) `(calendarId,eventId)` のイベント行、(2) `(calendarId,recurringEventId,originalStart)` の個別回、(3) `(calendarId,eventId=recurringEventId)` のシリーズ行の順に選びます。個別回の `originalStart` は、終日なら日付の完全一致、時刻付きなら JST に正規化した同一 instant で照合します（例：`Z` と等価な `+09:00` は一致）。見つかった候補の JSON が不正なら空配列とし、下位候補にフォールバックしません。D1 の bind 上限を避けるため、event ID と recurring ID を重複除去したうえで49件ずつ問い合わせます。1クエリの ID 条件は最大98 bind 値（event ID / recurring ID 各49）で、家族・カレンダー条件が加わります。空週では `event_meta` の全件検索をしません。
 

@@ -15,6 +15,7 @@ function event(overrides: Partial<WeekEvent> & Pick<WeekEvent, 'id' | 'time'>): 
     assigneeMemberId: overrides.assigneeMemberId ?? null,
     status: overrides.status ?? 'confirmed',
     isRoutine: overrides.isRoutine ?? false,
+    affectsAvailability: overrides.affectsAvailability ?? true,
     source: overrides.source ?? 'manual',
     items: overrides.items ?? [],
   });
@@ -258,6 +259,7 @@ describe('src/shared/domain/week', () => {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: [],
     });
