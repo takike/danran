@@ -4,12 +4,13 @@ import { OAuthNotices } from '@client/components/OAuthNotices';
 import { useSessionQuery } from '@client/features/auth/useSession';
 import { useFamiliesQuery } from '@client/features/onboarding/useFamily';
 import WeekPage from '@client/features/week/WeekPage';
+import WeekendDayPage from '@client/features/weekend-day/WeekendDayPage';
 import type { AuthUser } from '@shared/schemas/auth';
 import { useQueryClient } from '@tanstack/react-query';
 import { LogIn, RefreshCw, Shield } from 'lucide-react';
 import type React from 'react';
 import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 
 function PageFrame({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
@@ -41,6 +42,8 @@ function PageFrame({ children }: { children: React.ReactNode }): React.ReactElem
 }
 
 export default function HomePage(): React.ReactElement {
+  const { date } = useParams();
+  const location = useLocation();
   const session = useSessionQuery();
   const queryClient = useQueryClient();
   const user = session.data;
@@ -203,6 +206,27 @@ export default function HomePage(): React.ReactElement {
     const selfMemberId = family.members.find(
       (member) => member.kind === 'adult' && member.userId === user.id,
     )?.id;
+    if (date !== undefined) {
+      const state: unknown = location.state;
+      const requestedWeekStart =
+        typeof state === 'object' && state !== null && 'weekStart' in state
+          ? state.weekStart
+          : undefined;
+      return (
+        <WeekendDayPage
+          key={`${user.id}:${family.id}:${date}:${typeof requestedWeekStart === 'string' ? requestedWeekStart : ''}`}
+          userId={user.id}
+          familyId={family.id}
+          familyName={family.name}
+          familyMembers={family.members}
+          selfMemberId={selfMemberId}
+          dateParam={date}
+          requestedWeekStart={
+            typeof requestedWeekStart === 'string' ? requestedWeekStart : undefined
+          }
+        />
+      );
+    }
     return (
       <WeekPage
         key={`${user.id}:${family.id}`}

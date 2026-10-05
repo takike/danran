@@ -36,6 +36,18 @@
   --busy-bar-min-width: 8.75rem;
   --busy-bar-height: 20px;
   --busy-scale-font-size: 0.625rem;
+  --day-hour-height: 48px;
+  --day-timeline-height: 672px;
+  --day-axis-column: 32px;
+  --day-member-column-width: 88px;
+  --day-busy-pattern: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--muted) 30%, transparent) 0 2px,
+    transparent 2px 6px
+  );
+  --day-event-min-height: 36px;
+  --day-band-min-height: 44px;
+  --day-block-inset: 2px;
   --week-card-shadow: 0 2px 10px rgba(31, 29, 26, 0.05);
   --nav-caption-size: 10px;
   --member-dot-size: 10px;
