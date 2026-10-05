@@ -41,7 +41,6 @@ describe('Task 3-1 routine API', () => {
   let patchBodies: Record<string, unknown>[] = [];
   let patchUrls: URL[] = [];
   let instanceFailures = new Set<string>();
-  let instancePagesNeverEnd = false;
   let instanceRequests: URL[] = [];
   let eventGetCount = 0;
   let instancePageItems = new Map<string, Record<string, unknown>[][]>();
@@ -57,7 +56,6 @@ describe('Task 3-1 routine API', () => {
     patchBodies = [];
     patchUrls = [];
     instanceFailures = new Set();
-    instancePagesNeverEnd = false;
     instanceRequests = [];
     eventGetCount = 0;
     instancePageItems = new Map();
@@ -96,21 +94,36 @@ describe('Task 3-1 routine API', () => {
             { status: 404 },
           );
         }
-        const allInstances = [...events.values()].filter(
-          (event) => event.recurringEventId === masterId,
-        );
+        const timeMin = Date.parse(url.searchParams.get('timeMin') ?? '');
+        const timeMax = Date.parse(url.searchParams.get('timeMax') ?? '');
+        const allInstances = [...events.values()].filter((event) => {
+          if (event.recurringEventId !== masterId) return false;
+          const instanceBounds =
+            event.status === 'cancelled'
+              ? (event.originalStartTime as { dateTime?: string; date?: string } | undefined)
+              : undefined;
+          const startBounds =
+            instanceBounds ?? (event.start as { dateTime?: string; date?: string } | undefined);
+          const endBounds =
+            instanceBounds ?? (event.end as { dateTime?: string; date?: string } | undefined);
+          const start =
+            startBounds?.dateTime ??
+            (startBounds?.date ? `${startBounds.date}T00:00:00+09:00` : null);
+          const end =
+            endBounds?.dateTime ?? (endBounds?.date ? `${endBounds.date}T00:00:00+09:00` : null);
+          if (!start || !end) return false;
+          const startTime = Date.parse(start);
+          const endTime = Date.parse(end);
+          return startTime < timeMax && endTime >= timeMin;
+        });
         const pages = instancePageItems.get(masterId);
         const pageIndex = Number(url.searchParams.get('pageToken')?.slice(4) ?? '0');
         const instances = pages ? (pages[pageIndex] ?? []) : allInstances;
         return Response.json({
           items: instances,
-          ...(instancePagesNeverEnd
-            ? {
-                nextPageToken: `page${Number(url.searchParams.get('pageToken')?.slice(4) ?? '0') + 1}`,
-              }
-            : pages && pageIndex + 1 < pages.length
-              ? { nextPageToken: `page${pageIndex + 1}` }
-              : {}),
+          ...(pages && pageIndex + 1 < pages.length
+            ? { nextPageToken: `page${pageIndex + 1}` }
+            : {}),
         });
       }
       if (request.method === 'POST' && url.pathname.endsWith('/events')) {
@@ -679,7 +692,7 @@ describe('Task 3-1 routine API', () => {
 
   it('returns four instances by original Tokyo date, including ended-today, skipped, and moved rows', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-06T03:00:00.000Z'));
+    vi.setSystemTime(new Date('2026-10-05T16:30:00.000Z'));
     try {
       const cookie = await makeCaller();
       const created = await request(
@@ -692,11 +705,11 @@ describe('Task 3-1 routine API', () => {
         routineId: string;
         eventId: string;
       };
-      addInstance('instance_today', eventId, '2026-10-06', '2026-10-06', '08:00', '09:00');
+      addInstance('instance_today', eventId, '2026-10-06', '2026-10-06', '00:05', '01:05');
       const todayInstance = events.get('instance_today');
       if (todayInstance) {
         todayInstance.originalStartTime = {
-          dateTime: '2026-10-06T08:00:00+09:00',
+          dateTime: '2026-10-06T00:05:00+09:00',
           timeZone: 'Asia/Tokyo',
         };
       }
@@ -738,7 +751,7 @@ describe('Task 3-1 routine API', () => {
       expect(upcoming).toMatchObject({
         status: 'ready',
         instances: [
-          { id: 'instance_today', status: 'normal', start: '2026-10-06T08:00:00+09:00' },
+          { id: 'instance_today', status: 'normal', start: '2026-10-06T00:05:00+09:00' },
           { id: 'instance_skipped', status: 'skipped', start: null },
           { id: 'instance_moved', status: 'moved', start: '2026-10-05T18:00:00+09:00' },
           { id: 'instance_fourth', status: 'normal' },
@@ -751,42 +764,72 @@ describe('Task 3-1 routine API', () => {
       );
       expect(instanceRequests).toHaveLength(1);
       expect(instanceRequests[0]?.searchParams.get('showDeleted')).toBe('true');
-      expect(instanceRequests[0]?.searchParams.get('timeMin')).toBe('1970-01-01T00:00:00+09:00');
-      expect(instanceRequests[0]?.searchParams.get('timeMax')).toBe('2051-01-01T00:00:00+09:00');
+      expect(instanceRequests[0]?.searchParams.get('timeMin')).toBe('2026-09-05T00:00:00+09:00');
+      expect(instanceRequests[0]?.searchParams.get('timeMax')).toBe('2027-02-03T00:00:00+09:00');
+      expect(instanceRequests[0]?.searchParams.get('maxResults')).toBe('250');
     } finally {
       vi.useRealTimers();
     }
   });
 
   it('marks only the failed series unavailable and rejects a truncated page sequence', async () => {
-    const cookie = await makeCaller();
-    const first = await request('POST', '/api/families/routine_family/routines', cookie, payload);
-    const firstBody = (await first.json()) as { routineId: string; eventId: string };
-    const second = await request('POST', '/api/families/routine_family/routines', cookie, {
-      ...payload,
-      title: '英語',
-      clientRequestId: '123e4567-e89b-42d3-a456-426614174001',
-    });
-    const secondBody = (await second.json()) as { routineId: string; eventId: string };
-    instanceFailures.add(firstBody.eventId);
-    const list = await request('GET', '/api/families/routine_family/routines', cookie);
-    expect(await list.json()).toMatchObject({
-      routines: [
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-05T15:30:00.000Z'));
+    try {
+      const cookie = await makeCaller();
+      const first = await request('POST', '/api/families/routine_family/routines', cookie, payload);
+      const firstBody = (await first.json()) as { routineId: string; eventId: string };
+      const second = await request('POST', '/api/families/routine_family/routines', cookie, {
+        ...payload,
+        title: '英語',
+        clientRequestId: '123e4567-e89b-42d3-a456-426614174001',
+      });
+      const secondBody = (await second.json()) as { routineId: string; eventId: string };
+      instanceFailures.add(firstBody.eventId);
+      const list = await request('GET', '/api/families/routine_family/routines', cookie);
+      expect(await list.json()).toMatchObject({
+        routines: [
+          { id: firstBody.routineId, upcoming: { status: 'unavailable', instances: [] } },
+          { id: secondBody.routineId, upcoming: { status: 'ready', instances: [] } },
+        ],
+      });
+      instanceFailures.clear();
+      instancePageItems.set(firstBody.eventId, [[], [], [], [], []]);
+      addInstance('instance_for_ready_series', secondBody.eventId, '2026-10-13');
+      const previousRequestCount = instanceRequests.length;
+      const truncated = await request('GET', '/api/families/routine_family/routines', cookie);
+      const truncatedBody = (await truncated.json()) as {
+        routines: Array<{ id: string; upcoming: { status: string; instances: unknown[] } }>;
+      };
+      expect(truncatedBody.routines).toMatchObject([
         { id: firstBody.routineId, upcoming: { status: 'unavailable', instances: [] } },
-        { id: secondBody.routineId, upcoming: { status: 'ready', instances: [] } },
-      ],
-    });
-    instanceFailures.clear();
-    instancePagesNeverEnd = true;
-    const truncated = await request('GET', '/api/families/routine_family/routines', cookie);
-    const truncatedBody = (await truncated.json()) as {
-      routines: Array<{ id: string; upcoming: { status: string; instances: unknown[] } }>;
-    };
-    expect(truncatedBody.routines).toMatchObject([
-      { id: firstBody.routineId, upcoming: { status: 'unavailable', instances: [] } },
-      { id: secondBody.routineId, upcoming: { status: 'unavailable', instances: [] } },
-    ]);
-    expect(instanceRequests.filter((url) => url.pathname.endsWith('/instances'))).toHaveLength(52);
+        {
+          id: secondBody.routineId,
+          upcoming: { status: 'ready', instances: [{ id: 'instance_for_ready_series' }] },
+        },
+      ]);
+      const paginatedRequests = instanceRequests
+        .slice(previousRequestCount)
+        .filter((url) => url.pathname.endsWith('/instances'));
+      expect(paginatedRequests).toHaveLength(5);
+      expect(
+        paginatedRequests.filter((url) =>
+          url.pathname.includes(encodeURIComponent(firstBody.eventId)),
+        ),
+      ).toHaveLength(4);
+      expect(
+        paginatedRequests.filter((url) =>
+          url.pathname.includes(encodeURIComponent(secondBody.eventId)),
+        ),
+      ).toHaveLength(1);
+      expect(
+        paginatedRequests
+          .filter((url) => url.pathname.includes(encodeURIComponent(firstBody.eventId)))
+          .map((url) => url.searchParams.get('pageToken')),
+      ).toEqual([null, 'page1', 'page2', 'page3']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sorts instances from every page by their original date even when actual dates reorder them', async () => {

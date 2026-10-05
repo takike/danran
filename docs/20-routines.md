@@ -17,7 +17,7 @@ Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返�
 
 一覧の各 `ready` 項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。取得できないシリーズだけ `unavailable` となり、一覧全体の取得は続ける。`missing` / `unsupported` の項目は空の `ready` とする。
 
-Google [`events.instances`](https://developers.google.com/workspace/calendar/api/v3/reference/events/instances) の `timeMin` は実際の回の終了時刻を対象にするため、`timeMin=now` を使うと、元は今後の回でも過去へ振り替えたものが取得結果から外れる。このため Google からは1970年から2051年1月1日未満までをページングして取得し、元の開始日時が今日以降の回に絞ってから元の日時順に4件を選ぶ。繰り返し予定の RRULE は変更せず、取得対象期間だけを2051年未満にする。Google の `orderBy` は使わない。各シリーズの取得は最大25ページ（1ページ最大2500件）とし、シリーズの並列数は4件までに制限する。上限を超える取得失敗はそのシリーズだけ `unavailable` とし、部分的な結果を返さない。
+Google [`events.instances`](https://developers.google.com/workspace/calendar/api/v3/reference/events/instances) の `timeMin` は実際の回の終了時刻を対象にするため、`timeMin=now` を使うと、元は今後の回でも過去へ振り替えたものが取得結果から外れる。このため Google からは JST の今日の31日前 00:00 から今日の120日後 00:00 までを取得する（`timeMax` の境界は含まない）。取得した回は元の開始日が今日以降のものに絞ってから、元の日時順に4件を選ぶ。繰り返し予定の RRULE は変更せず、Google の `orderBy` も使わない。取得範囲外、つまり今日の31日前より前に終了する回や、今日の120日後 00:00 以降に始まる回は候補に含まれない。このため、元の予定日が今日以降でも、過去へ大きく振り替えて実際の終了が範囲より前になった回は表示されない。各シリーズの取得は最大4ページ（1ページ最大250件）とし、シリーズの並列数は4件までに制限する。4ページ以内に取得が終わらない場合はそのシリーズだけ `unavailable` とし、部分的な結果を返さない。
 
 各 instance は `id`, `originalStart`, `originalEnd`, `start`, `end`, `status` を持つ。日時は Asia/Tokyo の RFC3339（`+09:00`）。`start` / `end` は Google が示す実際の日時で、休みの回は `null`。状態は Google の `cancelled` を `skipped`、実際の日時または長さが元と異なる回を `moved`、それ以外を `normal` として返す。直近4回の選択は実際の日時ではなく元の開始日時順に行うため、振替後もシリーズ内の元の位置に表示される。
 

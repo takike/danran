@@ -20,8 +20,13 @@ import {
   routineListResponseSchema,
   routineMoveInputSchema,
 } from '@shared/schemas/routines';
-import { toTokyoDateKey, toTokyoIsoString } from '@shared/time';
-import { getTodayDateKey } from '@shared/time';
+import {
+  addCalendarDays,
+  getDayBounds,
+  getTodayDateKey,
+  toTokyoDateKey,
+  toTokyoIsoString,
+} from '@shared/time';
 import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
@@ -54,10 +59,8 @@ type ErrorCode =
   | 'INTERNAL_ERROR';
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 502 | 503 | 413;
 
-const INSTANCE_PAGE_SIZE = 2500;
-const INSTANCE_PAGE_LIMIT = 25;
-const INSTANCE_RANGE_START = '1970-01-01T00:00:00+09:00';
-const INSTANCE_RANGE_END = '2051-01-01T00:00:00+09:00';
+const INSTANCE_PAGE_SIZE = 250;
+const INSTANCE_PAGE_LIMIT = 4;
 
 const ERROR_TEXT: Record<ErrorCode, string> = {
   UNAUTHORIZED: 'Unauthorized',
@@ -324,6 +327,8 @@ async function listUpcomingInstances(
   const duration = masterDurationMs(master);
   if (duration === null) return { status: 'unavailable', instances: [] };
   const today = getTodayDateKey();
+  const rangeStart = getDayBounds(addCalendarDays(today, -31)).startIso;
+  const rangeEnd = getDayBounds(addCalendarDays(today, 120)).startIso;
   const topInstances: RoutineInstance[] = [];
   const seenInstanceIds = new Set<string>();
   const seenPageTokens = new Set<string>();
@@ -331,8 +336,8 @@ async function listUpcomingInstances(
   try {
     for (let page = 0; page < INSTANCE_PAGE_LIMIT; page += 1) {
       const result = await client.events.instances(calendarId, master.id, {
-        timeMin: INSTANCE_RANGE_START,
-        timeMax: INSTANCE_RANGE_END,
+        timeMin: rangeStart,
+        timeMax: rangeEnd,
         showDeleted: true,
         maxResults: INSTANCE_PAGE_SIZE,
         ...(pageToken ? { pageToken } : {}),
