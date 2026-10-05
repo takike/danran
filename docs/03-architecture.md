@@ -90,7 +90,7 @@ danran/
 - 他人の個人カレンダーは自分のトークンでは読めないので、**サーバーが各大人のトークンでそれぞれ `freeBusy.query` を呼ぶ**。対象カレンダーの選択と同意は Task 2-2、実取得は Task 2-3 で行う。
 - 対象カレンダーは本人が設定画面で `calendarList` から選ぶ。初期状態はすべて未選択で、primary を自動選択しない。
 - **会社の Google Workspace の予定**：会社アカウント側で、個人アカウントに「予定の有無のみ」を共有してもらえば、個人アカウントの `calendarList` に現れ、free/busy の対象にできる。会社の管理者が外部共有を禁止している場合は、手動の「仕事ブロック」予定で代替する。オンボーディングにこの案内を入れる。
-- **二重表示の回避**：Danran が個人カレンダーに書き出した予定（送迎ブロック等）も free/busy に含まれてしまう。free/busy は中身を返さないので、**D1 に記録した「書き出し済み区間」と完全一致する busy 区間を差し引く**。
+- **二重表示の回避**：Danran が個人カレンダーに書き出した予定（送迎ブロック等）も free/busy に含まれる。書き出し機能を実装する場合は、D1 に記録した書き出し済み区間と完全一致する busy 区間を差し引く方針とする。Task 2-3 時点では個人カレンダーへの書き出し機能がないため、差し引きは行わない。
 - `transparency: transparent`（「予定なし」扱い）の予定は、Google 側で busy に含まれない。
 
 ### ① 個人カレンダー（本人の画面）
@@ -176,13 +176,21 @@ push_subscriptions id, user_id, endpoint, p256dh, auth, created_at
 
 家族週ビュー API は `GET /api/families/:id/week?start=YYYY-MM-DD`。`start` を省略すると `Asia/Tokyo` の今日を含む週を返す。家族カレンダーの Google イベントと D1 の `event_meta`、有効なメンバー、祝日、休園日を読み取り、`shared/domain/dayLayout` で日ごとのレイアウトを決める。個人予定はこのレスポンスに含めない。Task 2-1 の `GET /api/families/:id/week/personal?start=YYYY-MM-DD` は本人の選択カレンダーだけを本人の Google トークンで取得し、本人だけに予定内容を返す。完全な家族 API の契約は [15-week-api.md](15-week-api.md)、個人予定 API は [18-personal-events.md](18-personal-events.md) を参照。
 
-家族週 API はリクエストした本人を含め個人カレンダーの `events.list` と全メンバーの `freeBusy.query` を呼ばない。個人予定は別 API で取得し、失敗しても互いに影響しない。週範囲が祝日ライブラリの対応年（1970–2050）を越える場合は、祝日を平日と誤認しないようリクエストを拒否する。
+家族予定の `GET /api/families/:id/week` は、リクエストした本人を含め個人カレンダーの `events.list` と `freeBusy.query` を呼ばない。本人の個人予定は `/week/personal`、家族メンバーの busy 区間は別の `GET /api/families/:id/week/busy` で取得し、各 API の失敗は互いに影響しない。週範囲が祝日ライブラリの対応年（1970–2050）を越える場合は、祝日を平日と誤認して返さないようリクエストを拒否する。
 
 Google の家族カレンダー `events.list` は、リクエストユーザー自身のトークンで `singleEvents=true`、`orderBy=startTime`、`timeZone=Asia/Tokyo`、週の JST 境界、`showDeleted=false` を指定して取得する。最大10ページまで追跡し、ページ上限到達、同じページトークンの再出現、または不完全な取得はエラーとして扱う。イベントの Google metadata と `event_meta` は許可リストに沿ってレスポンスへ整形し、個人カレンダー情報は混ぜない。
 
 `event_meta` は `(calendar_id,event_id)` の一意制約と、`(family_id,calendar_id)`、`(calendar_id,recurring_event_id,original_start)`、`assignee_member_id` の各検索インデックスを持つ。週 API は返却対象のイベント ID に絞って `items_json` を読み、担当・状態・由来は Google の `extendedProperties.private` から検証して導出する。予定作成・編集時は `items_json` と `assignee_member_id`・`status`・`source` を `event_meta` にも保存し、Google 側のメタデータと同じ値を保つ。これらの列は既存スキーマにあり、Task 1-8 ではスキーマ変更を行わない。
 
-後のフェーズでは `syncToken` による差分取得と `events.watch`（Push 通知 → Worker の webhook）で高速化する。最初は行わない。
+後のフェーズでは家族カレンダーの `syncToken` による差分取得と `events.watch`（Push 通知 → Worker の webhook）で高速化する。最初は行わない。
+
+### 家族の busy 週 API（Task 2-3）
+
+`GET /api/families/:id/week/busy?start=YYYY-MM-DD` は家族の `/week` と同じ `getWeekRange`・JST の週境界を使い、省略時は JST の今日を含む週を返す。`start` の形式、重複指定、1970–2050 年の範囲検証も同じです。成功応答は `{ family: { id }, week: { start, endInclusive, prevWeekStart, nextWeekStart, today }, members: [{ memberId, status, busy }] }` で、対象は `user_id` がある active な大人全員（本人を含む）。順序は `sortOrder`、次に `id` で安定化します。
+
+各メンバーは本人の保存済み Google トークンと `include_in_busy = true` の選択カレンダーだけで `freeBusy.query` されます。追加スコープ未同意または選択カレンダーなしなら Google を呼ばず `not_shared` と空の `busy` を返します。取得成功は `ready`、トークン・Google・カレンダー単位のエラーや不正応答は理由を明かさず `unavailable` と空の `busy` にします。`not_shared` と `unavailable` の `busy: []` は予定なしや空き時間を意味しません。取得済みで busy 区間がない状態を示すのは `ready` と `busy: []` の組み合わせだけです。1人の取得失敗は他メンバーの結果に影響しません。選択カレンダーの一部でもエラー、要求カレンダーの欠落・不正、または Google 応答の週境界不一致があれば、その人の区間を部分返却しません。家族カレンダーは問い合わせ対象から除外します。
+
+Google の `busy` 区間は表示週で切り取り、重複または端点が接する区間を統合して `+09:00` 付き ISO 時刻で返します。応答には busy の開始・終了以外の個人予定情報に加え、カレンダー ID・名前・件数・由来・エラー理由も含めません。Google API の取得結果は D1、キャッシュ、ログに保存しません。成功・失敗応答とも `Cache-Control: no-store` です。共通の空き時間の計算と `mirrored_blocks` の差し引きはこの API の範囲外です。
 
 ### 繰り返し予定
 
