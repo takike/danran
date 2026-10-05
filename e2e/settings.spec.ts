@@ -85,6 +85,8 @@ const targetEvent: WeekEvent = {
   assigneeMemberId: null,
   status: 'confirmed',
   isRoutine: false,
+  isRecurring: false,
+  movedFrom: null,
   affectsAvailability: true,
   source: 'manual',
   items: [],

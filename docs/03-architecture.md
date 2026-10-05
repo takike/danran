@@ -200,7 +200,8 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 - 習い事・家事代行は、家族カレンダー上の **Google の繰り返しイベント（RRULE）** として作る。独自の繰り返しエンジンは作らない。
 - `routine_settings` は繰り返しシリーズに固有のカテゴリ、スキップ設定、空き判定フラグ、既定の担当だけを持つ。タイトル・曜日・時刻・対象メンバーは Google Calendar の recurring master と private extended properties を正本とする。
 - Task 3-1 の繰り返し作成は時刻指定のみで、最初の回を開始日以降の選択曜日へ合わせる。作成時のイベント状態は常に確定とする。`affects_availability = false` のシリーズ回も週 API では通常どおり表示するが、共通空き計算から除く。
-- 週 API の `WeekEvent.affectsAvailability` は必須の真偽値。ルーティン回で対応する `routine_settings.affects_availability` が false の場合だけ false を返し、それ以外は true。
+- 週 API の `WeekEvent` は、繰り返し予定の回かを示す `isRecurring`、通常回だけを示す `isRoutine`、元の開始日時を示す `movedFrom` を返す。`isRecurring` は `recurringEventId` の有無で決め、通常回・例外回のどちらも true。`isRoutine` は通常の繰り返し回だけ true。単発予定は `isRecurring: false`, `isRoutine: false`, `movedFrom: null`。
+- `WeekEvent.affectsAvailability` は必須の真偽値。対応する recurring series の `routine_settings.affects_availability` が false の場合だけ false を返し、それ以外は true。この判定は `isRoutine` ではなくシリーズ ID を使うため、例外回にも同じ設定を適用する。
 - 「この回だけ休む」は、その回の `status: cancelled`。「振替」は、その回の開始日時を変更する（`events.instances` → `patch`）。
 - 「祝日は休み」：Google の RRULE は日本の祝日を知らないので、**Cron（月1）で今後6か月分の祝日・休園日に当たる回をキャンセル**する。設定をオフにしたら元に戻す。適用済みの回は D1 に記録しておく。
 - 「年末年始は休み」も同じ仕組み（12/29〜1/3 を既定値に、家族ごとに変更可）。
@@ -211,14 +212,16 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 ### dayLayout：日ごとの表示サイズ
 
 ```
-入力：日付、祝日、休園日、その日の家族予定（ルーティンか否か）、締切、公開済みの個人予定
+入力：日付、祝日、休園日、その日の家族予定（`isRoutine` か否か）、締切、公開済みの個人予定
 出力：'weekend-card' | 'expanded' | 'compact'
 
 - 土日・祝日・休園日 → 'weekend-card'
 - 平日で、非ルーティンの家族予定がある → 'expanded'
 - それ以外 → 'compact'（締切・公開済み個人予定はチップで表示）
-ルーティン判定：繰り返しイベントの通常回 ＝ ルーティン。例外回（振替・時間変更）と単発予定 ＝ 非ルーティン
+ルーティン判定：繰り返しイベントの通常回（`isRoutine: true`）＝ ルーティン。開始日時を変えた例外回と単発予定 ＝ 非ルーティン。`isRecurring` は繰り返しのアイコンと週画面からの単発編集を止める判定に使い、レイアウトや「ルーティンを隠す」には使わない。
 ```
+
+週 API の `events.list(singleEvents=true)` が返す個別回だけで通常回かを判定する。シリーズ master の長さを取得する Google 呼び出しは追加しないため、実際の開始日時と `originalStartTime` の開始日時を比較し、開始が同じなら通常回、異なれば例外回とする。時刻付き日時は同一 instant に正規化して比較するので、`Z` と等価な `+09:00` は同じ開始として扱う。終日予定は日付で比較する。開始が変わった例外回の `movedFrom` は元の開始を Asia/Tokyo の `+09:00` ISO 文字列で返し、終日の元の日付はその日の Asia/Tokyo 午前0時として表す。`originalStartTime` がない繰り返し回は保守的に通常回（`isRoutine: true`）とし、`movedFrom: null` にする。この制約により、終了時刻だけを変えた回は通常の回として残る。
 
 週ビューの表示範囲は月〜日。翌月曜が祝日なら、その日まで伸ばす（連休を途中で切らない）。
 

@@ -1,6 +1,6 @@
-# 20. 繰り返し予定（Task 3-1、3-2）
+# 20. 繰り返し予定（Task 3-1、3-2、3-5）
 
-Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。Task 3-2 では、直近4回を表示し、個別の回を休止・振替・復元する。週 API は各回をルーティンとして返す。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
+Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。Task 3-2 では、直近4回を表示し、個別の回を休止・振替・復元する。Task 3-5 では、週 API が繰り返しの回か（`isRecurring`）と通常回か（`isRoutine`）を別々に返し、振替・開始時刻変更をした回を週ビューで目立たせる。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
 
 ## API
 
@@ -54,7 +54,15 @@ D1 の `routine_settings` は `id`, `family_id`, `calendar_id`, `recurring_event
 
 ## 週 API と空き判定
 
-週 API の各 `WeekEvent` は `affectsAvailability` を必ず持つ。ルーティン回に紐づく `routine_settings.affects_availability` が false の場合だけ false、それ以外は true。false の予定も週ビューと S2 に表示し、`getFreeWindows` のメンバー別 busy と共通空きの計算からだけ除外する。
+週 API の各 `WeekEvent` は `isRecurring`, `isRoutine`, `movedFrom`, `affectsAvailability` を持つ。`isRecurring` は Google の `recurringEventId` の有無で決まり、通常回・例外回とも true。`isRoutine` は通常回だけ true。開始日時を変えた例外回は `movedFrom` に元の開始日時を Asia/Tokyo の `+09:00` 付き ISO 文字列で示し、単発予定・通常回では `null`。元の開始が終日なら、元の日付の Asia/Tokyo 午前0時（`getDayBounds(date).startIso`）を表す値にする。
+
+週 API の例外判定では、既存の `events.list(singleEvents=true)` が返す個別回だけを使い、Google 呼び出しを追加しない。実際の開始日時と `originalStartTime` を比較する。時刻付き日時は同一 instant に正規化し（`Z` と等価な `+09:00` は同じ）、終日は日付で比較する。開始日時が違えば例外回として `isRoutine: false` と `movedFrom` を設定する。シリーズ master の本来の長さを取得しない制約があるため、終了だけを変えた回は通常回として扱う。`originalStartTime` がない繰り返し回は保守的に通常回（`isRecurring: true`, `isRoutine: true`, `movedFrom: null`）とする。
+
+S4 の回状態表示は Google の実際の日時・長さと元の日時・長さを比べる既存判定を続ける。ここでの開始時刻だけの制限は週 API の分類に限る。
+
+`affectsAvailability` は引き続き recurring series の `recurringEventId` と `routine_settings.affects_availability` で決める。設定が false なら通常回・例外回とも false、それ以外は true。false の予定も週ビューと S2 に表示し、`getFreeWindows` のメンバー別 busy と共通空きの計算からだけ除外する。
+
+週ビューでは `isRecurring` が繰り返しアイコンと編集案内を決める。`isRoutine` は compact／expanded、グレー表示、「ルーティンを隠す」を決めるため、例外回は隠さず非ルーティン予定と同じ見た目にする。異なる日への振替は「振替（10/20 から）」、同じ Asia/Tokyo の日付内で開始時刻だけ変えた回は「時間変更」と表示する。S2 では幅に余裕があるブロックに同じ印を出し、読み上げ用一覧には幅にかかわらず印を含め、振替の場合は元の日付も示す。
 
 ## 再試行と失敗からの回復
 

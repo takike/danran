@@ -20,6 +20,7 @@ import {
   getPersonalEventsForDate,
   mergeCalendarDayEntries,
 } from '@shared/domain/personalEvents';
+import { getRoutineExceptionLabel } from '@shared/domain/routineExceptionLabel';
 import {
   getLongWeekendBadges,
   getVisibleDayEvents,
@@ -140,7 +141,8 @@ function EventBadges({
   const assignee = showAssignee
     ? members.find((member) => member.id === event.assigneeMemberId)
     : undefined;
-  if (!assignee && event.status !== 'tentative' && !event.isRoutine) return null;
+  if (!assignee && event.status !== 'tentative' && !event.isRecurring && !event.movedFrom)
+    return null;
   return (
     <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--spacing-xs)]">
       {assignee && (
@@ -153,7 +155,15 @@ function EventBadges({
           候補
         </span>
       )}
-      {event.isRoutine && <span className="text-xs text-muted">繰り返し</span>}
+      {event.isRecurring && (
+        <span className="inline-flex items-center gap-[var(--spacing-2xs)] text-xs text-muted">
+          <Repeat size={12} aria-hidden="true" className="shrink-0" />
+          繰り返し
+        </span>
+      )}
+      {getRoutineExceptionLabel(event) && (
+        <span className="text-xs text-accent">{getRoutineExceptionLabel(event)}</span>
+      )}
     </span>
   );
 }
@@ -187,7 +197,7 @@ function DateLabel({
 function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
   return (
     <span className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full items-center gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-muted">
-      {event.isRoutine && <Repeat size={14} aria-hidden="true" className="shrink-0" />}
+      {event.isRecurring && <Repeat size={14} aria-hidden="true" className="shrink-0" />}
       <span className="break-words [overflow-wrap:anywhere]">{event.title}</span>
       <span className="break-words tabular-nums [overflow-wrap:anywhere]">
         {formatEventTime(event.time)}
@@ -893,7 +903,7 @@ export default function WeekPage({
     (event: WeekEvent, trigger: HTMLElement) => {
       if (!data) return;
       invokingControlRef.current = trigger;
-      if (event.isRoutine) {
+      if (event.isRecurring) {
         setRoutineNotice(true);
         return;
       }

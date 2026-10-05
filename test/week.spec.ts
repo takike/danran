@@ -362,7 +362,9 @@ describe('Task 1-6: family week API', () => {
         memberIds: [fixture.callerMemberId],
         assigneeMemberId: null,
         status: 'confirmed',
+        isRecurring: false,
         isRoutine: false,
+        movedFrom: null,
         affectsAvailability: true,
         source: 'manual',
         items: ['水筒'],
@@ -763,6 +765,33 @@ describe('Task 1-6: family week API', () => {
       start: { dateTime: '2026-10-10T15:00:00+09:00' },
       end: { dateTime: '2026-10-10T16:00:00+09:00' },
     };
+    const movedOccurrence = {
+      id: 'moved_instance_01',
+      status: 'confirmed',
+      summary: 'Moved occurrence',
+      recurringEventId: 'series_four',
+      originalStartTime: { dateTime: '2026-10-08T09:00:00+09:00' },
+      start: { dateTime: '2026-10-09T09:00:00+09:00' },
+      end: { dateTime: '2026-10-09T10:00:00+09:00' },
+    };
+    const movedMinuteOccurrence = {
+      id: 'moved_minute_instance_01',
+      status: 'confirmed',
+      summary: 'Moved by one minute',
+      recurringEventId: 'series_five',
+      originalStartTime: { dateTime: '2026-10-07T09:00:00+09:00' },
+      start: { dateTime: '2026-10-07T09:01:00+09:00' },
+      end: { dateTime: '2026-10-07T10:01:00+09:00' },
+    };
+    const changedEndOnlyOccurrence = {
+      id: 'changed_end_only_instance_01',
+      status: 'confirmed',
+      summary: 'Changed end only',
+      recurringEventId: 'series_six',
+      originalStartTime: { dateTime: '2026-10-08T09:00:00+09:00' },
+      start: { dateTime: '2026-10-08T09:00:00+09:00' },
+      end: { dateTime: '2026-10-08T10:30:00+09:00' },
+    };
     const invalidArrayItems = {
       id: 'invalid_array_items_event',
       status: 'confirmed',
@@ -794,6 +823,9 @@ describe('Task 1-6: family week API', () => {
             invalidExact,
             allDayOccurrence,
             seriesFallback,
+            movedOccurrence,
+            movedMinuteOccurrence,
+            changedEndOnlyOccurrence,
             invalidArrayItems,
             externalEvent,
             cancelled,
@@ -802,6 +834,14 @@ describe('Task 1-6: family week API', () => {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
 
+    await db.insert(routineSettings).values({
+      id: 'routine_setting_moved_week_test',
+      familyId: fixture.familyId,
+      calendarId: fixture.calendarId ?? '',
+      recurringEventId: movedOccurrence.recurringEventId,
+      category: 'lesson',
+      affectsAvailability: false,
+    });
     await db.insert(eventMeta).values([
       {
         id: 'meta_occurrence',
@@ -875,7 +915,7 @@ describe('Task 1-6: family week API', () => {
     );
     expect(response.status).toBe(200);
     const body = weekResponseSchema.parse(await response.json());
-    expect(body.events).toHaveLength(6);
+    expect(body.events).toHaveLength(9);
     const occurrence = body.events.find((event) => event.id === validOccurrence.id);
     expect(occurrence).toMatchObject({
       time: {
@@ -886,10 +926,16 @@ describe('Task 1-6: family week API', () => {
       memberIds: [fixture.callerMemberId],
       assigneeMemberId: fixture.callerMemberId,
       status: 'tentative',
+      isRecurring: true,
+      isRoutine: true,
+      movedFrom: null,
       source: 'import',
       items: ['発表資料'],
     });
     expect(body.events.find((event) => event.id === invalidExact.id)).toMatchObject({
+      isRecurring: true,
+      isRoutine: false,
+      movedFrom: '2026-10-10T03:00:00+09:00',
       memberIds: [],
       assigneeMemberId: null,
       status: 'tentative',
@@ -898,8 +944,30 @@ describe('Task 1-6: family week API', () => {
     });
     expect(body.events.find((event) => event.id === allDayOccurrence.id)).toMatchObject({
       time: { kind: 'all-day', start: '2026-10-10', endExclusive: '2026-10-11' },
+      isRecurring: true,
+      isRoutine: true,
+      movedFrom: null,
       items: ['日付メモ'],
     });
+    expect(body.events.find((event) => event.id === movedOccurrence.id)).toMatchObject({
+      isRecurring: true,
+      isRoutine: false,
+      movedFrom: '2026-10-08T09:00:00+09:00',
+      affectsAvailability: false,
+    });
+    expect(body.events.find((event) => event.id === movedMinuteOccurrence.id)).toMatchObject({
+      isRecurring: true,
+      isRoutine: false,
+      movedFrom: '2026-10-07T09:00:00+09:00',
+    });
+    expect(body.events.find((event) => event.id === changedEndOnlyOccurrence.id)).toMatchObject({
+      isRecurring: true,
+      isRoutine: true,
+      movedFrom: null,
+    });
+    expect(body.days.find((day) => day.date === '2026-10-09')?.layout).toBe('expanded');
+    expect(body.days.find((day) => day.date === '2026-10-07')?.layout).toBe('expanded');
+    expect(body.days.find((day) => day.date === '2026-10-08')?.layout).toBe('compact');
     expect(body.events.find((event) => event.id === seriesFallback.id)).toMatchObject({
       items: ['series item'],
     });
@@ -907,6 +975,9 @@ describe('Task 1-6: family week API', () => {
       items: [],
     });
     expect(body.events.find((event) => event.id === externalEvent.id)).toMatchObject({
+      isRecurring: false,
+      isRoutine: false,
+      movedFrom: null,
       memberIds: [],
       assigneeMemberId: null,
       status: 'tentative',
@@ -914,6 +985,8 @@ describe('Task 1-6: family week API', () => {
       items: [],
     });
     expect(body.events.some((event) => event.id === cancelled.id)).toBe(false);
+    expect(calendarRequests).toHaveLength(1);
+    expect(new URL(calendarRequests[0]?.url ?? '').pathname).toMatch(/\/events$/);
   });
 
   it('normalizes a midweek start and defaults to JST today', async () => {

@@ -1,6 +1,7 @@
 import { MemberDot } from '@client/components/MemberDot';
 import { getColorCssVar } from '@client/features/onboarding/useFamily';
 import type { BusyInterval } from '@shared/domain/busyIntervals';
+import { getRoutineExceptionLabel } from '@shared/domain/routineExceptionLabel';
 import {
   DAY_PIXELS_PER_HOUR,
   DAY_TIMELINE_END_HOUR,
@@ -75,7 +76,8 @@ function familyEventAccessibleLabel(
     eventTime(event, date),
     `対象 ${eventTargets(event, members)}`,
     event.status === 'tentative' ? '候補' : undefined,
-    event.isRoutine ? '繰り返し予定' : undefined,
+    event.isRecurring ? '繰り返し予定' : undefined,
+    getRoutineExceptionLabel(event) ?? undefined,
     assigneeMemberId
       ? `担当 ${members.find((member) => member.id === assigneeMemberId)?.name ?? ''}`
       : undefined,
@@ -105,13 +107,14 @@ function FamilyEventDetails({
     (spanning && event.memberIds.length === 0 && Boolean(event.assigneeMemberId));
   const labels = [
     event.status === 'tentative' ? '候補' : undefined,
+    getRoutineExceptionLabel(event) ?? undefined,
     isAssignedPlacement ? `担当${assignee ? `：${assignee.name}` : ''}` : undefined,
   ].filter((label): label is string => Boolean(label));
 
   return (
     <>
       <span className="flex w-full min-w-0 items-center gap-[var(--spacing-2xs)]">
-        {event.isRoutine && (
+        {event.isRecurring && (
           <Repeat
             size={12}
             aria-label="繰り返し予定"
@@ -387,7 +390,7 @@ export function DayTimeline({
   const totalHours = DAY_TIMELINE_END_HOUR - DAY_TIMELINE_START_HOUR;
   const renderFamilyBlock = (block: PositionedDayEvent<WeekEvent>, spanning = false) => {
     const onBlockEdit = (event: WeekEvent, trigger: HTMLButtonElement) => {
-      if (event.isRoutine) onRoutineNotice();
+      if (event.isRecurring) onRoutineNotice();
       else onEdit(event, trigger);
     };
     if (spanning) {
@@ -504,7 +507,7 @@ export function DayTimeline({
                       date={date}
                       members={members}
                       onEdit={(event, trigger) => {
-                        if (event.isRoutine) onRoutineNotice();
+                        if (event.isRecurring) onRoutineNotice();
                         else onEdit(event, trigger);
                       }}
                     />
@@ -631,12 +634,15 @@ export function DayTimeline({
               );
             const allDayFamilyEvents = layout.allDayFamilyEvents
               .filter(appliesToMember)
-              .map((event) => `${event.title} 終日${event.isRoutine ? ' 繰り返し予定' : ''}`);
+              .map(
+                (event) =>
+                  `${event.title} 終日${event.isRecurring ? ' 繰り返し予定' : ''}${getRoutineExceptionLabel(event) ? ` ${getRoutineExceptionLabel(event)}` : ''}`,
+              );
             const outsideFamilyEvents = layout.outsideFamilyEvents
               .filter(appliesToMember)
               .map(
                 (event) =>
-                  `${event.title} ${eventTime(event, date)}${event.isRoutine ? ' 繰り返し予定' : ''}`,
+                  `${event.title} ${eventTime(event, date)}${event.isRecurring ? ' 繰り返し予定' : ''}${getRoutineExceptionLabel(event) ? ` ${getRoutineExceptionLabel(event)}` : ''}`,
               );
             const personalEvents = layout.personalBlocks
               .filter((block) => block.column.memberIds.includes(member.id))

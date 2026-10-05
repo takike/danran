@@ -32,6 +32,8 @@ const ONE_TIME_EVENT: WeekEvent = {
   assigneeMemberId: 'mem_adult_b',
   status: 'tentative',
   isRoutine: false,
+  isRecurring: false,
+  movedFrom: null,
   affectsAvailability: true,
   source: 'manual',
   items: ['水筒'],
@@ -47,6 +49,8 @@ const RECURRING_EVENT: WeekEvent = {
     endExclusive: '2026-10-07T18:00:00+09:00',
   },
   isRoutine: true,
+  isRecurring: true,
+  movedFrom: null,
 };
 
 function buildWeek(events: WeekEvent[]): WeekResponse {
@@ -163,6 +167,8 @@ async function mockEventApis(page: import('@playwright/test').Page) {
       assigneeMemberId: body.assigneeMemberId,
       status: body.status,
       isRoutine: false,
+      isRecurring: false,
+      movedFrom: null,
       affectsAvailability: true,
       source: 'manual',
       items: body.items,
@@ -291,6 +297,8 @@ test.describe('Task 1-8: family event editing', () => {
         assigneeMemberId: body.assigneeMemberId,
         status: body.status,
         isRoutine: false,
+        isRecurring: false,
+        movedFrom: null,
         affectsAvailability: true,
         source: 'manual',
         items: body.items,

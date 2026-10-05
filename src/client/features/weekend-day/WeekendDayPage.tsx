@@ -14,6 +14,7 @@ import { EventDialog } from '@client/features/week/EventDialog';
 import { BUSY_WEEK_QUERY_KEY, useBusyWeekQuery } from '@client/features/week/useBusyWeek';
 import { useWeekQuery } from '@client/features/week/useWeek';
 import { DayTimeline } from '@client/features/weekend-day/DayTimeline';
+import { getRoutineExceptionLabel } from '@shared/domain/routineExceptionLabel';
 import {
   type WeekendDayLayout,
   buildWeekendDayLayout,
@@ -143,8 +144,11 @@ function FamilyEventCardDetails({
   return (
     <>
       <span className="flex max-w-full min-w-0 flex-wrap items-center gap-[var(--spacing-xs)] font-semibold">
-        {event.isRoutine && <Repeat size={14} aria-label="繰り返し予定" className="shrink-0" />}
+        {event.isRecurring && <Repeat size={14} aria-label="繰り返し予定" className="shrink-0" />}
         <span className="min-w-0 break-words [overflow-wrap:anywhere]">{event.title}</span>
+        {getRoutineExceptionLabel(event) && (
+          <span className="text-xs text-accent">{getRoutineExceptionLabel(event)}</span>
+        )}
       </span>
       <span className="text-muted">
         {formatEventTime(event.time, date)} · {targetsLabel(event, members)}
@@ -464,7 +468,7 @@ function WeekendDayContent({
   );
   const openEdit = useCallback(
     (event: WeekEvent, trigger: HTMLButtonElement) => {
-      if (event.isRoutine) {
+      if (event.isRecurring) {
         invokingControlRef.current = trigger;
         setRoutineNotice(true);
         return;
@@ -482,7 +486,7 @@ function WeekendDayContent({
     [date, weekData],
   );
   const openEditFromCard = (event: WeekEvent, trigger: HTMLButtonElement) => {
-    if (event.isRoutine) {
+    if (event.isRecurring) {
       invokingControlRef.current = trigger;
       setRoutineNotice(true);
       return;

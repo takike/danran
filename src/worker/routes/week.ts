@@ -1,5 +1,6 @@
 import { compareFamilyMembers } from '@shared/domain/memberOrder';
 import { buildWeekDays } from '@shared/domain/week';
+import { classifyWeekRecurrence } from '@shared/domain/weekRecurrence';
 import { type ClosureDay, closureDaySchema } from '@shared/schemas/closure';
 import { familyIdSchema } from '@shared/schemas/family';
 import type { GoogleEvent } from '@shared/schemas/google-calendar';
@@ -273,6 +274,11 @@ function mapEvent(
         : (() => {
             throw new TypeError('Google event mixes all-day and timed values');
           })();
+  const recurrence = classifyWeekRecurrence(
+    Boolean(googleEvent.recurringEventId),
+    googleEvent.originalStartTime ?? null,
+    googleEvent.start,
+  );
 
   return {
     id: googleEvent.id,
@@ -281,7 +287,7 @@ function mapEvent(
     memberIds,
     assigneeMemberId,
     status,
-    isRoutine: Boolean(googleEvent.recurringEventId),
+    ...recurrence,
     affectsAvailability,
     source,
     items: safeItems(meta?.itemsJson),

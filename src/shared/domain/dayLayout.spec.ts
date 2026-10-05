@@ -1,8 +1,24 @@
 import type { DateKey } from '@shared/schemas/date';
 import { describe, expect, it } from 'vitest';
 import { type DayLayoutEventInput, getDayLayout } from './dayLayout';
+import { classifyWeekRecurrence } from './weekRecurrence';
 
 describe('src/shared/domain/dayLayout', () => {
+  it('expands a weekday with a classified recurring exception', () => {
+    const exception = classifyWeekRecurrence(
+      true,
+      { dateTime: '2026-10-05T09:00:00+09:00' },
+      { dateTime: '2026-10-06T09:00:00+09:00' },
+    );
+
+    expect(
+      getDayLayout({
+        date: '2026-10-06' as DateKey,
+        events: [{ isRoutine: exception.isRoutine, status: 'confirmed' }],
+      }),
+    ).toBe('expanded');
+  });
+
   describe('weekend-card classification', () => {
     it('classifies Saturdays and Sundays as weekend-card', () => {
       // 2026-10-10 is Saturday, 2026-10-11 is Sunday
