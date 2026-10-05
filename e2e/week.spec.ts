@@ -54,6 +54,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: 'mem_adult_a',
             status: 'confirmed',
             isRoutine: true,
+            affectsAvailability: true,
             source: 'manual',
             items: [],
           },
@@ -69,6 +70,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: 'mem_adult_b',
             status: 'tentative',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'manual',
             items: ['水筒', '敷物'],
           },
@@ -84,6 +86,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'publish',
             items: [],
           },
@@ -99,6 +102,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'import',
             items: ['申込書'],
           },
@@ -114,6 +118,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: true,
+            affectsAvailability: true,
             source: 'manual',
             items: [],
           },
@@ -129,6 +134,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'external',
             items: [],
           },
@@ -144,6 +150,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'manual',
             items: [],
           },
@@ -159,6 +166,7 @@ function buildWeek(anchor: DateKey): WeekResponse {
             assigneeMemberId: null,
             status: 'confirmed',
             isRoutine: false,
+            affectsAvailability: true,
             source: 'manual',
             items: [],
           },
@@ -536,7 +544,7 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('22:00–10/11 00:00')).toBeVisible();
     await expect(navigation.getByRole('link', { name: /やること/ })).toBeVisible();
     const preparingCaptions = navigation.getByText('準備中', { exact: true });
-    await expect(preparingCaptions).toHaveCount(3);
+    await expect(preparingCaptions).toHaveCount(2);
     for (const caption of await preparingCaptions.all()) {
       const box = await caption.boundingBox();
       expect(box).not.toBeNull();
@@ -971,16 +979,26 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('朝の支度')).toHaveCount(0);
   });
 
-  test('unimplemented tabs open preparation screens from the actual tab bar', async ({ page }) => {
+  test('routine tab opens its feature and other unfinished tabs still show preparation screens', async ({
+    page,
+  }) => {
     await mockWeekApis(page);
+    await page.route('**/api/families/fam_synthetic/routines', async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ routines: [] }),
+      }),
+    );
     await page.goto('/?week=2026-10-05');
     await page.setViewportSize({ width: 445, height: 844 });
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole('link', { name: /繰り返し/ }).click();
     await expect(page).toHaveURL(/\/routines$/);
+    await expect(page.locator('[data-testid="routines-screen"]')).toBeVisible();
     await expect(page.getByRole('heading', { name: '繰り返し予定' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });

@@ -10,6 +10,7 @@ import {
   families,
   googleTokens,
   members,
+  routineSettings,
   sessions,
   users,
 } from '@worker/db/schema';
@@ -198,6 +199,7 @@ describe('Task 1-6: family week API', () => {
     tokenErrorResponse = null;
     calendarRequests = [];
     await db.delete(eventMeta);
+    await db.delete(routineSettings);
     await db.delete(closureDays);
     await db.delete(members);
     await db.delete(families);
@@ -241,6 +243,7 @@ describe('Task 1-6: family week API', () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     await db.delete(eventMeta);
+    await db.delete(routineSettings);
     await db.delete(closureDays);
     await db.delete(members);
     await db.delete(families);
@@ -360,6 +363,7 @@ describe('Task 1-6: family week API', () => {
         assigneeMemberId: null,
         status: 'confirmed',
         isRoutine: false,
+        affectsAvailability: true,
         source: 'manual',
         items: ['水筒'],
       },
@@ -664,6 +668,49 @@ describe('Task 1-6: family week API', () => {
     expect(body.events.map((event) => event.id).sort()).toEqual(['event_page_1', 'event_page_2']);
     expect(calendarRequests).toHaveLength(2);
     expect(new URL(calendarRequests[1]?.url ?? '').searchParams.get('pageToken')).toBe('page-2');
+  });
+
+  it('marks only configured recurring instances as excluded from availability', async () => {
+    const fixture = await seedFamily();
+    await db.insert(routineSettings).values({
+      id: 'routine_setting_week_test',
+      familyId: fixture.familyId,
+      calendarId: fixture.calendarId ?? '',
+      recurringEventId: 'routine_master_week_test',
+      category: 'lesson',
+      affectsAvailability: false,
+    });
+    calendarResponder = () =>
+      Response.json({
+        items: [
+          {
+            id: 'routine_instance_week_test',
+            recurringEventId: 'routine_master_week_test',
+            summary: 'ピアノ',
+            start: { dateTime: '2026-10-06T17:00:00+09:00' },
+            end: { dateTime: '2026-10-06T18:00:00+09:00' },
+          },
+          {
+            id: 'other_instance_week_test',
+            recurringEventId: 'unconfigured_master_week_test',
+            summary: 'その他',
+            start: { dateTime: '2026-10-06T18:00:00+09:00' },
+            end: { dateTime: '2026-10-06T19:00:00+09:00' },
+          },
+        ],
+      });
+    const response = await requestWeek(
+      `/api/families/${fixture.familyId}/week?start=2026-10-05`,
+      fixture.cookie,
+    );
+    expect(response.status).toBe(200);
+    const body = weekResponseSchema.parse(await response.json());
+    expect(
+      body.events.find((event) => event.id === 'routine_instance_week_test')?.affectsAvailability,
+    ).toBe(false);
+    expect(
+      body.events.find((event) => event.id === 'other_instance_week_test')?.affectsAvailability,
+    ).toBe(true);
   });
 
   it('matches occurrence metadata by canonical start, prefers exact metadata, and tolerates corrupt metadata', async () => {

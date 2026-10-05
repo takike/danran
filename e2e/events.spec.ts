@@ -32,6 +32,7 @@ const ONE_TIME_EVENT: WeekEvent = {
   assigneeMemberId: 'mem_adult_b',
   status: 'tentative',
   isRoutine: false,
+  affectsAvailability: true,
   source: 'manual',
   items: ['水筒'],
 };
@@ -162,6 +163,7 @@ async function mockEventApis(page: import('@playwright/test').Page) {
       assigneeMemberId: body.assigneeMemberId,
       status: body.status,
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: body.items,
     };
@@ -289,6 +291,7 @@ test.describe('Task 1-8: family event editing', () => {
         assigneeMemberId: body.assigneeMemberId,
         status: body.status,
         isRoutine: false,
+        affectsAvailability: true,
         source: 'manual',
         items: body.items,
       };

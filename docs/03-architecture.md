@@ -137,8 +137,11 @@ event_meta       id PK, family_id FK families CASCADE, calendar_id, event_id,
                  recurring_event_id NULL, original_start NULL, items_json TEXT NOT NULL DEFAULT '[]',
                  assignee_member_id NULL FK members SET NULL, status CHECK confirmed|tentative DEFAULT confirmed,
                  source CHECK manual|import|publish DEFAULT manual, import_job_id NULL (FKなし), updated_at DEFAULT unixepoch()
-routine_settings id, family_id, calendar_id, recurring_event_id, category(lesson|housework|other),
-                 skip_holidays(bool), skip_new_year(bool), affects_availability(bool), default_assignee_member_id
+routine_settings id PK, family_id FK families CASCADE, calendar_id, recurring_event_id,
+                 category CHECK lesson|housework|other, skip_holidays bool NOT NULL DEFAULT false,
+                 skip_new_year bool NOT NULL DEFAULT false, affects_availability bool NOT NULL DEFAULT true,
+                 default_assignee_member_id NULL FK members SET NULL,
+                 created_at, updated_at; UNIQUE(calendar_id, recurring_event_id), family_id index
 attachments      id, family_id, r2_key, content_type, width, height, created_by, created_at
 event_attachments event_meta_id, attachment_id
 import_jobs      id, family_id, attachment_id, status(pending|extracted|failed|committed),
@@ -195,6 +198,9 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 ### 繰り返し予定
 
 - 習い事・家事代行は、家族カレンダー上の **Google の繰り返しイベント（RRULE）** として作る。独自の繰り返しエンジンは作らない。
+- `routine_settings` は繰り返しシリーズに固有のカテゴリ、スキップ設定、空き判定フラグ、既定の担当だけを持つ。タイトル・曜日・時刻・対象メンバーは Google Calendar の recurring master と private extended properties を正本とする。
+- Task 3-1 の繰り返し作成は時刻指定のみで、最初の回を開始日以降の選択曜日へ合わせる。作成時のイベント状態は常に確定とする。`affects_availability = false` のシリーズ回も週 API では通常どおり表示するが、共通空き計算から除く。
+- 週 API の `WeekEvent.affectsAvailability` は必須の真偽値。ルーティン回で対応する `routine_settings.affects_availability` が false の場合だけ false を返し、それ以外は true。
 - 「この回だけ休む」は、その回の `status: cancelled`。「振替」は、その回の開始日時を変更する（`events.instances` → `patch`）。
 - 「祝日は休み」：Google の RRULE は日本の祝日を知らないので、**Cron（月1）で今後6か月分の祝日・休園日に当たる回をキャンセル**する。設定をオフにしたら元に戻す。適用済みの回は D1 に記録しておく。
 - 「年末年始は休み」も同じ仕組み（12/29〜1/3 を既定値に、家族ごとに変更可）。

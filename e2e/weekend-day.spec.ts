@@ -138,7 +138,9 @@ function event(
   start: string,
   endExclusive: string,
   memberIds: string[],
-  options: Partial<Pick<WeekEvent, 'assigneeMemberId' | 'status' | 'isRoutine' | 'items'>> = {},
+  options: Partial<
+    Pick<WeekEvent, 'assigneeMemberId' | 'status' | 'isRoutine' | 'items' | 'affectsAvailability'>
+  > = {},
 ): WeekEvent {
   return {
     id,
@@ -148,6 +150,7 @@ function event(
     assigneeMemberId: options.assigneeMemberId ?? null,
     status: options.status ?? 'confirmed',
     isRoutine: options.isRoutine ?? false,
+    affectsAvailability: options.affectsAvailability ?? true,
     source: 'manual',
     items: options.items ?? [],
   };
@@ -232,6 +235,14 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       { isRoutine: true },
     ),
     event(
+      'evt-nonblocking-routine',
+      '空き判定しない家事代行',
+      `${date}T19:00:00+09:00`,
+      `${date}T20:00:00+09:00`,
+      [ADULT_B],
+      { isRoutine: true, affectsAvailability: false },
+    ),
+    event(
       'evt-all-span-only',
       '家族全員で見る予定',
       `${date}T18:00:00+09:00`,
@@ -271,6 +282,7 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: [],
     },
@@ -588,6 +600,7 @@ async function mockDayApis(page: Page, options: MockOptions = {}): Promise<DayAp
       assigneeMemberId: input.assigneeMemberId,
       status: input.status,
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: input.items,
     };
@@ -958,6 +971,10 @@ test.describe('Task 2-6: weekend day detail', () => {
       'aria-label',
       /繰り返し予定/,
     );
+    await expect(
+      page.getByTestId(`weekend-day-event-evt-nonblocking-routine-${ADULT_B}`),
+    ).toHaveAttribute('aria-label', /繰り返し予定/);
+    await expect(page.getByText('みんな空き 18:30–20:00', { exact: true })).toBeVisible();
     const overlapPiano = page.getByTestId(`weekend-day-event-evt-overlap-piano-${ADULT_A}`);
     const overlapTitle = overlapPiano.getByTestId('weekend-day-event-title-evt-overlap-piano');
     await expect(overlapPiano).toHaveAttribute('aria-label', /重なる送迎予定.*09:30–10:30/);

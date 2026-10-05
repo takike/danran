@@ -15,7 +15,7 @@ import { getTodayDateKey, getWeekRange, toTokyoIsoString } from '@shared/time';
 import { getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
-import { eventMeta, families, members } from '@worker/db/schema';
+import { eventMeta, families, members, routineSettings } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import { GoogleCalendarError, createGoogleCalendarClient } from '@worker/google/calendar';
 import { ReauthNeededError } from '@worker/google/oauth';
@@ -26,6 +26,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 const PAGE_SIZE = 2500;
 const MAX_EVENT_PAGES = 10;
 const EVENT_META_ID_CHUNK_SIZE = 49;
+const ROUTINE_ID_CHUNK_SIZE = 80;
 
 type WeekContext = Context<{ Bindings: WorkerEnv }>;
 type WeekStatusCode = 400 | 401 | 403 | 404 | 409 | 500 | 502 | 503;
@@ -226,6 +227,7 @@ function mapEvent(
   googleEvent: GoogleEvent,
   metadataIndex: MetadataIndex,
   activeMemberIds: ReadonlySet<string>,
+  affectsAvailability = true,
 ): WeekEvent {
   if (!googleEvent.start || !googleEvent.end) {
     throw new TypeError('Google event is missing a time range');
@@ -280,6 +282,7 @@ function mapEvent(
     assigneeMemberId,
     status,
     isRoutine: Boolean(googleEvent.recurringEventId),
+    affectsAvailability,
     source,
     items: safeItems(meta?.itemsJson),
   };
@@ -393,6 +396,7 @@ async function handleFamilyWeek(c: WeekContext) {
   const activeMemberIds = new Set(activeMembers.map((member) => member.id));
 
   let metaRows: (typeof eventMeta.$inferSelect)[];
+  const unavailableRoutineIds = new Set<string>();
   try {
     const eligibleEvents = fetchedEvents.filter(
       (event) =>
@@ -404,6 +408,28 @@ async function handleFamilyWeek(c: WeekContext) {
       family.familyCalendarId,
       eligibleEvents,
     );
+    const routineIds = [
+      ...new Set(
+        eligibleEvents
+          .map((event) => event.recurringEventId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    for (let offset = 0; offset < routineIds.length; offset += ROUTINE_ID_CHUNK_SIZE) {
+      const chunk = routineIds.slice(offset, offset + ROUTINE_ID_CHUNK_SIZE);
+      const settings = await db
+        .select({ recurringEventId: routineSettings.recurringEventId })
+        .from(routineSettings)
+        .where(
+          and(
+            eq(routineSettings.familyId, familyId),
+            eq(routineSettings.calendarId, family.familyCalendarId),
+            eq(routineSettings.affectsAvailability, false),
+            inArray(routineSettings.recurringEventId, chunk),
+          ),
+        );
+      for (const setting of settings) unavailableRoutineIds.add(setting.recurringEventId);
+    }
   } catch {
     return errorResponse(c, 500, 'INTERNAL_ERROR');
   }
@@ -416,7 +442,14 @@ async function handleFamilyWeek(c: WeekContext) {
       if (googleEvent.status === 'cancelled' || seenEventIds.has(googleEvent.id)) continue;
       if (!eventIsInRange(googleEvent, range.timeMin, range.timeMax)) continue;
       seenEventIds.add(googleEvent.id);
-      events.push(mapEvent(googleEvent, metadataIndex, activeMemberIds));
+      events.push(
+        mapEvent(
+          googleEvent,
+          metadataIndex,
+          activeMemberIds,
+          !googleEvent.recurringEventId || !unavailableRoutineIds.has(googleEvent.recurringEventId),
+        ),
+      );
     }
   } catch {
     return errorResponse(c, 502, 'GOOGLE_ERROR');

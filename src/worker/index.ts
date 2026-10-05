@@ -6,6 +6,7 @@ import { eventsRoute } from '@worker/routes/events';
 import { familiesRoute, invitesRoute } from '@worker/routes/families';
 import { healthRoute } from '@worker/routes/health';
 import { personalRoute } from '@worker/routes/personal';
+import { routinesRoute } from '@worker/routes/routines';
 import { settingsRoute } from '@worker/routes/settings';
 import { weekBusyRoute } from '@worker/routes/week-busy';
 import { Hono } from 'hono';
@@ -22,6 +23,7 @@ export function createApp() {
   application.route('/api', authRoute);
   application.route('/api/families', familiesRoute);
   application.route('/api/families', eventsRoute);
+  application.route('/api/families', routinesRoute);
   application.route('/api/families', settingsRoute);
   application.route('/api/families', personalRoute);
   application.route('/api/families', busyRoute);

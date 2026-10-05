@@ -100,6 +100,7 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: [],
     },
@@ -115,6 +116,23 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: true,
+      affectsAvailability: true,
+      source: 'manual',
+      items: [],
+    },
+    {
+      id: 'evt-routine-not-in-free-time',
+      title: '空き判定しない家事代行',
+      time: {
+        kind: 'timed',
+        start: `${saturday}T18:00:00+09:00`,
+        endExclusive: `${saturday}T19:00:00+09:00`,
+      },
+      memberIds: [ADULT_B],
+      assigneeMemberId: null,
+      status: 'confirmed',
+      isRoutine: true,
+      affectsAvailability: false,
       source: 'manual',
       items: [],
     },
@@ -130,6 +148,7 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
       assigneeMemberId: null,
       status: 'confirmed',
       isRoutine: false,
+      affectsAvailability: true,
       source: 'manual',
       items: [],
     },
@@ -447,6 +466,7 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     await expect(page.getByText('みんな空き 8時間', { exact: true })).toBeVisible();
     await expect(page.getByText('みんな空きなし', { exact: true })).toHaveCount(0);
     await expect(page.getByText('朝のルーティン', { exact: true })).toBeVisible();
+    await expect(page.getByText('空き判定しない家事代行', { exact: true })).toBeVisible();
     await expect(page.getByText('家族の合成予定', { exact: true })).toBeVisible();
     await expect(page.getByText('本人だけの合成予定', { exact: true })).toBeVisible();
 

@@ -16,6 +16,7 @@ function familyEvent(id: string, title: string, time: WeekEvent['time']): WeekEv
     assigneeMemberId: null,
     status: 'confirmed',
     isRoutine: false,
+    affectsAvailability: true,
     source: 'manual',
     items: [],
   });

@@ -286,3 +286,38 @@ export const eventMeta = sqliteTable(
 
 export type EventMetaRecord = typeof eventMeta.$inferSelect;
 export type NewEventMetaRecord = typeof eventMeta.$inferInsert;
+
+/** App-specific settings keyed to a recurring master event on a family calendar. */
+export const routineSettings = sqliteTable(
+  'routine_settings',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id')
+      .notNull()
+      .references(() => families.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    recurringEventId: text('recurring_event_id').notNull(),
+    category: text('category', { enum: ['lesson', 'housework', 'other'] }).notNull(),
+    skipHolidays: integer('skip_holidays', { mode: 'boolean' }).notNull().default(false),
+    skipNewYear: integer('skip_new_year', { mode: 'boolean' }).notNull().default(false),
+    affectsAvailability: integer('affects_availability', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    defaultAssigneeMemberId: text('default_assignee_member_id').references(() => members.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('routine_settings_family_id_idx').on(table.familyId),
+    uniqueIndex('routine_settings_calendar_recurring_event_unique').on(
+      table.calendarId,
+      table.recurringEventId,
+    ),
+    check('routine_settings_category_check', sql`category IN ('lesson', 'housework', 'other')`),
+  ],
+);
+
+export type RoutineSetting = typeof routineSettings.$inferSelect;
+export type NewRoutineSetting = typeof routineSettings.$inferInsert;
