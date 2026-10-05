@@ -1,6 +1,6 @@
-# 20. 繰り返し予定（Task 3-1）
+# 20. 繰り返し予定（Task 3-1、3-2）
 
-Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。週 API は各回をルーティンとして返す。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
+Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。Task 3-2 では、直近4回を表示し、個別の回を休止・振替・復元する。週 API は各回をルーティンとして返す。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
 
 ## API
 
@@ -11,6 +11,19 @@ Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返�
 | `POST /api/families/:id/routines` | 繰り返し予定を作成 | `{ "routineId": "...", "eventId": "..." }` |
 | `GET /api/families/:id/routines` | 設定と Google の繰り返し予定本体を合わせて一覧 | `{ "routines": [...] }` |
 | `DELETE /api/families/:id/routines/:routineId` | シリーズ全体を削除 | `{ "ok": true }` |
+| `POST /api/families/:id/routines/:routineId/instances/:instanceId/skip` | その回だけ休みにする | `{ "instance": ... }` |
+| `POST /api/families/:id/routines/:routineId/instances/:instanceId/restore` | 休み・振替を元の日時へ戻す | `{ "instance": ... }` |
+| `POST /api/families/:id/routines/:routineId/instances/:instanceId/move` | その回を別日時へ振り替える | `{ "instance": ... }` |
+
+一覧の各 `ready` 項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。取得できないシリーズだけ `unavailable` となり、一覧全体の取得は続ける。`missing` / `unsupported` の項目は空の `ready` とする。
+
+Google [`events.instances`](https://developers.google.com/workspace/calendar/api/v3/reference/events/instances) の `timeMin` は実際の回の終了時刻を対象にするため、`timeMin=now` を使うと、元は今後の回でも過去へ振り替えたものが取得結果から外れる。このため Google からは JST の今日の31日前 00:00 から今日の120日後 00:00 までを取得する（`timeMax` の境界は含まない）。取得した回は元の開始日が今日以降のものに絞ってから、元の日時順に4件を選ぶ。繰り返し予定の RRULE は変更せず、Google の `orderBy` も使わない。取得範囲外、つまり今日の31日前より前に終了する回や、今日の120日後 00:00 以降に始まる回は候補に含まれない。このため、元の予定日が今日以降でも、過去へ大きく振り替えて実際の終了が範囲より前になった回は表示されない。各シリーズの取得は最大4ページ（1ページ最大250件）とし、シリーズの並列数は4件までに制限する。4ページ以内に取得が終わらない場合はそのシリーズだけ `unavailable` とし、部分的な結果を返さない。
+
+各 instance は `id`, `originalStart`, `originalEnd`, `start`, `end`, `status` を持つ。日時は Asia/Tokyo の RFC3339（`+09:00`）。`start` / `end` は Google が示す実際の日時で、休みの回は `null`。状態は Google の `cancelled` を `skipped`、実際の日時または長さが元と異なる回を `moved`、それ以外を `normal` として返す。直近4回の選択は実際の日時ではなく元の開始日時順に行うため、振替後もシリーズ内の元の位置に表示される。
+
+回の変更要求では `routineId` と Google の instance ID の両方を検証する。instance の `recurringEventId` が指定シリーズと一致し、家族カレンダー上にあることを確認するため、別の家族・別シリーズ・単発予定の ID は変更できない。`skip` と `restore` の本文は空の JSON object `{}`。`move` は `{ "date": "YYYY-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm" }` で、同じ日の時刻指定とし、日付は1970〜2050年。過去日も記録用に指定できる。時刻は開始より後でなければならない。
+
+Google `events.patch` では `sendUpdates=none` を使い、開始・終了に `dateTime` と `timeZone: "Asia/Tokyo"` を送り、同じオブジェクトの `date` は `null` にする。振替の取消しは、休止前・振替前を問わず、回を `confirmed` にして元の開始・終了へ戻す。`extendedProperties.private` にある対象メンバーや担当者は維持する。同じ操作の再送は同じ状態に収束する。
 
 作成 JSON は `title`, `weekdays`, `interval`, `startDate`, `startTime`, `endTime`, `endDate`, `memberIds`, `assigneeMemberId`, `category`, `affectsAvailability`, `clientRequestId` を含む。曜日コードは `MO`〜`SU`、間隔は `1`（毎週）または `2`（隔週）。`endDate` と `assigneeMemberId` は `null` を指定でき、対象メンバーを空配列にすると家族全員対象。カテゴリは `lesson` / `housework` / `other`。
 
@@ -53,9 +66,11 @@ D1 の `routine_settings` は `id`, `family_id`, `calendar_id`, `recurring_event
 
 ## 画面範囲
 
-`/routines` は一覧、追加フォーム、画面内の削除確認を提供する。フォームは曜日を複数選択でき、未保存の入力がある間は PWA 更新を保留する。保存失敗時は入力を残して案内を表示する。週画面の予定カードから繰り返し予定の編集・削除は行わず、編集は「準備中」と案内する。
+`/routines` は一覧、追加フォーム、画面内の削除確認に加え、各カードに直近4回の日付チップを表示する。休みは取り消し線と「お休み」、振替は元の日付・時刻と振替先を示す。チップを押すとカード内に操作が開き、通常回は休止・振替、休みは復元・振替、振替は元に戻す・振替先変更を選べる。振替入力を開いている間は PWA 更新を保留する。操作中は同じカードの操作を無効にし、失敗時は固定の案内を表示して変更前の表示を保つ。週クエリを無効化し、週ビューと S2 のデータを再取得する。
 
-このタスクではカテゴリフィルタ、直近4回、祝日・年末年始・休園日のスキップ、重複検出、回ごとの休止・振替、シリーズ内容の編集を扱わない。
+週ビューまたは S2 で繰り返し予定を選ぶと、「この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。」と「繰り返し」タブへのリンクを表示する。シリーズ全体の変更は引き続き S4 から行う。
+
+このタスクではカテゴリフィルタ、祝日・年末年始・休園日の自動スキップ、重複検出、シリーズ内容の編集を扱わない。
 
 ## staging 確認
 
@@ -67,5 +82,8 @@ D1 の `routine_settings` は `id`, `family_id`, `calendar_id`, `recurring_event
 4. `affectsAvailability` をオフにした予定が週ビューと S2 に表示され、週末カードと S2 の共通空き計算を狭めないことを確認する。
 5. 一覧でシリーズ削除を選び、確認後に週ビューからも予定が消えることを確認する。
 6. 予定を Google Calendar 側で削除した後、Danran の一覧で `missing` として残ることを確認する。
+7. 毎週のシリーズで次の4回が元の日付順に表示されることを確認し、1回を休みにして Google Calendar でその回だけがキャンセル表示になることを確認する。Danran から休みを取り消し、元の日時に戻ることを確認する。
+8. 別の回を未来または過去の日付へ振り替え、Google Calendar でその回だけの日時が変わることを確認する。振替を取り消し、元の日時に戻ることを確認する。振替前後も private extended properties の対象・担当が維持されることを確認する。
+9. Google 側で回の更新権限がない場合は、Danran に固定のエラー案内が出て表示が更新されないことを確認する。
 
-ローカルの Playwright API モックでは合成データを使う。実アカウントの staging 確認を自動テストの結果として扱わない。
+ローカルの Playwright API モックでは合成データを使う。Task 3-2 の Google Calendar 実アカウント staging 確認は人間による確認が必要であり、自動テストの結果として扱わない。Task 3-1 の staging 手順も人間による確認項目として残る。

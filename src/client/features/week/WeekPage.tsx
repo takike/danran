@@ -1340,7 +1340,14 @@ export default function WeekPage({
               data-testid="routine-event-notice"
               className="mt-[var(--spacing-md)] block rounded-[var(--radius-md)] border border-line bg-surface p-[var(--spacing-sm)] text-sm text-muted"
             >
-              繰り返し予定の変更は準備中です。
+              この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。{' '}
+              <Link
+                to="/routines"
+                data-testid="routine-event-routines-link"
+                className="inline-flex min-h-[var(--tap-target-min)] items-center rounded-[var(--radius-sm)] px-[var(--spacing-xs)] font-semibold text-ink underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                繰り返しタブを開く
+              </Link>
             </output>
           )}
           <p className="mt-[var(--spacing-md)] min-w-0 max-w-full break-words text-center text-xs text-muted [overflow-wrap:anywhere]">

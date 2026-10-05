@@ -1591,7 +1591,12 @@ test.describe('Task 2-6: weekend day detail', () => {
 
     await page.getByTestId(`weekend-day-event-evt-routine-${ADULT_B}`).click();
     await expect(page.getByTestId('weekend-day-routine-notice')).toContainText(
-      '繰り返し予定の変更は準備中',
+      'この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。',
+    );
+    await expect(page.getByTestId('weekend-day-routines-link')).toHaveText('繰り返しタブを開く');
+    await expect(page.getByTestId('weekend-day-routines-link')).toHaveAttribute(
+      'href',
+      '/routines',
     );
 
     await page.getByTestId('weekend-day-event-evt-all-members-all').click();

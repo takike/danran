@@ -734,7 +734,12 @@ test.describe('Task 1-8: family event editing', () => {
     await dialog.getByRole('button', { name: 'キャンセル' }).click();
     await page.getByTestId('edit-event-evt_routine').click();
     await expect(page.getByTestId('routine-event-notice')).toContainText(
-      '繰り返し予定の変更は準備中です。',
+      'この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。',
+    );
+    await expect(page.getByTestId('routine-event-routines-link')).toHaveText('繰り返しタブを開く');
+    await expect(page.getByTestId('routine-event-routines-link')).toHaveAttribute(
+      'href',
+      '/routines',
     );
     await expect(page.getByTestId('event-dialog')).toHaveCount(0);
   });

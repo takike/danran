@@ -45,7 +45,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/17-settings.md](docs/17-settings.md) | メンバー設定・休園日 API、権限、制限と staging 確認手順 |
 | [docs/18-personal-events.md](docs/18-personal-events.md) | 本人だけに表示する個人予定 API・段階的認可・プライバシー保証 |
 | [docs/19-busy-sharing.md](docs/19-busy-sharing.md) | free/busy 用カレンダー選択、家族 busy 週 API・プライバシー保証・staging 手順 |
-| [docs/20-routines.md](docs/20-routines.md) | 繰り返し予定の作成・一覧・削除 API、Google Calendar との対応、再試行、staging 手順 |
+| [docs/20-routines.md](docs/20-routines.md) | 繰り返し予定と個別の回の作成・一覧・変更 API、Google Calendar との対応、再試行、staging 手順 |
 
 ## 前提条件
 
@@ -143,4 +143,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 2-5（週末カードの空きタイムライン）**: S1 の週末・祝日カードにメンバー別 busy と共通空きのタイムラインを表示。API モック E2E と合成データの390px スクリーンショット（`docs/screenshots/s1-week-view.png`）を整備。実 Google アカウントによる staging 表示確認は未実施です。
   - **タスク 2-6（S2 週末の1日）**: `/day/YYYY-MM-DD` にメンバー別の1日タイムラインと共通空きからの予定作成を追加。詳細は [docs/02-screens.md](docs/02-screens.md#s2-週末の1日) と [docs/19-busy-sharing.md](docs/19-busy-sharing.md) を参照。API モック E2E と合成データの390pxスクリーンショット（`docs/screenshots/s2-weekend-day.png`、`docs/screenshots/s1-week-view.png`）を整備。実 Google アカウントによる staging 表示確認は人間による確認待ちです。
 - Phase 3：繰り返し予定：
-  - **タスク 3-1（作成・最小一覧・シリーズ削除）**: 毎週・隔週の時刻指定予定を Google Calendar の RRULE で作り、対象・担当・カテゴリ・空き判定設定を保存します。`/routines` で一覧、作成、シリーズ全体の削除ができます。仕様と staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。実 Google アカウントによる staging 確認は人間による確認待ちです。
+  - **タスク 3-1（作成・最小一覧・シリーズ削除）**: 毎週・隔週の時刻指定予定を Google Calendar の RRULE で作り、対象・担当・カテゴリ・空き判定設定を保存します。`/routines` で一覧、作成、シリーズ全体の削除ができます。実 Google アカウントによる staging 確認は人間による確認待ちです。
+  - **タスク 3-2（回ごとの休み・振替）**: `/routines` に元の予定日順の直近4回を表示し、回ごとの休み・振替と取消しを行います。週ビューと S2 から繰り返しタブへ案内します。API・staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。ローカル E2E は API モックと合成データを使い、実 Google アカウントでの staging 確認は人間による実施待ちです。

@@ -5,9 +5,12 @@ import { OAuthNotices } from '@client/components/OAuthNotices';
 import { useLogoutMutation, useSessionQuery } from '@client/features/auth/useSession';
 import { useFamiliesQuery } from '@client/features/onboarding/useFamily';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
+import { RoutineInstances } from '@client/features/routines/RoutineInstances';
 import { formatRoutineRule } from '@shared/domain/routines';
 import {
+  type Routine,
   type RoutineInput,
+  type RoutineInstance,
   type WeekdayCode,
   createRoutineInputSchema,
 } from '@shared/schemas/routines';
@@ -567,6 +570,8 @@ export default function RoutinesPage(): React.ReactElement {
   const [isDeleting, setIsDeleting] = useState(false);
   const deletePendingRef = useRef<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [busyRoutineIds, setBusyRoutineIds] = useState<Set<string>>(() => new Set());
+  const busyRoutineIdsRef = useRef(new Set<string>());
   const [loginNavigating, setLoginNavigating] = useState(false);
   const loginNavigationRef = useRef(false);
   useEffect(() => {
@@ -586,6 +591,8 @@ export default function RoutinesPage(): React.ReactElement {
     setIsDeleting(false);
     setDeleteError('');
     deletePendingRef.current = null;
+    busyRoutineIdsRef.current = new Set();
+    setBusyRoutineIds(new Set());
   }, [currentIdentity]);
   const openRoutineDialog = () => {
     setDialogEverOpened(true);
@@ -607,7 +614,13 @@ export default function RoutinesPage(): React.ReactElement {
     if (unauthorizedError) onUnauthorized();
   }, [familiesQuery.error, onUnauthorized, routinesQuery.error]);
   const handleDelete = async (routineId: string) => {
-    if (!family || !user || deletePendingRef.current !== null) return;
+    if (
+      !family ||
+      !user ||
+      deletePendingRef.current !== null ||
+      busyRoutineIdsRef.current.has(routineId)
+    )
+      return;
     const mutationIdentity = `${user.id}:${family.id}`;
     deletePendingRef.current = mutationIdentity;
     setIsDeleting(true);
@@ -842,6 +855,52 @@ export default function RoutinesPage(): React.ReactElement {
                     家族の空き判定には影響しない
                   </p>
                 )}
+                {routine.status === 'ready' && (
+                  <RoutineInstances
+                    key={`${user.id}:${family.id}:${routine.id}`}
+                    familyId={family.id}
+                    userId={user.id}
+                    routineId={routine.id}
+                    upcoming={routine.upcoming}
+                    isSeriesDeleting={isDeleting}
+                    isIdentityCurrent={() => identityRef.current === currentIdentity}
+                    onUnauthorized={onUnauthorized}
+                    onPendingChange={(pending) => {
+                      const next = new Set(busyRoutineIdsRef.current);
+                      if (pending) next.add(routine.id);
+                      else next.delete(routine.id);
+                      busyRoutineIdsRef.current = next;
+                      setBusyRoutineIds(next);
+                    }}
+                    onChanged={(instance: RoutineInstance) => {
+                      const queryKey = [...ROUTINE_QUERY_KEY, user.id, family.id] as const;
+                      queryClient.setQueryData<{ routines: Routine[] }>(queryKey, (current) => {
+                        if (!current) return current;
+                        return {
+                          ...current,
+                          routines: current.routines.map((item) => {
+                            if (item.id !== routine.id || item.upcoming.status !== 'ready')
+                              return item;
+                            const hasInstance = item.upcoming.instances.some(
+                              (row) => row.id === instance.id,
+                            );
+                            return {
+                              ...item,
+                              upcoming: {
+                                status: 'ready' as const,
+                                instances: hasInstance
+                                  ? item.upcoming.instances.map((row) =>
+                                      row.id === instance.id ? instance : row,
+                                    )
+                                  : [...item.upcoming.instances, instance],
+                              },
+                            };
+                          }),
+                        };
+                      });
+                    }}
+                  />
+                )}
                 {routine.status === 'missing' && (
                   <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-accent">
                     Google カレンダーで見つかりません。予定を削除して登録し直してください。
@@ -867,7 +926,7 @@ export default function RoutinesPage(): React.ReactElement {
                       <button
                         type="button"
                         data-testid={`routine-delete-confirm-${routine.id}`}
-                        disabled={isDeleting}
+                        disabled={isDeleting || busyRoutineIds.has(routine.id)}
                         onClick={() => void handleDelete(routine.id)}
                         className={`${buttonClass} flex-1 bg-accent text-surface`}
                       >
@@ -876,7 +935,7 @@ export default function RoutinesPage(): React.ReactElement {
                       <button
                         type="button"
                         data-testid={`routine-delete-cancel-${routine.id}`}
-                        disabled={isDeleting}
+                        disabled={isDeleting || busyRoutineIds.has(routine.id)}
                         onClick={() => {
                           setDeletingId(null);
                           setDeleteError('');
@@ -891,7 +950,7 @@ export default function RoutinesPage(): React.ReactElement {
                   <button
                     type="button"
                     data-testid={`routine-delete-${routine.id}`}
-                    disabled={isDeleting}
+                    disabled={isDeleting || busyRoutineIds.has(routine.id)}
                     onClick={() => {
                       setDeletingId(routine.id);
                       setDeleteError('');

@@ -1,5 +1,6 @@
+import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { z } from 'zod';
-import { dateKeySchema } from './date';
+import { dateKeySchema, isoInstantStringSchema } from './date';
 
 export const weekdayCodeSchema = z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']);
 export type WeekdayCode = z.infer<typeof weekdayCodeSchema>;
@@ -7,6 +8,120 @@ export type WeekdayCode = z.infer<typeof weekdayCodeSchema>;
 export const routineCategorySchema = z.enum(['lesson', 'housework', 'other']);
 export const routineIntervalSchema = z.union([z.literal(1), z.literal(2)]);
 const clockTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+
+export const routineInstanceStatusSchema = z.enum(['normal', 'skipped', 'moved']);
+export type RoutineInstanceStatus = z.infer<typeof routineInstanceStatusSchema>;
+export const routineInstanceSchema = z
+  .object({
+    id: z.string().min(1),
+    originalStart: isoInstantStringSchema,
+    originalEnd: isoInstantStringSchema,
+    start: isoInstantStringSchema.nullable(),
+    end: isoInstantStringSchema.nullable(),
+    status: routineInstanceStatusSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const timestamps = [value.originalStart, value.originalEnd, value.start, value.end].filter(
+      (timestamp): timestamp is string => timestamp !== null,
+    );
+    if (timestamps.some((timestamp) => !isoInstantStringSchema.safeParse(timestamp).success))
+      return;
+    if (
+      parseIsoInstantMilliseconds(value.originalStart) >=
+      parseIsoInstantMilliseconds(value.originalEnd)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['originalEnd'],
+        message: 'End must follow start',
+      });
+    }
+    if (value.status === 'skipped') {
+      if (value.start !== null || value.end !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['start'],
+          message: 'Skipped instances have no actual times',
+        });
+      }
+      return;
+    }
+    if (value.start === null || value.end === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['start'],
+        message: 'Active instances need actual times',
+      });
+      return;
+    }
+    const originalStart = parseIsoInstantMilliseconds(value.originalStart);
+    const originalEnd = parseIsoInstantMilliseconds(value.originalEnd);
+    const start = parseIsoInstantMilliseconds(value.start);
+    const end = parseIsoInstantMilliseconds(value.end);
+    if (start >= end) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['end'],
+        message: 'End must follow start',
+      });
+    }
+    if (value.status === 'normal' && (start !== originalStart || end !== originalEnd)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['status'],
+        message: 'Normal instances keep original times',
+      });
+    }
+    if (value.status === 'moved' && start === originalStart && end === originalEnd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['status'],
+        message: 'Moved instances change their times',
+      });
+    }
+  });
+export type RoutineInstance = z.infer<typeof routineInstanceSchema>;
+
+export const routineUpcomingSchema = z
+  .object({
+    status: z.enum(['ready', 'unavailable']),
+    instances: z.array(routineInstanceSchema).max(4),
+  })
+  .strict();
+export type RoutineUpcoming = z.infer<typeof routineUpcomingSchema>;
+
+const routineMoveInputSchema = z
+  .object({
+    date: dateKeySchema,
+    startTime: clockTimeSchema,
+    endTime: clockTimeSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const year = Number(value.date.slice(0, 4));
+    if (year < 1970 || year > 2050) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['date'],
+        message: 'Move date must be between 1970 and 2050',
+      });
+    }
+    if (value.endTime <= value.startTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endTime'],
+        message: 'End must follow start',
+      });
+    }
+  });
+export { routineMoveInputSchema };
+export type RoutineMoveInput = z.infer<typeof routineMoveInputSchema>;
+
+export const routineInstanceMutationResponseSchema = z
+  .object({ instance: routineInstanceSchema })
+  .strict();
+export const routineInstanceActionInputSchema = z.object({}).strict();
 
 export const routineInputSchema = z
   .object({
@@ -79,6 +194,7 @@ export const routineSchema = z
     category: routineCategorySchema,
     affectsAvailability: z.boolean(),
     status: z.enum(['ready', 'missing', 'unsupported']),
+    upcoming: routineUpcomingSchema,
   })
   .strict();
 

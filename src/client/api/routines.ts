@@ -3,7 +3,9 @@ import {
   createRoutineInputSchema,
   routineDeleteResponseSchema,
   routineErrorResponseSchema,
+  routineInstanceMutationResponseSchema,
   routineListResponseSchema,
+  routineMoveInputSchema,
   routineMutationResponseSchema,
 } from '@shared/schemas/routines';
 
@@ -119,4 +121,52 @@ export function deleteRoutine(familyId: string, routineId: string, signal?: Abor
     routineDeleteResponseSchema,
     signal,
   );
+}
+
+export type RoutineInstanceAction = 'skip' | 'restore' | 'move';
+
+export async function updateRoutineInstance(
+  familyId: string,
+  routineId: string,
+  instanceId: string,
+  action: RoutineInstanceAction,
+  input?: unknown,
+  signal?: AbortSignal,
+) {
+  let requestBody: unknown = {};
+  if (action === 'move') {
+    const parsed = routineMoveInputSchema.safeParse(input);
+    if (!parsed.success) throw new RoutineApiError('入力内容を確認してください。', 'INVALID_INPUT');
+    requestBody = parsed.data;
+  }
+  const path = `/api/families/${encodeURIComponent(familyId)}/routines/${encodeURIComponent(routineId)}/instances/${encodeURIComponent(instanceId)}/${action}`;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: JSON.stringify(requestBody),
+      signal,
+    });
+  } catch (error: unknown) {
+    if (signal?.aborted) throw error;
+    throw new RoutineApiError('通信に失敗しました。接続を確認して、もう一度お試しください。');
+  }
+
+  if (!response.ok) throw await readError(response);
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new RoutineApiError('繰り返し予定の応答を確認できませんでした。');
+  }
+  const parsed = routineInstanceMutationResponseSchema.safeParse(json);
+  if (!parsed.success) throw new RoutineApiError('繰り返し予定の応答を確認できませんでした。');
+  return parsed.data;
 }
