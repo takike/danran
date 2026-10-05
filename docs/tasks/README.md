@@ -30,6 +30,6 @@
 | 13 | [3-1-routine-creation.md](3-1-routine-creation.md) | 繰り返し予定の作成（毎週・隔週。最小の一覧とシリーズ全体の削除を含む） | 完了（PR #27） |
 | 14 | [3-2-routine-instances.md](3-2-routine-instances.md) | 繰り返し予定の直近の回、「この回を休む」、「振替」 | 完了（PR #28。[3-2-review-fixes.md](3-2-review-fixes.md) 反映済み） |
 | 15 | [3-2-followup-move-save-button.md](3-2-followup-move-save-button.md) | 振替の「保存」ボタンが空白に見える問題の修正（実機確認の指摘） | 完了（PR #29） |
-| 16 | [3-5-routine-exceptions.md](3-5-routine-exceptions.md) | 振替した回を、週ビューで「いつもと違う日」として扱う（3-3 より先に実施） | 未着手 |
+| 16 | [3-5-routine-exceptions.md](3-5-routine-exceptions.md) | 振替した回を、週ビューで「いつもと違う日」として扱う（3-3 より先に実施） | 完了（PR #30）。実機確認待ち |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
