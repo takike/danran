@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 export const WEEK_QUERY_KEY = ['week'] as const;
 
 /** Loads a family week for the current user and lets TanStack Query cancel stale requests. */
-export function useWeekQuery(userId?: string, familyId?: string, start?: string) {
+export function useWeekQuery(userId?: string, familyId?: string, start?: string, enabled = true) {
   return useQuery<WeekResponse, Error>({
     queryKey: [...WEEK_QUERY_KEY, userId, familyId, start] as const,
     queryFn: ({ signal }) => {
@@ -14,7 +14,7 @@ export function useWeekQuery(userId?: string, familyId?: string, start?: string)
       }
       return fetchWeek(familyId, start, signal);
     },
-    enabled: Boolean(userId && familyId),
+    enabled: Boolean(enabled && userId && familyId),
     placeholderData: (previousData, previousQuery) => {
       const previousUserId = previousQuery?.queryKey[1];
       const previousFamilyId = previousQuery?.queryKey[2];

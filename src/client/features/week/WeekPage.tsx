@@ -616,6 +616,7 @@ function WeekendEvent({
 
 function WeekendDay({
   day,
+  weekStart,
   availability,
   selfMemberId,
   events,
@@ -629,6 +630,7 @@ function WeekendDay({
   disabled,
 }: {
   day: WeekDay;
+  weekStart: DateKey;
   availability: BusyTimelineData;
   selfMemberId?: string;
   events: WeekEvent[];
@@ -712,6 +714,16 @@ function WeekendDay({
         <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">予定なし</p>
       )}
       <BusyTimeline date={day.date} data={availability} selfMemberId={selfMemberId} />
+      <div className="mt-[var(--spacing-xs)] flex justify-end">
+        <Link
+          to={`/day/${day.date}`}
+          state={{ weekStart }}
+          data-testid={`weekend-day-link-${day.date}`}
+          className="inline-flex min-h-[var(--tap-target-min)] items-center rounded-[var(--radius-sm)] px-[var(--spacing-sm)] text-sm font-medium text-accent underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        >
+          この日を詳しく見る
+        </Link>
+      </div>
     </article>
   );
 }
@@ -1308,6 +1320,7 @@ export default function WeekPage({
                 <WeekendDay
                   key={day.date}
                   day={day}
+                  weekStart={data.week.start}
                   availability={timelineForDay(day.date)}
                   selfMemberId={selfMemberId}
                   events={getVisibleEvents(day, data, hideRoutines)}

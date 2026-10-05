@@ -35,17 +35,22 @@ interface EventDialogProps {
   members: WeekMember[];
   event?: WeekEvent;
   selectedDate?: string;
+  initialTime?: Extract<EventInputTime, { kind: 'timed' }>;
   clientRequestId: string;
   onClose: () => void;
   onSaved: () => void;
   onUnauthorized: () => void;
 }
 
-function initialFields(event: WeekEvent | undefined, selectedDate: string | undefined) {
+function initialFields(
+  event: WeekEvent | undefined,
+  selectedDate: string | undefined,
+  initialTime?: Extract<EventInputTime, { kind: 'timed' }>,
+) {
   if (!event) {
-    const initial = getDefaultEventTime(
-      selectedDate ? dateKeySchema.parse(selectedDate) : undefined,
-    );
+    const initial =
+      initialTime ??
+      getDefaultEventTime(selectedDate ? dateKeySchema.parse(selectedDate) : undefined);
     if (initial.kind !== 'timed') throw new Error('Default event time must be timed');
     return {
       title: '',
@@ -104,6 +109,7 @@ export function EventDialog({
   members,
   event,
   selectedDate,
+  initialTime,
   clientRequestId,
   onClose,
   onSaved,
@@ -117,7 +123,7 @@ export function EventDialog({
   const createdEventIdRef = useRef<string | null>(null);
   const historyEntryRef = useRef(false);
   const cleanupMarkerTimerRef = useRef<number | undefined>(undefined);
-  const [fields, setFields] = useState(() => initialFields(event, selectedDate));
+  const [fields, setFields] = useState(() => initialFields(event, selectedDate, initialTime));
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState(false);

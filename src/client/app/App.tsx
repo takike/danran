@@ -38,9 +38,13 @@ function PrivateCacheGuard(): null {
       void (async () => {
         await queryClient.cancelQueries({ queryKey: ['week', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['week-busy', oldUserId] });
+        await queryClient.cancelQueries({ queryKey: ['personal-week', oldUserId] });
+        await queryClient.cancelQueries({ queryKey: ['personal-calendars', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['families', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week-busy', oldUserId] });
+        queryClient.removeQueries({ queryKey: ['personal-week', oldUserId] });
+        queryClient.removeQueries({ queryKey: ['personal-calendars', oldUserId] });
         queryClient.removeQueries({ queryKey: ['families', oldUserId] });
       })();
     }
@@ -74,6 +78,7 @@ export function App() {
             <RouteAwarePrivateCacheGuard />
             <Routes>
               <Route path="/family" element={<FamilyPage />} />
+              <Route path="/day/:date" element={<HomePage />} />
               <Route path="/coming-soon" element={<ComingSoonPage feature="capture" />} />
               <Route path="/import" element={<ComingSoonPage feature="capture" />} />
               <Route path="/routines" element={<ComingSoonPage feature="routines" />} />
