@@ -23,6 +23,7 @@
 | 6 | [2-1-followup-calendar-picker.md](2-1-followup-calendar-picker.md) | カレンダー選択の初期状態を「すべて未選択」にする（実機確認の指摘） | 完了（PR #20）。実機確認待ち |
 | 7 | [2-4-free-windows.md](2-4-free-windows.md) | 共通の空きを計算するドメインロジック（API・画面には触らない。2-2・2-3 より先に実施） | 完了（PR #21） |
 | 8 | [2-2-busy-calendars.md](2-2-busy-calendars.md) | 空き状況に使うカレンダーの選択と、追加の同意（`calendar.freebusy`。取得 API は次の 2-3） | 完了（PR #22）。実機確認待ち |
-| 9 | [2-3-busy-api.md](2-3-busy-api.md) | 家族の空き状況を取得する API（開始・終了だけを返す。画面は変えない） | 未着手 |
+| 9 | [2-3-busy-api.md](2-3-busy-api.md) | 家族の空き状況を取得する API（開始・終了だけを返す。画面は変えない） | 完了（PR #23） |
+| 10 | [2-5-weekend-timeline.md](2-5-weekend-timeline.md) | 週末カードの空きタイムライン（メンバーごとの埋まっている時間、共通の空き、「みんな空き N時間」） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
