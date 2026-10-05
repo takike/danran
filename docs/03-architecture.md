@@ -224,6 +224,9 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 - busy 区間は対象日の時間範囲に切り取り、重複または端点が接する区間をまとめる。共通の空きは全対象メンバーの busy の和集合を対象時間範囲から除いた区間。`minFreeMinutes` 未満は破棄し、ちょうどの長さは残す。対象メンバーが0人なら共通の空きは空で、合計も0分。
 - 出力は `{ memberBusy: [{ memberId, busy: [{ start, end }] }], commonFreeWindows: [{ start, end }], totalFreeMinutes }`。予定のタイトルなどは含めず、ID、canonical `+09:00` ISO 区間、分単位の合計だけを返す。後続の API アダプターはこの結果を使い、予定 metadata をこのドメイン関数の出力に持ち込まない。
 - 「みんな空き N時間」は、`totalFreeMinutes` を表示する。
+- S1 の Task 2-5 は `ready` の大人の busy 区間だけを `personalBusy` に渡す。`not_shared` は個人 busy を追加せず、家族予定だけをその人の busy として計算する。子どもにも個人 busy を渡さない。`not_shared` / `unavailable` の空配列を空きと解釈しない。
+- `unavailable` の大人が1人でも含まれる日は共通の空きを表示しない。`ready` の大人の `busy: []` は取得済みで個人 busy がない状態なので、家族予定と合わせて通常どおり計算する。ルーティンを隠す UI 状態は表示フィルターだけであり、`familyEvents` は変えず計算にもルーティン予定を含める。
+- 表示整形は日ごとに行う。ドメイン計算で例外が起きた場合は週全体を失敗させず、その日のタイムラインだけを表示できない状態にする。
 
 ### conflicts：重複検出
 

@@ -37,8 +37,10 @@ function PrivateCacheGuard(): null {
     if (oldUserId && (identityChanged || isError || !userId)) {
       void (async () => {
         await queryClient.cancelQueries({ queryKey: ['week', oldUserId] });
+        await queryClient.cancelQueries({ queryKey: ['week-busy', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['families', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week', oldUserId] });
+        queryClient.removeQueries({ queryKey: ['week-busy', oldUserId] });
         queryClient.removeQueries({ queryKey: ['families', oldUserId] });
       })();
     }

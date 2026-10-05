@@ -1,5 +1,6 @@
 import { PersonalEventsApiError } from '@client/api/personal';
 import { WeekApiError } from '@client/api/week';
+import { BusyWeekApiError } from '@client/api/week-busy';
 import { AuthenticatedShell } from '@client/components/AuthenticatedShell';
 import { Card } from '@client/components/Card';
 import { Chip } from '@client/components/Chip';
@@ -10,7 +11,9 @@ import {
   PERSONAL_WEEK_QUERY_KEY,
   usePersonalWeekQuery,
 } from '@client/features/settings/usePersonalEvents';
+import { BusyTimeline } from '@client/features/week/BusyTimeline';
 import { EventDialog } from '@client/features/week/EventDialog';
+import { BUSY_WEEK_QUERY_KEY, useBusyWeekQuery } from '@client/features/week/useBusyWeek';
 import { useWeekQuery } from '@client/features/week/useWeek';
 import {
   type PersonalCalendarEvent,
@@ -22,6 +25,7 @@ import {
   getVisibleDayEvents,
   getVisibleDayLayout,
 } from '@shared/domain/weekPresentation';
+import { type BusyTimelineData, buildDayBusyTimeline } from '@shared/domain/weekendTimeline';
 import type { AuthUser } from '@shared/schemas/auth';
 import { type DateKey, dateKeySchema } from '@shared/schemas/date';
 import type { WeekDay, WeekEvent, WeekResponse } from '@shared/schemas/week';
@@ -54,6 +58,7 @@ interface WeekPageProps {
   userId: string;
   familyId: string;
   familyName: string;
+  selfMemberId?: string;
 }
 
 type WeekMember = WeekResponse['members'][number];
@@ -611,6 +616,8 @@ function WeekendEvent({
 
 function WeekendDay({
   day,
+  availability,
+  selfMemberId,
   events,
   personalEvents,
   members,
@@ -622,6 +629,8 @@ function WeekendDay({
   disabled,
 }: {
   day: WeekDay;
+  availability: BusyTimelineData;
+  selfMemberId?: string;
   events: WeekEvent[];
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
@@ -652,7 +661,17 @@ function WeekendDay({
             </span>
           )}
         </div>
-        <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
+        <div className="ml-auto flex shrink-0 flex-col items-end gap-[var(--spacing-xs)]">
+          {availability.kind === 'ready' && availability.freeTimeLabel && (
+            <span
+              data-testid={`busy-common-summary-${day.date}`}
+              className="text-right text-xs font-semibold tabular-nums text-accent"
+            >
+              {availability.freeTimeLabel}
+            </span>
+          )}
+          <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
+        </div>
       </header>
 
       {(day.closures.length > 0 || day.holidayName) && (
@@ -692,6 +711,7 @@ function WeekendDay({
       ) : (
         <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">予定なし</p>
       )}
+      <BusyTimeline date={day.date} data={availability} selfMemberId={selfMemberId} />
     </article>
   );
 }
@@ -714,6 +734,7 @@ export default function WeekPage({
   userId,
   familyId,
   familyName,
+  selfMemberId,
 }: WeekPageProps): React.ReactElement {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -733,6 +754,7 @@ export default function WeekPage({
     date: DateKey;
   } | null>(null);
   const [revokedPersonalIdentity, setRevokedPersonalIdentity] = useState<string | null>(null);
+  const [revokedBusyIdentity, setRevokedBusyIdentity] = useState<string | null>(null);
   const invokingControlRef = useRef<HTMLElement | null>(null);
   const addEventButtonRef = useRef<HTMLButtonElement | null>(null);
   const hadOpenEditorRef = useRef(false);
@@ -749,6 +771,7 @@ export default function WeekPage({
   // biome-ignore lint/correctness/useExhaustiveDependencies: identity is intentionally used as a transition key.
   useEffect(() => {
     setRevokedPersonalIdentity(null);
+    setRevokedBusyIdentity(null);
     setPersonalDialog(null);
   }, [userId, familyId, requestStart]);
 
@@ -760,6 +783,13 @@ export default function WeekPage({
     familyId,
     requestStart,
     !invalidUrlWeek && revokedPersonalIdentity !== personalIdentity,
+  );
+  const busyIdentity = `${userId}:${familyId}:${requestStart ?? ''}`;
+  const busyWeekQuery = useBusyWeekQuery(
+    userId,
+    familyId,
+    requestStart,
+    !invalidUrlWeek && revokedBusyIdentity !== busyIdentity,
   );
   const personalResponse =
     personalWeekQuery.isError || personalWeekQuery.isFetching ? undefined : personalWeekQuery.data;
@@ -779,10 +809,52 @@ export default function WeekPage({
     personalResponseMatches && data
       ? data.members.find((member) => member.id === personalResponse?.memberId)
       : undefined;
+  const busyResponse =
+    busyWeekQuery.isError || busyWeekQuery.isFetching || weekQuery.isPlaceholderData
+      ? undefined
+      : busyWeekQuery.data;
+  const busyResponseMatches = Boolean(
+    busyResponse &&
+      requestStart &&
+      data &&
+      !weekQuery.isPlaceholderData &&
+      data.week.start === requestStart &&
+      busyResponse.family.id === familyId &&
+      busyResponse.family.id === data.family.id &&
+      busyResponse.week.start === requestStart &&
+      busyResponse.week.start === data.week.start &&
+      busyResponse.week.endInclusive === data.week.endInclusive,
+  );
+  const busyQueryError =
+    revokedBusyIdentity === busyIdentity ||
+    busyWeekQuery.isError ||
+    (!busyWeekQuery.isFetching &&
+      !busyWeekQuery.isPending &&
+      !weekQuery.isPlaceholderData &&
+      !busyResponseMatches);
+  const busyTimelineKind: BusyTimelineData['kind'] = busyQueryError
+    ? 'error'
+    : busyWeekQuery.isLoading || busyWeekQuery.isFetching || weekQuery.isPlaceholderData
+      ? 'loading'
+      : busyResponseMatches
+        ? 'ready'
+        : 'error';
   const canEditEvents = Boolean(data && !weekQuery.isPlaceholderData && !invalidUrlWeek);
   const longWeekendCounts = new Map(
     data ? getLongWeekendBadges(data.days).map((badge) => [badge.start, badge.dayCount]) : [],
   );
+  const timelineForDay = (date: DateKey): BusyTimelineData => {
+    if (busyTimelineKind !== 'ready' || !busyResponseMatches || !data || !busyResponse) {
+      return {
+        kind: busyTimelineKind,
+        rows: [],
+        commonFreeWindows: [],
+        hasUnavailableMember: false,
+        hasNotSharedMember: false,
+      };
+    }
+    return buildDayBusyTimeline(date, data, busyResponse);
+  };
 
   const showWeek = (start: DateKey | undefined, replace = false) => {
     const next = new URLSearchParams(searchParams);
@@ -849,10 +921,12 @@ export default function WeekPage({
     await queryClient.cancelQueries({ queryKey: ['families', userId] });
     await queryClient.cancelQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
     await queryClient.cancelQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
+    await queryClient.cancelQueries({ queryKey: [...BUSY_WEEK_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: ['week', userId] });
     queryClient.removeQueries({ queryKey: ['families', userId] });
     queryClient.removeQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
+    queryClient.removeQueries({ queryKey: [...BUSY_WEEK_QUERY_KEY, userId] });
   }, [queryClient, userId]);
 
   useEffect(() => {
@@ -888,6 +962,38 @@ export default function WeekPage({
     familyId,
     personalIdentity,
     personalWeekQuery.error,
+    queryClient,
+    userId,
+  ]);
+
+  useEffect(() => {
+    const error = busyWeekQuery.error;
+    if (!(error instanceof BusyWeekApiError)) return;
+    if (error.code === 'UNAUTHORIZED') {
+      void clearSessionAfterUnauthorized();
+      return;
+    }
+    if (
+      error.status === 403 ||
+      error.status === 404 ||
+      error.code === 'FORBIDDEN' ||
+      error.code === 'NOT_FOUND'
+    ) {
+      setRevokedBusyIdentity(busyIdentity);
+      void (async () => {
+        await queryClient.cancelQueries({
+          queryKey: [...BUSY_WEEK_QUERY_KEY, userId, familyId],
+        });
+        queryClient.removeQueries({
+          queryKey: [...BUSY_WEEK_QUERY_KEY, userId, familyId],
+        });
+      })();
+    }
+  }, [
+    busyIdentity,
+    busyWeekQuery.error,
+    clearSessionAfterUnauthorized,
+    familyId,
     queryClient,
     userId,
   ]);
@@ -1202,6 +1308,8 @@ export default function WeekPage({
                 <WeekendDay
                   key={day.date}
                   day={day}
+                  availability={timelineForDay(day.date)}
+                  selfMemberId={selfMemberId}
                   events={getVisibleEvents(day, data, hideRoutines)}
                   personalEvents={getPersonalEventsForDate(day.date, personalEvents, hideRoutines)}
                   members={data.members}

@@ -663,6 +663,23 @@ test.describe('Task 1-8: family event editing', () => {
         await route.fallback();
         return;
       }
+      if (url.pathname.endsWith('/week/busy')) {
+        const familyWeek = buildWeek([ONE_TIME_EVENT, RECURRING_EVENT]);
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            family: { id: FAMILY_ID },
+            week: familyWeek.week,
+            members: [],
+          }),
+        });
+        return;
+      }
+      if (!url.pathname.endsWith('/week')) {
+        await route.fallback();
+        return;
+      }
       weekCalls++;
       if (weekCalls === 1) {
         await route.fulfill({

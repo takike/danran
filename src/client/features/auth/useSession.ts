@@ -42,12 +42,14 @@ export function useLogoutMutation() {
       if (!userId) return;
 
       await queryClient.cancelQueries({ queryKey: ['week', userId] });
+      await queryClient.cancelQueries({ queryKey: ['week-busy', userId] });
       await queryClient.cancelQueries({ queryKey: ['families', userId] });
       await queryClient.cancelQueries({ queryKey: ['personal-week', userId] });
       await queryClient.cancelQueries({ queryKey: ['personal-calendars', userId] });
       await queryClient.cancelQueries({ queryKey: ['busy-calendars', userId] });
       if (queryClient.getQueryData<AuthUser | null>(SESSION_QUERY_KEY)?.id !== userId) {
         queryClient.removeQueries({ queryKey: ['week', userId] });
+        queryClient.removeQueries({ queryKey: ['week-busy', userId] });
         queryClient.removeQueries({ queryKey: ['families', userId] });
         queryClient.removeQueries({ queryKey: ['personal-week', userId] });
         queryClient.removeQueries({ queryKey: ['personal-calendars', userId] });
@@ -60,6 +62,7 @@ export function useLogoutMutation() {
         queryClient.setQueryData(SESSION_QUERY_KEY, null);
       }
       queryClient.removeQueries({ queryKey: ['week', userId] });
+      queryClient.removeQueries({ queryKey: ['week-busy', userId] });
       queryClient.removeQueries({ queryKey: ['families', userId] });
       queryClient.removeQueries({ queryKey: ['personal-week', userId] });
       queryClient.removeQueries({ queryKey: ['personal-calendars', userId] });
