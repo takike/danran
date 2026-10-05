@@ -10,6 +10,7 @@ import {
   getDayIntervalGeometry,
   getDayMemberColumnTracks,
   getDayMemberLaneCounts,
+  getDaySpanningTitleArea,
   getFreeBandHitGeometry,
   getFreeBandInitialEventTime,
   getLongWeekendPosition,
@@ -257,16 +258,70 @@ describe('weekend day presentation', () => {
       [0, 1],
     ]);
     expect(
+      layoutDayEventBlocks([
+        { id: 'a1', memberIds: ['adult-a'], top: 10, height: 44 },
+        { id: 'a2', memberIds: ['adult-a'], top: 10, height: 44 },
+        { id: 'a3', memberIds: ['adult-a'], top: 10, height: 44 },
+        { id: 'b1', memberIds: ['adult-b'], top: 10, height: 44 },
+      ]).map(({ lane, laneCount }) => [lane, laneCount]),
+    ).toEqual([
+      [0, 3],
+      [1, 3],
+      [2, 3],
+      [0, 1],
+    ]);
+    expect(
       getDayMemberLaneCounts(week.members, [
         { column: { memberIds: ['adult-a', 'adult-b'] }, laneCount: 2 },
         { column: { memberIds: ['adult-a'] }, laneCount: 3 },
       ]),
     ).toEqual([3, 2, 1]);
-    expect(getDayMemberColumnTracks([1, 2, 3])).toEqual([
-      'var(--day-member-column-width)',
-      'calc(var(--day-member-column-width) + var(--day-member-column-width))',
-      'calc(var(--day-member-column-width) + var(--day-member-column-width) + var(--day-member-column-width))',
-    ]);
+    for (const memberCount of [1, 2, 3, 4]) {
+      expect(getDayMemberColumnTracks(memberCount)).toEqual(
+        Array(memberCount).fill('minmax(0, 1fr)'),
+      );
+    }
+    expect(getDayMemberColumnTracks(5)).toEqual(Array(5).fill('var(--day-member-column-width)'));
+    expect(getDayMemberColumnTracks(8)).toEqual(Array(8).fill('var(--day-member-column-width)'));
+    expect(getDayMemberColumnTracks(0)).toEqual([]);
+  });
+
+  it('places a spanning title in the widest clear member run at its start', () => {
+    const span = { geometry: { top: 100 }, lane: 0, laneCount: 2 };
+    const local = (memberIds: string[], top: number, height = 88) => ({
+      column: { memberIds, spansAll: false },
+      geometry: { top, height },
+    });
+
+    expect(getDaySpanningTitleArea(span, ['a', 'b', 'c', 'd'], [local(['a'], 100)])).toEqual({
+      left: 0.25,
+      width: 0.75,
+      titleOnly: true,
+    });
+    expect(
+      getDaySpanningTitleArea(span, ['a', 'b', 'c', 'd'], [local(['a'], 100), local(['c'], 100)]),
+    ).toEqual({ left: 0.25, width: 0.25, titleOnly: true });
+    expect(
+      getDaySpanningTitleArea(
+        { geometry: { top: 100 }, lane: 1, laneCount: 2 },
+        ['a', 'b', 'c', 'd'],
+        ['a', 'b', 'c', 'd'].map((memberId) => local([memberId], 100)),
+      ),
+    ).toEqual({ left: 0.125, width: 0.125, titleOnly: true });
+    expect(
+      getDaySpanningTitleArea(
+        { geometry: { top: 100 }, lane: 0, laneCount: 1 },
+        ['a', 'b', 'c', 'd'],
+        [local(['a'], 144)],
+      ),
+    ).toEqual({ left: 0, width: 1, titleOnly: false });
+    expect(
+      getDaySpanningTitleArea(
+        { geometry: { top: 100 }, lane: 0, laneCount: 2 },
+        ['a', 'b', 'c', 'd'],
+        [local(['a'], 144)],
+      ),
+    ).toEqual({ left: 0, width: 1, titleOnly: false });
   });
 
   it('uses one-hour or band-length initial time from the band start', () => {

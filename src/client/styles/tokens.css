@@ -38,6 +38,7 @@
   --busy-scale-font-size: 0.625rem;
   --day-hour-height: 48px;
   --day-timeline-height: 672px;
+  --day-timeline-bottom-padding: 12px;
   --day-axis-column: 32px;
   --day-member-column-width: 88px;
   --day-busy-pattern: repeating-linear-gradient(

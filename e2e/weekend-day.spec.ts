@@ -198,7 +198,7 @@ function fixtureEvents(date: DateKey): WeekEvent[] {
     event(
       'evt-candidate-picnic',
       '公園ピクニック',
-      `${date}T13:30:00+09:00`,
+      `${date}T15:00:00+09:00`,
       `${date}T17:00:00+09:00`,
       [],
       { status: 'tentative', items: ['レジャーシート', '着替え'] },
@@ -337,8 +337,8 @@ function makePersonalWeek(
             title: activeAccount === 'A' ? A_PERSONAL_TITLE : B_PERSONAL_TITLE,
             time: {
               kind: 'timed',
-              start: `${date}T15:15:00+09:00`,
-              endExclusive: `${date}T16:15:00+09:00`,
+              start: `${date}T15:00:00+09:00`,
+              endExclusive: `${date}T16:00:00+09:00`,
             },
             isRoutine: false,
           },
@@ -609,51 +609,93 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(dimensions.document, JSON.stringify(dimensions)).toBeLessThanOrEqual(dimensions.viewport);
 }
 
-async function expectTextInsideViewport(locator: Locator) {
-  const bounds = await locator.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    const rect = range.getBoundingClientRect();
-    return {
-      left: rect.left,
-      right: rect.right,
-      width: rect.width,
-      height: rect.height,
-      viewportWidth: window.innerWidth,
-    };
-  });
-  expect(bounds.width).toBeGreaterThan(0);
-  expect(bounds.height).toBeGreaterThan(0);
-  expect(bounds.left).toBeGreaterThanOrEqual(0);
-  expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
-}
-
-async function expectLabelUnobscured(locator: Locator) {
-  await locator.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    if (rect.top < 0 || rect.bottom > window.innerHeight) {
-      window.scrollBy(0, rect.top + rect.height / 2 - window.innerHeight / 2);
-    }
-  });
-  const unobscured = await locator.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    const rect = range.getClientRects()[0];
-    if (!rect) return { visible: false, text: element.textContent, topmost: 'no-text-range' };
-    const previousPointerEvents = (element as HTMLElement).style.pointerEvents;
-    (element as HTMLElement).style.pointerEvents = 'auto';
-    const topmost = document.elementFromPoint(
-      rect.left + rect.width / 2,
-      rect.top + rect.height / 2,
-    );
-    (element as HTMLElement).style.pointerEvents = previousPointerEvents;
-    return {
-      visible: Boolean(topmost && (topmost === element || element.contains(topmost))),
-      text: element.textContent,
-      topmost: topmost?.getAttribute('data-testid') ?? topmost?.tagName,
-    };
-  });
-  expect(unobscured.visible, JSON.stringify(unobscured)).toBe(true);
+async function expectCardTitleAboveOverlappingFreeLabel(
+  card: Locator,
+  title: Locator,
+  freeLabels: Locator,
+  expectedOverlap: boolean,
+) {
+  await title.scrollIntoViewIfNeeded();
+  const result = await card.evaluate(
+    (cardElement, titleTestId) => {
+      const titleElement =
+        cardElement.querySelector(`[data-testid="${titleTestId}"]`) ??
+        cardElement.querySelector('span');
+      if (!titleElement) return { foundTitle: false, overlaps: [], titleInsideCard: false };
+      const titleRect = titleElement.getBoundingClientRect();
+      const cardRect = cardElement.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(titleElement);
+      const visibleTextRects = Array.from(range.getClientRects())
+        .map((rect) => ({
+          left: Math.max(rect.left, titleRect.left),
+          right: Math.min(rect.right, titleRect.right),
+          top: Math.max(rect.top, titleRect.top),
+          bottom: Math.min(rect.bottom, titleRect.bottom),
+        }))
+        .filter((rect) => rect.right > rect.left && rect.bottom > rect.top);
+      const visibleTextRect = visibleTextRects[0];
+      const titleInsideCard =
+        titleRect.width > 0 &&
+        titleRect.height > 0 &&
+        titleRect.left >= cardRect.left &&
+        titleRect.right <= cardRect.right &&
+        titleRect.top >= cardRect.top &&
+        titleRect.bottom <= cardRect.bottom;
+      const overlaps: Array<{
+        label: string;
+        topmost: string | null;
+        cardZ: string;
+        labelZ: string;
+        labelParentZ: string | null;
+        visible: boolean;
+      }> = [];
+      for (const label of document.querySelectorAll<HTMLElement>(
+        '[data-testid^="weekend-day-free-band-"]',
+      )) {
+        const labelRect = label.getBoundingClientRect();
+        if (!visibleTextRect) continue;
+        const left = Math.max(visibleTextRect.left, labelRect.left);
+        const right = Math.min(visibleTextRect.right, labelRect.right);
+        const top = Math.max(visibleTextRect.top, labelRect.top);
+        const bottom = Math.min(visibleTextRect.bottom, labelRect.bottom);
+        if (right <= left || bottom <= top) continue;
+        const point = { x: left + Math.min(2, (right - left) / 2), y: (top + bottom) / 2 };
+        const topmost = document.elementFromPoint(point.x, point.y);
+        const overlap = {
+          label: label.textContent ?? '',
+          topmost: topmost?.getAttribute('data-testid') ?? topmost?.tagName ?? null,
+          cardZ: getComputedStyle(cardElement).zIndex,
+          labelZ: getComputedStyle(label).zIndex,
+          labelParentZ: label.parentElement ? getComputedStyle(label.parentElement).zIndex : null,
+          visible: Boolean(topmost && titleElement.contains(topmost)),
+        };
+        if (!topmost || !titleElement.contains(topmost)) {
+          overlap.topmost = topmost
+            ? `${topmost.tagName}.${topmost instanceof HTMLElement ? topmost.className : ''}`
+            : 'no-element-at-overlap';
+        }
+        overlaps.push(overlap);
+      }
+      return {
+        foundTitle: true,
+        titleInsideCard,
+        overlaps,
+      };
+    },
+    await title.getAttribute('data-testid'),
+  );
+  await expect(title).toBeVisible();
+  await expect(card).toHaveAttribute('aria-label', new RegExp((await title.textContent()) ?? ''));
+  expect(result.foundTitle).toBe(true);
+  expect(result.titleInsideCard, JSON.stringify(result.overlaps)).toBe(true);
+  expect(result.overlaps.length > 0, JSON.stringify(result)).toBe(expectedOverlap);
+  for (const overlap of result.overlaps) {
+    expect(overlap.visible, JSON.stringify(overlap)).toBe(true);
+    expect(Number(overlap.cardZ)).toBeGreaterThan(Number(overlap.labelParentZ));
+    expect(Number(overlap.cardZ)).toBeGreaterThan(Number(overlap.labelZ));
+  }
+  await expect(freeLabels).not.toHaveCount(0);
 }
 
 async function expectBaseWeekScreen(page: Page) {
@@ -667,7 +709,11 @@ async function expectVisibleControlsAtLeast44px(page: Page) {
     const bounds = await control.boundingBox();
     expect(bounds).not.toBeNull();
     if (bounds) {
-      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      const isDenseTimelineEvent = await control.evaluate((element) =>
+        element.matches('.day-timeline-event'),
+      );
+      // Narrow event lanes divide their column width; keep their tap height while allowing that specified width.
+      if (!isDenseTimelineEvent) expect(bounds.width).toBeGreaterThanOrEqual(44);
       expect(bounds.height).toBeGreaterThanOrEqual(44);
     }
   }
@@ -754,26 +800,87 @@ test.describe('Task 2-6: weekend day detail', () => {
     await mockDayApis(page);
     await page.goto(`/day/${SATURDAY}`);
     await expect(page.getByTestId('weekend-day-timeline')).toBeVisible();
+    const scroller = page.getByTestId('weekend-day-scroll');
+    const timeline = page.getByTestId('weekend-day-timeline');
+    const memberIds = [ADULT_A, ADULT_B, ADULT_C, CHILD];
+    const memberNames = ['大人甲', '大人乙', '大人丙', '子ども'];
+    const [scrollportBounds, scrollMetrics] = await Promise.all([
+      scroller.boundingBox(),
+      scroller.evaluate((element) => ({
+        client: element.clientWidth,
+        scroll: element.scrollWidth,
+      })),
+    ]);
+    expect(scrollportBounds).not.toBeNull();
+    expect(scrollMetrics.scroll).toBeLessThanOrEqual(scrollMetrics.client);
+    const columnBounds = await Promise.all(
+      memberIds.map((memberId) => page.getByTestId(`weekend-day-column-${memberId}`).boundingBox()),
+    );
+    expect(columnBounds.every((bounds) => bounds !== null)).toBe(true);
+    const widths = columnBounds.map((bounds) => bounds?.width ?? 0);
+    for (const width of widths.slice(1)) expect(width).toBeCloseTo(widths[0] ?? 0, 0);
+    if (scrollportBounds) {
+      for (const name of memberNames) {
+        const heading = scroller.getByText(name, { exact: true }).first();
+        await expect(heading).toBeVisible();
+        const headingBounds = await heading.boundingBox();
+        expect(headingBounds).not.toBeNull();
+        if (headingBounds) {
+          expect(headingBounds.x).toBeGreaterThanOrEqual(scrollportBounds.x);
+          expect(headingBounds.x + headingBounds.width).toBeLessThanOrEqual(
+            scrollportBounds.x + scrollportBounds.width,
+          );
+        }
+      }
+    }
+    const finalTick = timeline.getByText('21', { exact: true });
+    await expect(finalTick).toBeVisible();
+    const [finalTickBounds, timelineBounds] = await Promise.all([
+      finalTick.boundingBox(),
+      timeline.boundingBox(),
+    ]);
+    expect(finalTickBounds).not.toBeNull();
+    expect(timelineBounds).not.toBeNull();
+    if (finalTickBounds && timelineBounds) {
+      expect(finalTickBounds.height).toBeGreaterThan(0);
+      expect(finalTickBounds.y).toBeGreaterThanOrEqual(timelineBounds.y);
+      expect(finalTickBounds.y + finalTickBounds.height).toBeLessThanOrEqual(
+        timelineBounds.y + timelineBounds.height,
+      );
+    }
     const adultColumn = page.getByTestId(`weekend-day-column-${ADULT_A}`);
     const childColumn = page.getByTestId(`weekend-day-column-${CHILD}`);
-    await expect(page.getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`)).toContainText(
-      '担当',
-    );
+    const assignedAdult = page.getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`);
+    await expect(assignedAdult).toHaveAttribute('aria-label', /担当 大人甲/);
     await expect(page.getByTestId(`weekend-day-event-evt-assigned-piano-${CHILD}`)).toContainText(
       'ピアノ教室',
     );
     await expect(adultColumn.getByText('重なる送迎予定')).toBeVisible();
-    await expect(page.getByTestId(`weekend-day-event-evt-routine-${ADULT_B}`)).toContainText(
-      '繰り返し',
+    await expect(page.getByTestId(`weekend-day-event-evt-routine-${ADULT_B}`)).toHaveAttribute(
+      'aria-label',
+      /繰り返し予定/,
     );
+    const overlapPiano = page.getByTestId(`weekend-day-event-evt-overlap-piano-${ADULT_A}`);
+    const overlapTitle = overlapPiano.getByTestId('weekend-day-event-title-evt-overlap-piano');
+    await expect(overlapPiano).toHaveAttribute('aria-label', /重なる送迎予定.*09:30–10:30/);
+    await expect(overlapTitle).toBeVisible();
+    const titleStyle = await overlapTitle.evaluate((element) => ({
+      textOverflow: getComputedStyle(element).textOverflow,
+      bounds: element.getBoundingClientRect().toJSON(),
+      card: element.closest('button')?.getBoundingClientRect().toJSON(),
+    }));
+    expect(titleStyle.textOverflow).toBe('ellipsis');
+    expect(titleStyle.card).not.toBeUndefined();
+    if (titleStyle.card) {
+      expect(titleStyle.bounds.left).toBeGreaterThanOrEqual(titleStyle.card.left);
+      expect(titleStyle.bounds.right).toBeLessThanOrEqual(titleStyle.card.right);
+    }
     await expect(page.getByTestId('weekend-day-event-evt-candidate-picnic-all')).toContainText(
       '公園ピクニック',
     );
-    await expect(page.getByTestId('weekend-day-event-evt-candidate-picnic-all')).toContainText(
-      '候補',
-    );
-    await expect(page.getByTestId('weekend-day-event-evt-candidate-picnic-all')).toContainText(
-      'レジャーシート',
+    await expect(page.getByTestId('weekend-day-event-evt-candidate-picnic-all')).toHaveAttribute(
+      'aria-label',
+      /候補.*持ち物 レジャーシート、着替え/,
     );
     const assignedBounds = await page
       .getByTestId(`weekend-day-event-evt-assigned-piano-${ADULT_A}`)
@@ -802,14 +909,14 @@ test.describe('Task 2-6: weekend day detail', () => {
       expect(singleCandidate.x).not.toBe(overlapBounds.x);
     }
     const shortBusy = page.getByTestId(`weekend-day-personal-busy-${SATURDAY}-${ADULT_C}-0`);
-    const [shortBusyBounds, timelineBounds] = await Promise.all([
+    const [shortBusyBounds, busyTimelineBounds] = await Promise.all([
       shortBusy.boundingBox(),
       page.getByTestId('weekend-day-timeline').boundingBox(),
     ]);
     expect(shortBusyBounds).not.toBeNull();
-    expect(timelineBounds).not.toBeNull();
-    if (shortBusyBounds && timelineBounds) {
-      expect(shortBusyBounds.y).toBeCloseTo(timelineBounds.y + 48, 0);
+    expect(busyTimelineBounds).not.toBeNull();
+    if (shortBusyBounds && busyTimelineBounds) {
+      expect(shortBusyBounds.y).toBeCloseTo(busyTimelineBounds.y + 48, 0);
       expect(shortBusyBounds.height).toBeCloseTo(36, 0);
     }
     await expect(shortBusy.getByText('予定あり')).toBeVisible();
@@ -822,25 +929,39 @@ test.describe('Task 2-6: weekend day detail', () => {
     const candidate = page.getByTestId('weekend-day-event-evt-candidate-picnic-all');
     const lunch = page.getByTestId('weekend-day-event-evt-all-members-all');
     const [candidateBounds, lunchBounds] = await Promise.all([
-      page.getByTestId(`weekend-day-event-segment-evt-candidate-picnic-${ADULT_A}`).boundingBox(),
-      page.getByTestId(`weekend-day-event-segment-evt-all-members-${ADULT_A}`).boundingBox(),
+      candidate.boundingBox(),
+      lunch.boundingBox(),
     ]);
     expect(candidateBounds).not.toBeNull();
     expect(lunchBounds).not.toBeNull();
     if (candidateBounds && lunchBounds) {
       expect(candidateBounds.y).toBeLessThan(lunchBounds.y + lunchBounds.height);
       expect(lunchBounds.y).toBeLessThan(candidateBounds.y + candidateBounds.height);
-      expect(candidateBounds.x).not.toBe(lunchBounds.x);
+      expect(candidateBounds.x).toBeCloseTo(lunchBounds.x, 0);
+      expect(candidateBounds.width).toBeCloseTo(lunchBounds.width, 0);
     }
     const allMemberSpan = page.getByTestId('weekend-day-event-evt-all-span-only-all');
     await expect(allMemberSpan).toHaveCount(1);
-    const [spanBounds, columnBounds] = await Promise.all([
+    const [spanBounds, firstColumnBounds, lastColumnBounds] = await Promise.all([
       allMemberSpan.boundingBox(),
       page.getByTestId(`weekend-day-column-${ADULT_A}`).boundingBox(),
+      page.getByTestId(`weekend-day-column-${CHILD}`).boundingBox(),
     ]);
     expect(spanBounds).not.toBeNull();
-    expect(columnBounds).not.toBeNull();
-    if (spanBounds && columnBounds) expect(spanBounds.width).toBeGreaterThan(columnBounds.width);
+    expect(firstColumnBounds).not.toBeNull();
+    expect(lastColumnBounds).not.toBeNull();
+    if (spanBounds && firstColumnBounds && lastColumnBounds) {
+      expect(spanBounds.x).toBeCloseTo(firstColumnBounds.x, 0);
+      expect(spanBounds.x + spanBounds.width).toBeCloseTo(
+        lastColumnBounds.x + lastColumnBounds.width,
+        0,
+      );
+      expect(spanBounds.width).toBeCloseTo(
+        widths.reduce((sum, width) => sum + width, 0),
+        0,
+      );
+    }
+    await expect(allMemberSpan).toContainText('家族全員で見る予定');
     await expect(
       page.getByTestId(`weekend-day-personal-busy-${SATURDAY}-${ADULT_B}-0`),
     ).toBeVisible();
@@ -857,7 +978,6 @@ test.describe('Task 2-6: weekend day detail', () => {
     const selfCard = page.getByTestId(`weekend-day-personal-event-${ADULT_A}::personal-timed`);
     const freeLabels = page.locator('[data-testid^="weekend-day-free-band-"]');
     await expect(freeLabels).not.toHaveCount(0);
-    await expectTextInsideViewport(selfTitle);
     const [selfTitleBounds, selfCardBounds] = await Promise.all([
       selfTitle.boundingBox(),
       selfCard.boundingBox(),
@@ -870,29 +990,26 @@ test.describe('Task 2-6: weekend day detail', () => {
         selfCardBounds.y + selfCardBounds.height,
       );
     }
-    for (const freeLabel of await freeLabels.all()) {
-      await expectTextInsideViewport(freeLabel);
-      await expectLabelUnobscured(freeLabel);
+    const candidateTitle = page.getByTestId('weekend-day-event-title-evt-candidate-picnic');
+    const [candidateCardBounds, candidateTitleBounds, privateTitleCardBounds] = await Promise.all([
+      candidate.boundingBox(),
+      candidateTitle.boundingBox(),
+      selfCard.boundingBox(),
+    ]);
+    expect(candidateCardBounds).not.toBeNull();
+    expect(candidateTitleBounds).not.toBeNull();
+    expect(privateTitleCardBounds).not.toBeNull();
+    if (candidateCardBounds && candidateTitleBounds && privateTitleCardBounds) {
+      expect(candidateTitleBounds.x).toBeGreaterThanOrEqual(
+        privateTitleCardBounds.x + privateTitleCardBounds.width,
+      );
+      expect(candidateTitleBounds.x + candidateTitleBounds.width).toBeLessThanOrEqual(
+        candidateCardBounds.x + candidateCardBounds.width,
+      );
     }
-    const scroller = page.getByTestId('weekend-day-scroll');
-    await scroller.evaluate((element) => {
-      element.scrollLeft = element.scrollWidth - element.clientWidth;
-    });
-    const childColumnAfterScroll = await page
-      .getByTestId(`weekend-day-column-${CHILD}`)
-      .boundingBox();
-    expect(childColumnAfterScroll).not.toBeNull();
-    if (childColumnAfterScroll) {
-      expect(childColumnAfterScroll.x).toBeLessThan(390);
-      expect(childColumnAfterScroll.x + childColumnAfterScroll.width).toBeGreaterThan(0);
-    }
-    for (const freeLabel of await freeLabels.all()) {
-      await expectTextInsideViewport(freeLabel);
-      await expectLabelUnobscured(freeLabel);
-    }
-    await scroller.evaluate((element) => {
-      element.scrollLeft = 0;
-    });
+    await expect(candidateTitle).toHaveCSS('text-overflow', 'ellipsis');
+    await expectCardTitleAboveOverlappingFreeLabel(candidate, candidateTitle, freeLabels, true);
+    await expectCardTitleAboveOverlappingFreeLabel(selfCard, selfTitle, freeLabels, true);
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(page.getByTestId('weekend-day-all-day')).toContainText('終日の家族予定');
     await expect(page.getByTestId('weekend-day-all-day')).toContainText('A本人だけの終日予定');
@@ -901,13 +1018,15 @@ test.describe('Task 2-6: weekend day detail', () => {
     await expect(page.getByTestId('weekend-day-outside-hours')).toContainText('A本人だけの夜予定');
 
     const crossingEvent = page.getByTestId(`weekend-day-event-evt-cross-opening-${CHILD}`);
-    const timeline = await page.getByTestId('weekend-day-timeline').boundingBox();
+    const dayTimelineBounds = await page.getByTestId('weekend-day-timeline').boundingBox();
     const clipped = await crossingEvent.boundingBox();
-    expect(timeline).not.toBeNull();
+    expect(dayTimelineBounds).not.toBeNull();
     expect(clipped).not.toBeNull();
-    if (timeline && clipped) {
-      expect(clipped.y).toBeCloseTo(timeline.y, 0);
-      expect(clipped.y + clipped.height).toBeLessThanOrEqual(timeline.y + timeline.height);
+    if (dayTimelineBounds && clipped) {
+      expect(clipped.y).toBeCloseTo(dayTimelineBounds.y, 0);
+      expect(clipped.y + clipped.height).toBeLessThanOrEqual(
+        dayTimelineBounds.y + dayTimelineBounds.height,
+      );
     }
 
     const body = await page.locator('body').innerText();

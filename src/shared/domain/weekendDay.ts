@@ -277,20 +277,103 @@ export function getDayMemberLaneCounts(
   });
 }
 
-/** Builds deterministic grid tracks that keep every rendered lane at least the chosen token width. */
+/** Keeps member columns equal, fitting four members before enabling timeline scrolling. */
 export function getDayMemberColumnTracks(
-  laneCounts: readonly number[],
+  memberCount: number,
   laneWidth = 'var(--day-member-column-width)',
+  fitMemberCount = 4,
 ): string[] {
   if (!laneWidth.trim()) throw new TypeError('Timeline lane width must not be empty');
-  return laneCounts.map((laneCount) => {
-    if (!Number.isSafeInteger(laneCount) || laneCount < 1) {
-      throw new RangeError('Timeline lane count must be a positive integer');
+  if (!Number.isSafeInteger(memberCount) || memberCount < 0) {
+    throw new RangeError('Timeline member count must be a non-negative integer');
+  }
+  if (!Number.isSafeInteger(fitMemberCount) || fitMemberCount < 1) {
+    throw new RangeError('Fitted timeline member count must be a positive integer');
+  }
+  const track = memberCount <= fitMemberCount ? 'minmax(0, 1fr)' : laneWidth;
+  return Array.from({ length: memberCount }, () => track);
+}
+
+export interface DaySpanningTitleArea {
+  left: number;
+  width: number;
+  titleOnly: boolean;
+}
+
+/** Finds a clear horizontal area for one title line at the start of a full-family event. */
+export function getDaySpanningTitleArea(
+  block: {
+    geometry: Pick<Extract<DayEventGeometry, { kind: 'timeline' }>, 'top'>;
+    lane: number;
+    laneCount: number;
+  },
+  memberIds: readonly string[],
+  localBlocks: readonly {
+    column: Pick<DayEventColumn, 'memberIds' | 'spansAll'>;
+    geometry: Pick<Extract<DayEventGeometry, { kind: 'timeline' }>, 'top' | 'height'>;
+  }[],
+): DaySpanningTitleArea {
+  const memberCount = memberIds.length;
+  if (!Number.isSafeInteger(memberCount) || memberCount < 1) {
+    throw new RangeError('Timeline member count must be a positive integer');
+  }
+  if (
+    !Number.isSafeInteger(block.lane) ||
+    block.lane < 0 ||
+    !Number.isSafeInteger(block.laneCount) ||
+    block.laneCount < 1 ||
+    block.lane >= block.laneCount
+  ) {
+    throw new RangeError('Timeline block lane must be within a positive lane count');
+  }
+
+  const titleEnd = block.geometry.top + MIN_BLOCK_HEIGHT;
+  const occupied = Array.from({ length: memberCount }, () => false);
+  for (const localBlock of localBlocks) {
+    if (
+      localBlock.column.spansAll ||
+      localBlock.geometry.top >= titleEnd ||
+      localBlock.geometry.top + localBlock.geometry.height <= block.geometry.top
+    ) {
+      continue;
     }
-    return laneCount === 1
-      ? laneWidth
-      : `calc(${Array.from({ length: laneCount }, () => laneWidth).join(' + ')})`;
-  });
+    for (const memberId of localBlock.column.memberIds) {
+      const memberIndex = memberIds.indexOf(memberId);
+      if (memberIndex >= 0) occupied[memberIndex] = true;
+    }
+  }
+
+  let bestStart = -1;
+  let bestLength = 0;
+  for (let start = 0; start < memberCount; ) {
+    if (occupied[start]) {
+      start += 1;
+      continue;
+    }
+    let end = start;
+    while (end < memberCount && !occupied[end]) end += 1;
+    const length = end - start;
+    if (length > bestLength) {
+      bestStart = start;
+      bestLength = length;
+    }
+    start = end;
+  }
+
+  const hasLocalOverlap = occupied.some(Boolean);
+  if (bestLength > 0) {
+    return {
+      left: bestStart / memberCount,
+      width: bestLength / memberCount,
+      titleOnly: hasLocalOverlap,
+    };
+  }
+
+  return {
+    left: block.lane / (block.laneCount * memberCount),
+    width: 1 / (block.laneCount * memberCount),
+    titleOnly: true,
+  };
 }
 
 /** Keeps free-window geometry exact while providing a clipped minimum-sized hit target. */
