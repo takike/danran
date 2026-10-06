@@ -40,6 +40,7 @@ describe('getRoutineInstanceStatus', () => {
       id: 'normal',
       ...times,
       status: 'normal',
+      autoSkipReason: null,
     });
     const skipped = routineInstanceSchema.parse({
       id: 'skipped',
@@ -48,6 +49,7 @@ describe('getRoutineInstanceStatus', () => {
       start: null,
       end: null,
       status: 'skipped',
+      autoSkipReason: null,
     });
     const moved = routineInstanceSchema.parse({
       id: 'moved',
@@ -55,9 +57,16 @@ describe('getRoutineInstanceStatus', () => {
       start: '2026-10-08T16:30:00+09:00',
       end: '2026-10-08T17:30:00+09:00',
       status: 'moved',
+      autoSkipReason: null,
     });
     expect(formatRoutineInstanceChip(normal)).toBe('10/6（火）');
     expect(formatRoutineInstanceChip(skipped)).toBe('10/6（火） お休み');
+    expect(formatRoutineInstanceChip({ ...skipped, autoSkipReason: 'holiday' })).toBe(
+      '10/6（火） お休み（祝日）',
+    );
+    expect(formatRoutineInstanceChip({ ...skipped, autoSkipReason: 'new_year' })).toBe(
+      '10/6（火） お休み（年末年始）',
+    );
     expect(formatRoutineInstanceChip(moved)).toBe(
       '10/6（火） → 10/8（木） 振替 15:00–16:00 → 16:30–17:30',
     );
@@ -72,6 +81,7 @@ describe('getRoutineInstanceStatus', () => {
         start: '2026-10-06T15:00:00+09:00',
         end: '2026-10-06T16:00:00+09:00',
         status: 'normal',
+        autoSkipReason: null,
       }).success,
     ).toBe(false);
   });

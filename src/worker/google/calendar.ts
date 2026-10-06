@@ -54,6 +54,11 @@ import {
 import type { WorkerEnv } from '@worker/env';
 import { ReauthNeededError, getGoogleAccessToken } from '@worker/google/oauth';
 import type { z } from 'zod';
+import {
+  type GoogleCalendarClientOptions,
+  GoogleRequestBudgetExceededError,
+  type GoogleRequestContext,
+} from './requestBudget';
 
 export const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 
@@ -201,6 +206,7 @@ interface BaseRequestOptions {
   queryParams?: Record<string, unknown>;
   bodyText?: string;
   isNonIdempotentCreation?: boolean;
+  requestContext?: GoogleRequestContext;
 }
 
 interface JsonRequestOptions<T> extends BaseRequestOptions {
@@ -224,6 +230,7 @@ async function sendHttpRequestWithRetry(
     queryParams,
     bodyText,
     isNonIdempotentCreation = false,
+    requestContext,
   } = options;
 
   const url = `${GOOGLE_CALENDAR_API_BASE}${path}${buildQueryString(queryParams)}`;
@@ -234,9 +241,46 @@ async function sendHttpRequestWithRetry(
 
   async function acquireAccessToken(): Promise<string> {
     try {
-      const tokenResult = await getGoogleAccessToken(env, userId);
-      return tokenResult.accessToken;
+      return requestContext
+        ? await requestContext.accessToken()
+        : (await getGoogleAccessToken(env, userId)).accessToken;
     } catch (err) {
+      if (err instanceof GoogleRequestBudgetExceededError) {
+        throw new GoogleCalendarError({
+          message: 'Google external request budget exhausted',
+          code: 'API_ERROR',
+          status: 503,
+        });
+      }
+      if (err instanceof ReauthNeededError) {
+        throw new GoogleCalendarError({
+          message: 'Google re-authentication required',
+          code: 'AUTH_ERROR',
+          status: 401,
+          reason: 'authError',
+        });
+      }
+      throw new GoogleCalendarError({
+        message: 'Failed to obtain Google access token',
+        code: 'API_ERROR',
+        status: 500,
+      });
+    }
+  }
+
+  async function refreshAccessToken(): Promise<string> {
+    try {
+      return requestContext
+        ? await requestContext.accessToken(true)
+        : (await getGoogleAccessToken(env, userId)).accessToken;
+    } catch (err) {
+      if (err instanceof GoogleRequestBudgetExceededError) {
+        throw new GoogleCalendarError({
+          message: 'Google external request budget exhausted',
+          code: 'API_ERROR',
+          status: 503,
+        });
+      }
       if (err instanceof ReauthNeededError) {
         throw new GoogleCalendarError({
           message: 'Google re-authentication required',
@@ -277,8 +321,15 @@ async function sendHttpRequestWithRetry(
     let response: Response;
 
     try {
-      response = await fetch(request);
-    } catch {
+      response = await (requestContext?.fetcher ?? fetch)(request);
+    } catch (err) {
+      if (err instanceof GoogleRequestBudgetExceededError) {
+        throw new GoogleCalendarError({
+          message: 'Google external request budget exhausted',
+          code: 'API_ERROR',
+          status: 503,
+        });
+      }
       // Transport / network failure (connection reset, timeout, DNS failure)
       if (isNonIdempotentCreation) {
         throw new GoogleCalendarError({
@@ -316,7 +367,7 @@ async function sendHttpRequestWithRetry(
     if (response.status === 401) {
       if (!refreshedOn401 && attempts < 4) {
         refreshedOn401 = true;
-        accessToken = await acquireAccessToken();
+        accessToken = await refreshAccessToken();
         continue;
       }
 
@@ -587,10 +638,49 @@ export interface GoogleCalendarClient {
   };
 }
 
+function createGoogleRequestContext(
+  env: WorkerEnv,
+  userId: string,
+  options: GoogleCalendarClientOptions,
+): GoogleRequestContext {
+  const maxRequests = options.maxExternalRequests;
+  if (maxRequests !== undefined && (!Number.isSafeInteger(maxRequests) || maxRequests < 1)) {
+    throw new RangeError('maxExternalRequests must be a positive safe integer');
+  }
+  let requestCount = 0;
+  let cachedAccessToken: string | null = null;
+  const fetcher: typeof fetch = async (input, init) => {
+    if (maxRequests !== undefined && requestCount >= maxRequests) {
+      throw new GoogleRequestBudgetExceededError();
+    }
+    requestCount += 1;
+    return await fetch(input, init);
+  };
+  return {
+    fetcher,
+    async accessToken(forceRefresh = false) {
+      if (options.reuseAccessToken && cachedAccessToken !== null && !forceRefresh) {
+        return cachedAccessToken;
+      }
+      const result = await getGoogleAccessToken(env, userId, { fetcher });
+      cachedAccessToken = result.accessToken;
+      return cachedAccessToken;
+    },
+  };
+}
+
 /**
  * Creates a scoped Google Calendar REST client for the given authenticated user.
  */
-export function createGoogleCalendarClient(env: WorkerEnv, userId: string): GoogleCalendarClient {
+export function createGoogleCalendarClient(
+  env: WorkerEnv,
+  userId: string,
+  options: GoogleCalendarClientOptions = {},
+): GoogleCalendarClient {
+  const requestContext =
+    options.reuseAccessToken || options.maxExternalRequests !== undefined
+      ? createGoogleRequestContext(env, userId, options)
+      : undefined;
   return {
     calendars: {
       async insert(input: InsertCalendarInput): Promise<GoogleCalendar> {
@@ -606,6 +696,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleCalendar>({
           env,
           userId,
+          requestContext,
           method: 'POST',
           path: '/calendars',
           bodyText: JSON.stringify(validated.data),
@@ -619,6 +710,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         await executeVoidRequest({
           env,
           userId,
+          requestContext,
           method: 'DELETE',
           path: `/calendars/${encodedCalendarId}`,
         });
@@ -658,6 +750,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleAclRule>({
           env,
           userId,
+          requestContext,
           method: 'POST',
           path: `/calendars/${encodedCalendarId}/acl`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -689,6 +782,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleAclListPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: `/calendars/${encodedCalendarId}/acl`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -723,6 +817,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleEventsPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: `/calendars/${encodedCalendarId}/events`,
           queryParams,
@@ -760,6 +855,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GooglePersonalEventsPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: `/calendars/${encodedCalendarId}/events`,
           queryParams,
@@ -790,6 +886,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleEvent>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: `/calendars/${encodedCalendarId}/events/${encodedEventId}`,
           queryParams,
@@ -836,6 +933,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleEvent>({
           env,
           userId,
+          requestContext,
           method: 'POST',
           path: `/calendars/${encodedCalendarId}/events`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -879,6 +977,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleEvent>({
           env,
           userId,
+          requestContext,
           method: 'PATCH',
           path: `/calendars/${encodedCalendarId}/events/${encodedEventId}`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -911,6 +1010,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         await executeVoidRequest({
           env,
           userId,
+          requestContext,
           method: 'DELETE',
           path: `/calendars/${encodedCalendarId}/events/${encodedEventId}`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -937,6 +1037,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         const opts = validatedOptions.data;
         if (opts.timeMin !== undefined) queryParams.timeMin = opts.timeMin;
         if (opts.timeMax !== undefined) queryParams.timeMax = opts.timeMax;
+        if (opts.originalStart !== undefined) queryParams.originalStart = opts.originalStart;
         if (opts.showDeleted !== undefined) queryParams.showDeleted = opts.showDeleted;
         if (opts.maxResults !== undefined) queryParams.maxResults = opts.maxResults;
         if (opts.pageToken !== undefined) queryParams.pageToken = opts.pageToken;
@@ -945,6 +1046,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleEventsPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: `/calendars/${encodedCalendarId}/events/${encodedEventId}/instances`,
           queryParams,
@@ -974,6 +1076,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleCalendarListPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: '/users/me/calendarList',
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
@@ -1005,6 +1108,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GooglePersonalCalendarListPage>({
           env,
           userId,
+          requestContext,
           method: 'GET',
           path: '/users/me/calendarList',
           queryParams,
@@ -1026,6 +1130,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<GoogleCalendarListEntry>({
           env,
           userId,
+          requestContext,
           method: 'POST',
           path: '/users/me/calendarList',
           bodyText: JSON.stringify(validated.data),
@@ -1049,6 +1154,7 @@ export function createGoogleCalendarClient(env: WorkerEnv, userId: string): Goog
         return await executeJsonRequest<FreeBusyQueryResponse>({
           env,
           userId,
+          requestContext,
           method: 'POST',
           path: '/freeBusy',
           bodyText: JSON.stringify(validated.data),

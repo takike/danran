@@ -12,7 +12,7 @@
 ┌───────────────▼─────────── Cloudflare Worker ───────────────────┐
 │ Static Assets（SPA 配信）                                         │
 │ Hono API（/api/*）── ドメインロジック（src/shared）               │
-│ Cron Triggers（週1まとめ・祝日スキップ適用・公開コピー同期）      │
+│ Cron Triggers（週1まとめ・公開コピー同期）                       │
 └──┬──────────────┬──────────────┬──────────────┬─────────────────┘
    │ D1           │ R2           │ Google APIs   │ LLM API（Claude）
    │ 付加情報・   │ プリント写真 │ Calendar /    │ プリント画像から
@@ -140,8 +140,11 @@ event_meta       id PK, family_id FK families CASCADE, calendar_id, event_id,
 routine_settings id PK, family_id FK families CASCADE, calendar_id, recurring_event_id,
                  category CHECK lesson|housework|other, skip_holidays bool NOT NULL DEFAULT false,
                  skip_new_year bool NOT NULL DEFAULT false, affects_availability bool NOT NULL DEFAULT true,
-                 default_assignee_member_id NULL FK members SET NULL,
+                 default_assignee_member_id NULL FK members SET NULL, auto_skip_applied_until NULL,
                  created_at, updated_at; UNIQUE(calendar_id, recurring_event_id), family_id index
+routine_auto_skips id PK, routine_settings_id FK routine_settings CASCADE, original_start,
+                 reason CHECK holiday|new_year, status CHECK applied|overridden, created_at,
+                 UNIQUE(routine_settings_id, original_start), routine_settings_id/status index
 attachments      id, family_id, r2_key, content_type, width, height, created_by, created_at
 event_attachments event_meta_id, attachment_id
 import_jobs      id, family_id, attachment_id, status(pending|extracted|failed|committed),
@@ -203,8 +206,9 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 - 週 API の `WeekEvent` は、繰り返し予定の回かを示す `isRecurring`、通常回だけを示す `isRoutine`、元の開始日時を示す `movedFrom` を返す。`isRecurring` は `recurringEventId` の有無で決め、通常回・例外回のどちらも true。`isRoutine` は通常の繰り返し回だけ true。単発予定は `isRecurring: false`, `isRoutine: false`, `movedFrom: null`。
 - `WeekEvent.affectsAvailability` は必須の真偽値。対応する recurring series の `routine_settings.affects_availability` が false の場合だけ false を返し、それ以外は true。この判定は `isRoutine` ではなくシリーズ ID を使うため、例外回にも同じ設定を適用する。
 - 「この回だけ休む」は、その回の `status: cancelled`。「振替」は、その回の開始日時を変更する（`events.instances` → `patch`）。
-- 「祝日は休み」：Google の RRULE は日本の祝日を知らないので、**Cron（月1）で今後6か月分の祝日・休園日に当たる回をキャンセル**する。設定をオフにしたら元に戻す。適用済みの回は D1 に記録しておく。
-- 「年末年始は休み」も同じ仕組み（12/29〜1/3 を既定値に、家族ごとに変更可）。
+- Task 3-3 の「祝日はお休み」「年末年始はお休み」は、各シリーズの設定と D1 の記録に基づき、利用者が操作中に本人の Google トークンで適用する。設定を有効にしたときは JST の今日から183日後までを対象にする。`/routines` を開いたとき、必要なシリーズは一覧の表示を待たせずに先の分を継ぎ足す。定期実行の Cron は使わないため、半年以上画面が開かれなければ、その先の該当回は対象にならない。
+- 祝日は日本の祝日・振替休日を対象とする。年末年始は12/29〜1/3に固定する。両方に当たる1/1の記録理由は `holiday` とする。休園日のスキップと、期間を家族ごとに変える設定は含めない。
+- 自動で変更するのは元の予定日が今日以降にある通常の回だけ。すでに休みの回、手動で休み・復元・振替・開始または終了時刻を変更した回は変更しない。自動スキップの記録は `routine_auto_skips` に置き、利用者がその回を手動で復元または振替した場合は `overridden` として保持する。設定をオフにして復元するのは、まだ自動スキップ状態にある未来の回だけ。
 - `affects_availability = false`（家事代行など）は、共通の空きの計算から除外する。
 
 ## 表示ロジック（`src/shared/domain`）

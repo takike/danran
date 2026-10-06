@@ -435,6 +435,7 @@ export const eventsInstancesOptionsSchema = z
   .object({
     timeMin: rfc3339InstantSchema.optional(),
     timeMax: rfc3339InstantSchema.optional(),
+    originalStart: rfc3339InstantSchema.optional(),
     showDeleted: z.boolean().optional(),
     maxResults: z.number().int().min(1).max(2500).optional(),
     pageToken: z.string().optional(),

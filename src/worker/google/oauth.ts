@@ -19,6 +19,7 @@ import { googleTokens } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import { and, eq } from 'drizzle-orm';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { GoogleRequestBudgetExceededError } from './requestBudget';
 
 export class ReauthNeededError extends Error {
   constructor(message = 'Re-authentication with Google is required') {
@@ -195,6 +196,7 @@ export async function verifyGoogleIdToken(
 export async function getGoogleAccessToken(
   env: WorkerEnv,
   userId: string,
+  options: { fetcher?: typeof fetch } = {},
 ): Promise<{ accessToken: string; expiresIn: number; tokenType: string }> {
   const config = getAuthConfig(env);
   const db: Database = createDb(env.DB);
@@ -221,7 +223,7 @@ export async function getGoogleAccessToken(
 
   let response: Response;
   try {
-    response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    response = await (options.fetcher ?? fetch)(GOOGLE_TOKEN_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -230,7 +232,8 @@ export async function getGoogleAccessToken(
       redirect: 'manual',
       signal: AbortSignal.timeout(10000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof GoogleRequestBudgetExceededError) throw error;
     throw new GoogleApiError('Failed to communicate with Google token endpoint');
   }
 

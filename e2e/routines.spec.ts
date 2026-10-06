@@ -70,6 +70,9 @@ function routine(
     assigneeMemberId: 'mem_adult_a',
     category: 'lesson',
     affectsAvailability: true,
+    skipHolidays: false,
+    skipNewYear: false,
+    autoSkipDue: false,
     status: 'ready',
     upcoming: { status: 'ready', instances: sampleInstances(`instance-${id}`) },
     ...fields,
@@ -83,6 +86,7 @@ function instance(
   actualDate: string | null = originalDate,
   startTime = '17:00',
   endTime = '18:00',
+  autoSkipReason: RoutineInstance['autoSkipReason'] = null,
 ): RoutineInstance {
   const originalStart = `${originalDate}T17:00:00+09:00`;
   const originalEnd = `${originalDate}T18:00:00+09:00`;
@@ -93,6 +97,7 @@ function instance(
     start: actualDate === null ? null : `${actualDate}T${startTime}:00+09:00`,
     end: actualDate === null ? null : `${actualDate}T${endTime}:00+09:00`,
     status,
+    autoSkipReason,
   };
 }
 
@@ -126,6 +131,8 @@ async function mockRoutineApis(
     action: string;
     body: unknown;
   }> = [];
+  const settingsMutations: Array<{ routineId: string; body: unknown }> = [];
+  const autoSkipMutations: string[] = [];
   let listCalls = 0;
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   let signalInstanceMutationStarted: () => void = () => {};
@@ -153,8 +160,35 @@ async function mockRoutineApis(
       await route.fulfill(jsonResponse(200, { routines }));
       return;
     }
+    const pathname = new URL(request.url()).pathname;
+    const settingsMatch = pathname.match(/\/routines\/([^/]+)\/settings$/);
+    if (request.method() === 'PATCH' && settingsMatch) {
+      const routineId = settingsMatch[1] ?? '';
+      const body = request.postDataJSON() as { skipHolidays: boolean; skipNewYear: boolean };
+      settingsMutations.push({ routineId, body });
+      routines = routines.map((item) =>
+        item.id === routineId
+          ? { ...item, skipHolidays: body.skipHolidays, skipNewYear: body.skipNewYear }
+          : item,
+      );
+      await route.fulfill(
+        jsonResponse(200, {
+          skipHolidays: body.skipHolidays,
+          skipNewYear: body.skipNewYear,
+          hasMore: false,
+        }),
+      );
+      return;
+    }
     if (request.method() === 'POST') {
-      const pathname = new URL(request.url()).pathname;
+      const applyMatch = pathname.match(/\/routines\/([^/]+)\/auto-skips\/apply$/);
+      if (applyMatch) {
+        autoSkipMutations.push(applyMatch[1] ?? '');
+        await route.fulfill(
+          jsonResponse(200, { skipHolidays: false, skipNewYear: false, hasMore: false }),
+        );
+        return;
+      }
       const instanceMatch = pathname.match(
         /\/routines\/([^/]+)\/instances\/([^/]+)\/(skip|restore|move)$/,
       );
@@ -181,7 +215,7 @@ async function mockRoutineApis(
         }
         let updated: RoutineInstance;
         if (action === 'skip') {
-          updated = { ...current, start: null, end: null, status: 'skipped' };
+          updated = { ...current, start: null, end: null, status: 'skipped', autoSkipReason: null };
         } else if (action === 'restore') {
           updated = {
             ...current,
@@ -235,6 +269,8 @@ async function mockRoutineApis(
     createBodies,
     deletedIds,
     instanceMutations,
+    settingsMutations,
+    autoSkipMutations,
     instanceMutationStarted,
     releaseInstanceMutation,
     get listCalls() {
@@ -356,14 +392,24 @@ test.describe('Task 3-1: recurring routines', () => {
         routine({
           id: 'routine-piano',
           title: 'ピアノ',
-          weekdays: ['TU', 'FR'],
+          weekdays: ['TU'],
+          skipHolidays: true,
+          skipNewYear: true,
           upcoming: {
             status: 'ready',
             instances: [
               instance('piano-normal', '2026-10-13'),
-              instance('piano-skipped', '2026-10-20', 'skipped', null),
-              instance('piano-moved', '2026-10-27', 'moved', '2026-10-29'),
-              instance('piano-next', '2026-11-03'),
+              instance('piano-skipped', '2026-11-03', 'skipped', null, '17:00', '18:00', 'holiday'),
+              instance(
+                'piano-year-end',
+                '2026-12-29',
+                'skipped',
+                null,
+                '17:00',
+                '18:00',
+                'new_year',
+              ),
+              instance('piano-next', '2027-01-12'),
             ],
           },
         }),
@@ -372,6 +418,15 @@ test.describe('Task 3-1: recurring routines', () => {
           title: '家事代行',
           weekdays: ['SA'],
           interval: 2,
+          upcoming: {
+            status: 'ready',
+            instances: [
+              instance('cleaning-1', '2026-10-17'),
+              instance('cleaning-2', '2026-10-31'),
+              instance('cleaning-3', '2026-11-14'),
+              instance('cleaning-4', '2026-11-28'),
+            ],
+          },
           category: 'housework',
           affectsAvailability: false,
         }),
@@ -390,18 +445,14 @@ test.describe('Task 3-1: recurring routines', () => {
       await expect(pianoCard.getByTestId('routine-instance-chip-piano-skipped')).toContainText(
         'お休み',
       );
-      await expect(pianoCard.getByTestId('routine-instance-chip-piano-moved')).toContainText(
-        '10/27',
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-skipped')).toContainText(
+        '11/3（火） お休み（祝日）',
       );
-      await expect(pianoCard.getByTestId('routine-instance-chip-piano-moved')).toContainText(
-        '10/29',
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-year-end')).toContainText(
+        '12/29（火） お休み（年末年始）',
       );
-      await pianoCard.getByTestId('routine-instance-chip-piano-moved').click();
-      const movedActions = pianoCard.getByTestId('routine-instance-actions-piano-moved');
-      await expect(movedActions).toBeVisible();
-      await movedActions.getByTestId('routine-instance-change-move').click();
-      await expect(movedActions.getByTestId('routine-instance-move-save')).toBeVisible();
-      await expect(movedActions.getByTestId('routine-instance-move-cancel')).toBeVisible();
+      const fullHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width: 390, height: fullHeight });
       await page.screenshot({ path: 'docs/screenshots/s4-routines.png', fullPage: true });
     }
   });
@@ -750,6 +801,339 @@ test.describe('Task 3-1: recurring routines', () => {
     await retry.click();
     await expect(retry).toBeVisible();
     await expect.poll(() => api.listCalls).toBeGreaterThan(callsBeforeRetry);
+  });
+
+  test('saves holiday settings and continues 20-item batches while locking the routine card', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-holidays',
+          title: 'ピアノ',
+          upcoming: { status: 'ready', instances: [instance('holiday-instance', '2026-10-13')] },
+        }),
+      ],
+    });
+    let applyCalls = 0;
+    let releaseApply: (() => void) | undefined;
+    let applyStarted: (() => void) | undefined;
+    const applyGate = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    const applyStartedPromise = new Promise<void>((resolve) => {
+      applyStarted = resolve;
+    });
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-holidays/settings`,
+      async (route) => {
+        const body = route.request().postDataJSON() as {
+          skipHolidays: boolean;
+          skipNewYear: boolean;
+        };
+        api.settingsMutations.push({ routineId: 'routine-holidays', body });
+        api.setRoutines([
+          routine({
+            id: 'routine-holidays',
+            title: 'ピアノ',
+            skipHolidays: body.skipHolidays,
+            skipNewYear: body.skipNewYear,
+            upcoming: { status: 'ready', instances: [instance('holiday-instance', '2026-10-13')] },
+          }),
+        ]);
+        await route.fulfill(jsonResponse(200, { ...body, hasMore: !body.skipNewYear }));
+      },
+    );
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-holidays/auto-skips/apply`,
+      async (route) => {
+        applyCalls++;
+        if (applyCalls === 1) {
+          applyStarted?.();
+          await applyGate;
+          await route.fulfill(
+            jsonResponse(200, { skipHolidays: true, skipNewYear: false, hasMore: true }),
+          );
+        } else {
+          await route.fulfill(
+            jsonResponse(200, { skipHolidays: true, skipNewYear: false, hasMore: false }),
+          );
+        }
+      },
+    );
+
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const holidayToggle = card.getByTestId('routine-skip-holidays-routine-holidays');
+    const chip = card.getByTestId('routine-instance-chip-holiday-instance');
+    const request = holidayToggle.click();
+    await applyStartedPromise;
+    await expect(card.getByTestId('routine-auto-skips-pending-routine-holidays')).toHaveText(
+      '適用中...',
+    );
+    await expect(holidayToggle).toBeDisabled();
+    await expect(card.getByTestId('routine-skip-new-year-routine-holidays')).toBeDisabled();
+    await expect(chip).toBeDisabled();
+    releaseApply?.();
+    await request;
+    await expect(card.getByTestId('routine-auto-skips-pending-routine-holidays')).toHaveCount(0);
+
+    expect(api.settingsMutations).toEqual([
+      { routineId: 'routine-holidays', body: { skipHolidays: true, skipNewYear: false } },
+    ]);
+    expect(applyCalls).toBe(2);
+    await expect(holidayToggle).toBeChecked();
+    const newYearToggle = card.getByTestId('routine-skip-new-year-routine-holidays');
+    await newYearToggle.click();
+    await expect(newYearToggle).toBeChecked();
+    expect(api.settingsMutations).toHaveLength(2);
+    expect(api.settingsMutations[1]).toEqual({
+      routineId: 'routine-holidays',
+      body: { skipHolidays: true, skipNewYear: true },
+    });
+    expect(applyCalls).toBe(2);
+    await expect(card.getByTestId('routine-auto-skips-pending-routine-holidays')).toHaveCount(0);
+  });
+
+  test('refreshes persisted flags after a failed apply and retries without toggling them again', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-retry', title: '水泳' })],
+    });
+    let applyCalls = 0;
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-retry/settings`,
+      async (route) => {
+        const body = route.request().postDataJSON() as {
+          skipHolidays: boolean;
+          skipNewYear: boolean;
+        };
+        api.settingsMutations.push({ routineId: 'routine-retry', body });
+        api.setRoutines([routine({ id: 'routine-retry', title: '水泳', ...body })]);
+        await route.fulfill(
+          jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+        );
+      },
+    );
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-retry/auto-skips/apply`,
+      async (route) => {
+        applyCalls++;
+        await route.fulfill(
+          jsonResponse(200, { skipHolidays: true, skipNewYear: false, hasMore: false }),
+        );
+      },
+    );
+
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: '水泳' });
+    const holidayToggle = card.getByTestId('routine-skip-holidays-routine-retry');
+    await holidayToggle.click();
+    await expect(holidayToggle).toBeChecked();
+    const retry = card.getByTestId('routine-auto-skips-retry-routine-retry');
+    await expect(retry).toBeVisible();
+    await expect(card.getByRole('alert')).toContainText('表示中の設定を確認');
+    await retry.click();
+    await expect(retry).toHaveCount(0);
+    expect(api.settingsMutations).toHaveLength(1);
+    expect(applyCalls).toBe(1);
+    await expect(holidayToggle).toBeChecked();
+  });
+
+  test('retry resubmits the selected flags if a failed settings request did not persist them', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-save-retry', title: '水泳' })],
+    });
+    let settingsCalls = 0;
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-save-retry/settings`,
+      async (route) => {
+        settingsCalls++;
+        const body = route.request().postDataJSON() as {
+          skipHolidays: boolean;
+          skipNewYear: boolean;
+        };
+        api.settingsMutations.push({ routineId: 'routine-save-retry', body });
+        if (settingsCalls === 1) {
+          await route.fulfill(
+            jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+          );
+          return;
+        }
+        api.setRoutines([routine({ id: 'routine-save-retry', title: '水泳', ...body })]);
+        await route.fulfill(jsonResponse(200, { ...body, hasMore: false }));
+      },
+    );
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-save-retry/auto-skips/apply`,
+      async (route) => {
+        await route.fulfill(
+          jsonResponse(200, { skipHolidays: true, skipNewYear: false, hasMore: false }),
+        );
+      },
+    );
+
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: '水泳' });
+    const holidayToggle = card.getByTestId('routine-skip-holidays-routine-save-retry');
+    await holidayToggle.click();
+    await expect(holidayToggle).not.toBeChecked();
+    const retry = card.getByTestId('routine-auto-skips-retry-routine-save-retry');
+    await retry.click();
+    await expect(holidayToggle).toBeChecked();
+    await expect(retry).toHaveCount(0);
+    expect(settingsCalls).toBe(2);
+    expect(api.settingsMutations).toHaveLength(2);
+  });
+
+  test('after retry saves flags but application fails, it displays saved flags and retries application only', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-save-then-apply', title: '英語' })],
+    });
+    let settingsCalls = 0;
+    let applyCalls = 0;
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-save-then-apply/settings`,
+      async (route) => {
+        settingsCalls++;
+        const body = route.request().postDataJSON() as {
+          skipHolidays: boolean;
+          skipNewYear: boolean;
+        };
+        api.settingsMutations.push({ routineId: 'routine-save-then-apply', body });
+        if (settingsCalls === 1) {
+          await route.fulfill(
+            jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+          );
+          return;
+        }
+        api.setRoutines([routine({ id: 'routine-save-then-apply', title: '英語', ...body })]);
+        await route.fulfill(jsonResponse(200, { ...body, hasMore: true }));
+      },
+    );
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-save-then-apply/auto-skips/apply`,
+      async (route) => {
+        applyCalls++;
+        api.autoSkipMutations.push('routine-save-then-apply');
+        if (applyCalls === 1) {
+          await route.fulfill(
+            jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+          );
+        } else {
+          await route.fulfill(
+            jsonResponse(200, { skipHolidays: true, skipNewYear: false, hasMore: false }),
+          );
+        }
+      },
+    );
+
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: '英語' });
+    const holidayToggle = card.getByTestId('routine-skip-holidays-routine-save-then-apply');
+    await holidayToggle.click();
+    const firstRetry = card.getByTestId('routine-auto-skips-retry-routine-save-then-apply');
+    await expect(firstRetry).toBeVisible();
+    await firstRetry.click();
+    const secondRetry = card.getByTestId('routine-auto-skips-retry-routine-save-then-apply');
+    await expect(holidayToggle).toBeChecked();
+    await expect(secondRetry).toBeVisible();
+    await secondRetry.click();
+    await expect(secondRetry).toHaveCount(0);
+    expect(settingsCalls).toBe(2);
+    expect(applyCalls).toBe(2);
+    expect(api.settingsMutations).toHaveLength(2);
+    expect(api.autoSkipMutations).toEqual(['routine-save-then-apply', 'routine-save-then-apply']);
+    await expect(holidayToggle).toBeChecked();
+  });
+
+  test('applies due routines once per visit and shows the server-provided skip reason', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-due',
+          title: 'ピアノ',
+          skipHolidays: true,
+          autoSkipDue: true,
+          upcoming: {
+            status: 'ready',
+            instances: [
+              instance(
+                'instance-holiday',
+                '2026-10-13',
+                'skipped',
+                null,
+                '17:00',
+                '18:00',
+                'holiday',
+              ),
+              instance(
+                'instance-year-end',
+                '2026-12-29',
+                'skipped',
+                null,
+                '17:00',
+                '18:00',
+                'new_year',
+              ),
+            ],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const holidayChip = card.getByTestId('routine-instance-chip-instance-holiday');
+    await expect(holidayChip).toContainText('10/13（火） お休み（祝日）');
+    await expect(card.getByTestId('routine-instance-chip-instance-year-end')).toContainText(
+      '12/29（火） お休み（年末年始）',
+    );
+    await expect.poll(() => api.autoSkipMutations.length).toBe(1);
+    await expect(card.getByTestId('routine-auto-skips-pending-routine-due')).toHaveCount(0);
+    // A successful list refresh still has autoSkipDue in this fixture; it must not relaunch the apply.
+    await page.waitForTimeout(100);
+    expect(api.autoSkipMutations).toEqual(['routine-due']);
+  });
+
+  test('shows a quiet retry after background catch-up fails and does not auto-retry on refresh', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-mount-retry', title: '体操', autoSkipDue: true })],
+    });
+    let applyAttempts = 0;
+    await page.route(
+      `**/api/families/${FAMILY_ID}/routines/routine-mount-retry/auto-skips/apply`,
+      async (route) => {
+        applyAttempts++;
+        api.autoSkipMutations.push('routine-mount-retry');
+        if (applyAttempts === 1) {
+          await route.fulfill(
+            jsonResponse(502, { code: 'GOOGLE_ERROR', error: 'Google Calendar failed' }),
+          );
+        } else {
+          await route.fulfill(
+            jsonResponse(200, { skipHolidays: false, skipNewYear: false, hasMore: false }),
+          );
+        }
+      },
+    );
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: '体操' });
+    const retry = card.getByTestId('routine-auto-skips-retry-routine-mount-retry');
+    await expect(retry).toBeVisible();
+    expect(applyAttempts).toBe(1);
+    await retry.click();
+    await expect(retry).toHaveCount(0);
+    expect(applyAttempts).toBe(2);
+    expect(api.autoSkipMutations).toEqual(['routine-mount-retry', 'routine-mount-retry']);
   });
 
   test('fits 390px and 445px, keeps controls at least 44px, and only the routine tab is ready', async ({
