@@ -358,15 +358,23 @@ function EventEditButton({
   onEdit,
   disabled,
   children,
-}: EventActions & { event: WeekEvent; children: React.ReactNode }): React.ReactElement {
+  className = '',
+  ariaDescribedBy,
+}: EventActions & {
+  event: WeekEvent;
+  children: React.ReactNode;
+  className?: string;
+  ariaDescribedBy?: string;
+}): React.ReactElement {
   return (
     <button
       type="button"
       data-testid={`edit-event-${event.id}`}
       aria-label={`予定を編集: ${event.title}`}
+      aria-describedby={ariaDescribedBy}
       disabled={disabled}
       onClick={(clickEvent) => onEdit(event, clickEvent.currentTarget)}
-      className="inline-flex min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] max-w-full items-center rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60"
+      className={`inline-flex min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] max-w-full items-center rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60 ${className}`.trim()}
     >
       {children}
     </button>
@@ -499,18 +507,20 @@ function ExpandedDay({
       data-date={day.date}
       data-layout="expanded"
       aria-label={formatFullDateLabel(day.date)}
-      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-start gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-sm)] last:border-0"
+      className="grid grid-cols-[var(--week-date-column)_minmax(0,1fr)_var(--tap-target-min)] items-start gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-sm)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
-      <Card className="min-w-0 rounded-[var(--radius-lg)] border-line p-[var(--spacing-sm)]">
-        <div className="mb-[var(--spacing-sm)] flex flex-wrap items-center justify-between gap-[var(--spacing-xs)]">
+      <Card
+        data-testid="expanded-day-card"
+        className="min-w-0 rounded-[var(--radius-lg)] border-line p-[var(--spacing-sm)]"
+      >
+        <div className="mb-[var(--spacing-2xs)] flex flex-wrap items-center gap-[var(--spacing-xs)]">
           <span className="rounded-[var(--radius-sm)] border border-accent px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-accent">
             いつもと違う日
           </span>
           {entries.length === 0 && <span className="text-xs text-muted">予定なし</span>}
-          <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
         </div>
-        <ul className="m-0 list-none space-y-[var(--spacing-sm)] p-0">
+        <ul className="m-0 list-none space-y-[var(--spacing-xs)] p-0">
           {entries.map((entry) => {
             if (entry.kind === 'personal') {
               return (
@@ -524,13 +534,29 @@ function ExpandedDay({
             }
             const event = entry.event;
             return (
-              <li key={event.id} className="min-w-0">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)] text-xs text-muted">
-                  <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
-                  <EventBadges event={event} members={members} />
-                </div>
-                <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
-                  <span className="mt-[var(--spacing-xs)] flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
+              <li key={event.id} className="flex min-w-0 flex-col">
+                <EventEditButton
+                  event={event}
+                  onAdd={onAdd}
+                  onEdit={onEdit}
+                  disabled={disabled}
+                  className="w-full flex-col items-stretch py-0"
+                  ariaDescribedBy={`expanded-event-details-${event.id}-${day.date}`}
+                >
+                  <span
+                    id={`expanded-event-details-${event.id}-${day.date}`}
+                    data-testid={`expanded-event-meta-${event.id}`}
+                    className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-[var(--spacing-xs)] text-xs text-muted"
+                  >
+                    <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
+                    <span className="w-fit min-w-0 max-w-full justify-self-end">
+                      <EventBadges event={event} members={members} />
+                    </span>
+                  </span>
+                  <span
+                    data-testid={`expanded-event-title-row-${event.id}`}
+                    className="flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]"
+                  >
                     <EventMembers memberIds={event.memberIds} members={members} />
                     <span className="min-w-0 break-words text-sm font-semibold [overflow-wrap:anywhere]">
                       {event.title}
@@ -538,7 +564,7 @@ function ExpandedDay({
                   </span>
                 </EventEditButton>
                 {event.items.length > 0 && (
-                  <div className="mt-[var(--spacing-sm)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
+                  <div className="mt-[var(--spacing-xs)] flex min-w-0 max-w-full flex-wrap gap-[var(--spacing-xs)]">
                     {event.items.map((item, index) => (
                       <span
                         key={`${event.id}-item-${index}`}
@@ -561,6 +587,7 @@ function ExpandedDay({
           })}
         </ul>
       </Card>
+      <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
     </li>
   );
 }

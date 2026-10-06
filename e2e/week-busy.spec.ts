@@ -34,6 +34,7 @@ interface MockOptions {
   delayBusyStart?: DateKey;
   malformedBusy?: boolean;
   longNames?: boolean;
+  unusualDay?: 'one-event' | 'two-events' | 'dense-event';
 }
 
 function familyId(account: Account): string {
@@ -84,11 +85,14 @@ function familyFixture(account: Account, longNames = false): FamilyPublic {
   };
 }
 
-function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
+function makeFamilyEvents(
+  anchor: DateKey,
+  unusualDay: MockOptions['unusualDay'] = 'two-events',
+): WeekEvent[] {
   const saturday = addCalendarDays(anchor, 5);
   const wednesday = addCalendarDays(anchor, 2);
   const tuesday = addCalendarDays(anchor, 1);
-  return [
+  const events: WeekEvent[] = [
     {
       id: 'evt-family-everyone',
       title: '家族の合成予定',
@@ -163,28 +167,57 @@ function makeFamilyEvents(anchor: DateKey): WeekEvent[] {
     },
     {
       id: 'evt-weekday-exception',
-      title: '水曜へ振替した習い事',
+      title:
+        unusualDay === 'dense-event'
+          ? `振替後のとても長い予定タイトル${'長い文字'.repeat(8)}`
+          : '水曜へ振替した習い事',
       time: {
         kind: 'timed',
         start: `${wednesday}T17:00:00+09:00`,
         endExclusive: `${wednesday}T18:00:00+09:00`,
       },
       memberIds: [CHILD],
-      assigneeMemberId: null,
+      assigneeMemberId: unusualDay === 'dense-event' ? ADULT_A : null,
       status: 'confirmed',
       isRoutine: false,
       isRecurring: true,
-      movedFrom: `${tuesday}T17:00:00+09:00`,
+      movedFrom:
+        unusualDay === 'one-event' ? `${wednesday}T16:00:00+09:00` : `${tuesday}T17:00:00+09:00`,
       affectsAvailability: true,
       source: 'manual',
       items: [],
     },
   ];
+  if (unusualDay !== 'one-event') {
+    events.push({
+      id: 'evt-weekday-oneoff',
+      title: unusualDay === 'dense-event' ? '単発予定' : '保護者会',
+      time: {
+        kind: 'timed',
+        start: `${wednesday}T18:30:00+09:00`,
+        endExclusive: `${wednesday}T19:00:00+09:00`,
+      },
+      memberIds: [CHILD],
+      assigneeMemberId: null,
+      status: unusualDay === 'dense-event' ? 'tentative' : 'confirmed',
+      isRoutine: false,
+      isRecurring: false,
+      movedFrom: null,
+      affectsAvailability: true,
+      source: 'manual',
+      items: [],
+    });
+  }
+  return events;
 }
 
-function makeWeek(anchor: DateKey, family: FamilyPublic): WeekResponse {
+function makeWeek(
+  anchor: DateKey,
+  family: FamilyPublic,
+  unusualDay?: MockOptions['unusualDay'],
+): WeekResponse {
   const range = getWeekRange(anchor);
-  const events = makeFamilyEvents(range.start);
+  const events = makeFamilyEvents(range.start, unusualDay);
   const days = range.days.map((date) => {
     const weekday = getWeekday(date);
     const isHoliday = date === '2026-10-12';
@@ -386,7 +419,7 @@ async function mockWeekApis(page: Page, options: MockOptions = {}): Promise<Mock
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(makeWeek(anchor, family)),
+      body: JSON.stringify(makeWeek(anchor, family, options.unusualDay)),
     });
   });
   await page.route('**/api/families/*/events', async (route) => {
@@ -466,6 +499,127 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     await page.addInitScript(() => {
       Date.now = () => Date.parse('2026-10-06T12:00:00+09:00');
     });
+  });
+
+  test('keeps unusual-day cards compact, aligns add buttons, and wraps dense event content', async ({
+    page,
+  }) => {
+    await mockWeekApis(page, { unusualDay: 'one-event' });
+    await page.goto(`/?week=${BASE_WEEK}`);
+
+    const expandedDay = page
+      .getByTestId('week-day')
+      .filter({ has: page.getByTestId('expanded-day-card') });
+    const compactDay = page.getByTestId('week-day').filter({ hasText: '火曜のルーティン' });
+    const card = expandedDay.getByTestId('expanded-day-card');
+    const expandedAdd = expandedDay.getByTestId('add-event-2026-10-07');
+    const compactAdd = compactDay.getByTestId('add-event-2026-10-06');
+    await expect(card).toBeVisible();
+
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      const cardBounds = await card.boundingBox();
+      const expandedAddBounds = await expandedAdd.boundingBox();
+      const compactAddBounds = await compactAdd.boundingBox();
+      const eventButtonBounds = await page
+        .getByTestId('edit-event-evt-weekday-exception')
+        .boundingBox();
+      expect(cardBounds).not.toBeNull();
+      expect(expandedAddBounds).not.toBeNull();
+      expect(compactAddBounds).not.toBeNull();
+      expect(eventButtonBounds).not.toBeNull();
+      expect(cardBounds?.height).toBeLessThanOrEqual(88);
+      expect(
+        Math.abs((expandedAddBounds?.x ?? 0) - (compactAddBounds?.x ?? 0)),
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(
+          (expandedAddBounds?.x ?? 0) +
+            (expandedAddBounds?.width ?? 0) -
+            ((compactAddBounds?.x ?? 0) + (compactAddBounds?.width ?? 0)),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect((cardBounds?.x ?? 0) + (cardBounds?.width ?? 0)).toBeLessThanOrEqual(
+        expandedAddBounds?.x ?? 0,
+      );
+      expect(Math.abs((expandedAddBounds?.y ?? 0) - (cardBounds?.y ?? 0))).toBeLessThanOrEqual(1);
+      expect(eventButtonBounds?.width).toBeGreaterThanOrEqual(44);
+      expect(eventButtonBounds?.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await expect(page.getByTestId('edit-event-evt-weekday-exception')).toHaveAccessibleDescription(
+      /17:00.*18:00.*繰り返し.*時間変更/,
+    );
+    await page.getByTestId('edit-event-evt-weekday-exception').click();
+    await expect(page.getByTestId('routine-event-notice')).toBeVisible();
+    await expect(page.getByTestId('event-dialog')).toHaveCount(0);
+
+    await mockWeekApis(page, { unusualDay: 'two-events' });
+    await page.goto(`/?week=${BASE_WEEK}`);
+    const twoEventDay = page
+      .getByTestId('week-day')
+      .filter({ has: page.getByTestId('expanded-day-card') });
+    const twoEventCard = twoEventDay.getByTestId('expanded-day-card');
+    await expect(twoEventCard).toBeVisible();
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      const bounds = await twoEventCard.boundingBox();
+      expect(bounds?.height).toBeLessThanOrEqual(150);
+      const addBounds = await twoEventDay.getByTestId('add-event-2026-10-07').boundingBox();
+      const compactBounds = await page
+        .getByTestId('week-day')
+        .filter({ hasText: '火曜のルーティン' })
+        .getByTestId('add-event-2026-10-06')
+        .boundingBox();
+      expect(Math.abs((addBounds?.x ?? 0) - (compactBounds?.x ?? 0))).toBeLessThanOrEqual(1);
+      expect((bounds?.x ?? 0) + (bounds?.width ?? 0)).toBeLessThanOrEqual(addBounds?.x ?? 0);
+    }
+    await twoEventDay.getByTestId('edit-event-evt-weekday-oneoff').click();
+    await expect(page.getByTestId('event-dialog')).toBeVisible();
+    await expect(page.getByTestId('event-dialog').getByLabel('タイトル')).toHaveValue('保護者会');
+    await page.getByRole('button', { name: '閉じる' }).click();
+
+    await mockWeekApis(page, { unusualDay: 'dense-event' });
+    await page.goto(`/?week=${BASE_WEEK}`);
+    const denseDay = page
+      .getByTestId('week-day')
+      .filter({ has: page.getByTestId('expanded-day-card') });
+    const denseCard = denseDay.getByTestId('expanded-day-card');
+    await expect(denseCard.getByText('振替（10/6 から）')).toBeVisible();
+    await expect(denseCard.getByText('担当 大人甲')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expectNoHorizontalOverflow(page);
+      const longTitle = denseCard.getByText(
+        `振替後のとても長い予定タイトル${'長い文字'.repeat(8)}`,
+      );
+      const titleBounds = await longTitle.boundingBox();
+      const cardBounds = await denseCard.boundingBox();
+      const metaBounds = await denseDay
+        .getByTestId('expanded-event-meta-evt-weekday-exception')
+        .boundingBox();
+      const titleRowBounds = await denseDay
+        .getByTestId('expanded-event-title-row-evt-weekday-exception')
+        .boundingBox();
+      expect(titleBounds?.x).toBeGreaterThanOrEqual(cardBounds?.x ?? 0);
+      expect((titleBounds?.x ?? 0) + (titleBounds?.width ?? 0)).toBeLessThanOrEqual(
+        (cardBounds?.x ?? 0) + (cardBounds?.width ?? 0),
+      );
+      expect(metaBounds).not.toBeNull();
+      expect(titleRowBounds).not.toBeNull();
+      expect(metaBounds?.x).toBeGreaterThanOrEqual(cardBounds?.x ?? 0);
+      expect((metaBounds?.x ?? 0) + (metaBounds?.width ?? 0)).toBeLessThanOrEqual(
+        (cardBounds?.x ?? 0) + (cardBounds?.width ?? 0),
+      );
+      expect(titleRowBounds?.x).toBeGreaterThanOrEqual(cardBounds?.x ?? 0);
+      expect((titleRowBounds?.x ?? 0) + (titleRowBounds?.width ?? 0)).toBeLessThanOrEqual(
+        (cardBounds?.x ?? 0) + (cardBounds?.width ?? 0),
+      );
+      expect((metaBounds?.y ?? 0) + (metaBounds?.height ?? 0)).toBeLessThanOrEqual(
+        titleRowBounds?.y ?? 0,
+      );
+    }
   });
 
   test('renders ready member and child busy bars, common windows, routine calculation and screenshot', async ({
