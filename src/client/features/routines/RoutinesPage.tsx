@@ -1,4 +1,11 @@
-import { RoutineApiError, createRoutine, deleteRoutine, fetchRoutines } from '@client/api/routines';
+import {
+  RoutineApiError,
+  applyRoutineAutoSkips,
+  createRoutine,
+  deleteRoutine,
+  fetchRoutines,
+  updateRoutineSettings,
+} from '@client/api/routines';
 import { AuthenticatedShell } from '@client/components/AuthenticatedShell';
 import { MemberDot } from '@client/components/MemberDot';
 import { OAuthNotices } from '@client/components/OAuthNotices';
@@ -11,6 +18,7 @@ import {
   type Routine,
   type RoutineInput,
   type RoutineInstance,
+  type RoutineSettingsInput,
   type WeekdayCode,
   createRoutineInputSchema,
 } from '@shared/schemas/routines';
@@ -554,8 +562,15 @@ export default function RoutinesPage(): React.ReactElement {
   );
   const currentIdentity = user && family ? `${user.id}:${family.id}` : '';
   const identityRef = useRef('');
+  const mountedRef = useRef(false);
   const previousIdentityRef = useRef(currentIdentity);
   identityRef.current = currentIdentity;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const routinesQuery = useQuery({
     queryKey: [...ROUTINE_QUERY_KEY, user?.id, family?.id] as const,
     queryFn: ({ signal }) =>
@@ -572,6 +587,13 @@ export default function RoutinesPage(): React.ReactElement {
   const [deleteError, setDeleteError] = useState('');
   const [busyRoutineIds, setBusyRoutineIds] = useState<Set<string>>(() => new Set());
   const busyRoutineIdsRef = useRef(new Set<string>());
+  const attemptedAutoSkipsRef = useRef(new Set<string>());
+  const retrySettingsRef = useRef<Record<string, RoutineSettingsInput>>({});
+  const [autoSkipErrors, setAutoSkipErrors] = useState<Record<string, boolean>>({});
+  const [autoApplyingRoutineIds, setAutoApplyingRoutineIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  useReloadProtection(autoApplyingRoutineIds.size > 0, autoApplyingRoutineIds.size > 0);
   const [loginNavigating, setLoginNavigating] = useState(false);
   const loginNavigationRef = useRef(false);
   useEffect(() => {
@@ -593,6 +615,9 @@ export default function RoutinesPage(): React.ReactElement {
     deletePendingRef.current = null;
     busyRoutineIdsRef.current = new Set();
     setBusyRoutineIds(new Set());
+    setAutoSkipErrors({});
+    setAutoApplyingRoutineIds(new Set());
+    retrySettingsRef.current = {};
   }, [currentIdentity]);
   const openRoutineDialog = () => {
     setDialogEverOpened(true);
@@ -607,6 +632,202 @@ export default function RoutinesPage(): React.ReactElement {
   const onUnauthorized = useCallback(() => {
     void logoutMutation.mutateAsync().catch(() => undefined);
   }, [logoutMutation.mutateAsync]);
+
+  const setRoutineBusy = useCallback((routineId: string, busy: boolean) => {
+    const next = new Set(busyRoutineIdsRef.current);
+    if (busy) next.add(routineId);
+    else next.delete(routineId);
+    busyRoutineIdsRef.current = next;
+    setBusyRoutineIds(next);
+  }, []);
+
+  const setRoutineAutoApplying = useCallback((routineId: string, applying: boolean) => {
+    setAutoApplyingRoutineIds((current) => {
+      const next = new Set(current);
+      if (applying) next.add(routineId);
+      else next.delete(routineId);
+      return next;
+    });
+  }, []);
+
+  const invalidateRoutineViews = useCallback(
+    async (userId: string, familyId: string) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: [...ROUTINE_QUERY_KEY, userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
+      ]);
+    },
+    [queryClient],
+  );
+
+  const applyAutoSkips = useCallback(
+    async (routineId: string, identity: string) => {
+      if (!mountedRef.current || identityRef.current !== identity || !family || !user) return;
+      while (mountedRef.current && identityRef.current === identity) {
+        const result = await applyRoutineAutoSkips(family.id, routineId);
+        if (!mountedRef.current || identityRef.current !== identity) return;
+        if (!result.hasMore) return;
+      }
+    },
+    [family, user],
+  );
+
+  const handleRoutineSettings = async (
+    routineId: string,
+    settings: { skipHolidays: boolean; skipNewYear: boolean },
+  ) => {
+    if (!family || !user || busyRoutineIdsRef.current.has(routineId)) return;
+    const identity = `${user.id}:${family.id}`;
+    setRoutineBusy(routineId, true);
+    setRoutineAutoApplying(routineId, true);
+    attemptedAutoSkipsRef.current.add(`${identity}:${routineId}`);
+    setAutoSkipErrors((current) => ({ ...current, [routineId]: false }));
+    try {
+      const firstBatch = await updateRoutineSettings(family.id, routineId, settings);
+      if (!mountedRef.current || identityRef.current !== identity) return;
+      if (firstBatch.hasMore) await applyAutoSkips(routineId, identity);
+      if (!mountedRef.current || identityRef.current !== identity) return;
+      delete retrySettingsRef.current[routineId];
+      setAutoSkipErrors((current) => ({ ...current, [routineId]: false }));
+      await invalidateRoutineViews(user.id, family.id);
+    } catch (error: unknown) {
+      if (!mountedRef.current || identityRef.current !== identity) return;
+      if (error instanceof RoutineApiError && error.status === 401) onUnauthorized();
+      setAutoSkipErrors((current) => ({ ...current, [routineId]: true }));
+      // Read the saved flags to choose whether retry should save settings or only continue applying.
+      try {
+        await queryClient.cancelQueries({
+          queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id],
+        });
+        if (!mountedRef.current || identityRef.current !== identity) return;
+        const refreshed = await fetchRoutines(family.id);
+        if (!mountedRef.current || identityRef.current !== identity) return;
+        queryClient.setQueryData([...ROUTINE_QUERY_KEY, user.id, family.id], refreshed);
+        const saved = refreshed.routines.find((item) => item.id === routineId);
+        if (
+          saved?.skipHolidays === settings.skipHolidays &&
+          saved.skipNewYear === settings.skipNewYear
+        ) {
+          delete retrySettingsRef.current[routineId];
+        } else {
+          retrySettingsRef.current[routineId] = settings;
+        }
+      } catch {
+        if (!mountedRef.current || identityRef.current !== identity) return;
+        retrySettingsRef.current[routineId] = settings;
+        await queryClient.invalidateQueries({
+          queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id],
+        });
+      }
+    } finally {
+      if (mountedRef.current && identityRef.current === identity) {
+        setRoutineBusy(routineId, false);
+        setRoutineAutoApplying(routineId, false);
+      }
+    }
+  };
+
+  const retryAutoSkips = async (routineId: string) => {
+    if (!family || !user || busyRoutineIdsRef.current.has(routineId)) return;
+    const identity = `${user.id}:${family.id}`;
+    setRoutineBusy(routineId, true);
+    setRoutineAutoApplying(routineId, true);
+    attemptedAutoSkipsRef.current.add(`${identity}:${routineId}`);
+    setAutoSkipErrors((current) => ({ ...current, [routineId]: false }));
+    try {
+      const retrySettings = retrySettingsRef.current[routineId];
+      if (retrySettings) {
+        const firstBatch = await updateRoutineSettings(family.id, routineId, retrySettings);
+        if (!mountedRef.current || identityRef.current !== identity) return;
+        if (firstBatch.hasMore) await applyAutoSkips(routineId, identity);
+      } else {
+        await applyAutoSkips(routineId, identity);
+      }
+      if (!mountedRef.current || identityRef.current !== identity) return;
+      delete retrySettingsRef.current[routineId];
+      setAutoSkipErrors((current) => ({ ...current, [routineId]: false }));
+      await invalidateRoutineViews(user.id, family.id);
+    } catch (error: unknown) {
+      if (!mountedRef.current || identityRef.current !== identity) return;
+      if (error instanceof RoutineApiError && error.status === 401) onUnauthorized();
+      setAutoSkipErrors((current) => ({ ...current, [routineId]: true }));
+      const retrySettings = retrySettingsRef.current[routineId];
+      if (retrySettings) {
+        try {
+          await queryClient.cancelQueries({
+            queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id],
+          });
+          if (!mountedRef.current || identityRef.current !== identity) return;
+          const refreshed = await fetchRoutines(family.id);
+          if (!mountedRef.current || identityRef.current !== identity) return;
+          queryClient.setQueryData([...ROUTINE_QUERY_KEY, user.id, family.id], refreshed);
+          const saved = refreshed.routines.find((item) => item.id === routineId);
+          if (
+            saved?.skipHolidays === retrySettings.skipHolidays &&
+            saved.skipNewYear === retrySettings.skipNewYear
+          ) {
+            delete retrySettingsRef.current[routineId];
+          }
+        } catch {
+          if (!mountedRef.current || identityRef.current !== identity) return;
+          await queryClient.invalidateQueries({
+            queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id],
+          });
+        }
+      }
+    } finally {
+      if (mountedRef.current && identityRef.current === identity) {
+        setRoutineBusy(routineId, false);
+        setRoutineAutoApplying(routineId, false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!family || !user || !routinesQuery.data || isDeleting || deletePendingRef.current) return;
+    const identity = `${user.id}:${family.id}`;
+    for (const routine of routinesQuery.data.routines) {
+      const attemptKey = `${identity}:${routine.id}`;
+      if (
+        routine.autoSkipDue &&
+        routine.status === 'ready' &&
+        !attemptedAutoSkipsRef.current.has(attemptKey) &&
+        !busyRoutineIdsRef.current.has(routine.id)
+      ) {
+        attemptedAutoSkipsRef.current.add(attemptKey);
+        setRoutineBusy(routine.id, true);
+        setRoutineAutoApplying(routine.id, true);
+        void applyAutoSkips(routine.id, identity)
+          .then(async () => {
+            if (!mountedRef.current || identityRef.current !== identity) return;
+            setAutoSkipErrors((current) => ({ ...current, [routine.id]: false }));
+            await invalidateRoutineViews(user.id, family.id);
+          })
+          .catch((error: unknown) => {
+            if (!mountedRef.current || identityRef.current !== identity) return;
+            if (error instanceof RoutineApiError && error.status === 401) onUnauthorized();
+            setAutoSkipErrors((current) => ({ ...current, [routine.id]: true }));
+          })
+          .finally(() => {
+            if (mountedRef.current && identityRef.current === identity) {
+              setRoutineBusy(routine.id, false);
+              setRoutineAutoApplying(routine.id, false);
+            }
+          });
+      }
+    }
+  }, [
+    applyAutoSkips,
+    family,
+    invalidateRoutineViews,
+    isDeleting,
+    onUnauthorized,
+    routinesQuery.data,
+    setRoutineBusy,
+    setRoutineAutoApplying,
+    user,
+  ]);
   useEffect(() => {
     const unauthorizedError = [familiesQuery.error, routinesQuery.error].some(
       (error) => error instanceof RoutineApiError && error.status === 401,
@@ -856,6 +1077,68 @@ export default function RoutinesPage(): React.ReactElement {
                   </p>
                 )}
                 {routine.status === 'ready' && (
+                  <fieldset
+                    disabled={busyRoutineIds.has(routine.id) || isDeleting}
+                    className="mt-[var(--spacing-md)] m-0 grid gap-[var(--spacing-xs)] border-0 p-0"
+                    aria-label="自動でお休みにする日"
+                  >
+                    <label className="flex min-h-[var(--tap-target-min)] cursor-pointer items-center gap-[var(--spacing-sm)] rounded-[var(--radius-md)] border border-line px-[var(--spacing-sm)] text-sm">
+                      <input
+                        type="checkbox"
+                        data-testid={`routine-skip-holidays-${routine.id}`}
+                        checked={routine.skipHolidays}
+                        onChange={(event) =>
+                          void handleRoutineSettings(routine.id, {
+                            skipHolidays: event.currentTarget.checked,
+                            skipNewYear: routine.skipNewYear,
+                          })
+                        }
+                        className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+                      />
+                      祝日はお休み
+                    </label>
+                    <label className="flex min-h-[var(--tap-target-min)] cursor-pointer items-center gap-[var(--spacing-sm)] rounded-[var(--radius-md)] border border-line px-[var(--spacing-sm)] text-sm">
+                      <input
+                        type="checkbox"
+                        data-testid={`routine-skip-new-year-${routine.id}`}
+                        checked={routine.skipNewYear}
+                        onChange={(event) =>
+                          void handleRoutineSettings(routine.id, {
+                            skipHolidays: routine.skipHolidays,
+                            skipNewYear: event.currentTarget.checked,
+                          })
+                        }
+                        className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+                      />
+                      年末年始はお休み（12/29〜1/3）
+                    </label>
+                    {autoApplyingRoutineIds.has(routine.id) && (
+                      <p
+                        data-testid={`routine-auto-skips-pending-${routine.id}`}
+                        aria-live="polite"
+                        className="m-0 text-xs text-muted"
+                      >
+                        適用中...
+                      </p>
+                    )}
+                    {autoSkipErrors[routine.id] && !busyRoutineIds.has(routine.id) && (
+                      <div className="rounded-[var(--radius-md)] bg-bg p-[var(--spacing-sm)]">
+                        <p role="alert" className="m-0 text-xs text-muted">
+                          自動のお休みを更新できませんでした。表示中の設定を確認して、もう一度お試しください。
+                        </p>
+                        <button
+                          type="button"
+                          data-testid={`routine-auto-skips-retry-${routine.id}`}
+                          onClick={() => void retryAutoSkips(routine.id)}
+                          className="mt-[var(--spacing-xs)] min-h-[var(--tap-target-min)] px-[var(--spacing-sm)] text-sm underline"
+                        >
+                          もう一度試す
+                        </button>
+                      </div>
+                    )}
+                  </fieldset>
+                )}
+                {routine.status === 'ready' && (
                   <RoutineInstances
                     key={`${user.id}:${family.id}:${routine.id}`}
                     familyId={family.id}
@@ -863,14 +1146,11 @@ export default function RoutinesPage(): React.ReactElement {
                     routineId={routine.id}
                     upcoming={routine.upcoming}
                     isSeriesDeleting={isDeleting}
+                    isRoutineBusy={busyRoutineIds.has(routine.id)}
                     isIdentityCurrent={() => identityRef.current === currentIdentity}
                     onUnauthorized={onUnauthorized}
                     onPendingChange={(pending) => {
-                      const next = new Set(busyRoutineIdsRef.current);
-                      if (pending) next.add(routine.id);
-                      else next.delete(routine.id);
-                      busyRoutineIdsRef.current = next;
-                      setBusyRoutineIds(next);
+                      setRoutineBusy(routine.id, pending);
                     }}
                     onChanged={(instance: RoutineInstance) => {
                       const queryKey = [...ROUTINE_QUERY_KEY, user.id, family.id] as const;

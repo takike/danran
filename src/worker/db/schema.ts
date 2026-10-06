@@ -300,6 +300,7 @@ export const routineSettings = sqliteTable(
     category: text('category', { enum: ['lesson', 'housework', 'other'] }).notNull(),
     skipHolidays: integer('skip_holidays', { mode: 'boolean' }).notNull().default(false),
     skipNewYear: integer('skip_new_year', { mode: 'boolean' }).notNull().default(false),
+    autoSkipAppliedUntil: text('auto_skip_applied_until'),
     affectsAvailability: integer('affects_availability', { mode: 'boolean' })
       .notNull()
       .default(true),
@@ -321,3 +322,32 @@ export const routineSettings = sqliteTable(
 
 export type RoutineSetting = typeof routineSettings.$inferSelect;
 export type NewRoutineSetting = typeof routineSettings.$inferInsert;
+
+/** Ledger for automatic cancellations; overridden rows are owned by the user thereafter. */
+export const routineAutoSkips = sqliteTable(
+  'routine_auto_skips',
+  {
+    id: text('id').primaryKey().notNull(),
+    routineSettingsId: text('routine_settings_id')
+      .notNull()
+      .references(() => routineSettings.id, { onDelete: 'cascade' }),
+    originalStart: text('original_start').notNull(),
+    reason: text('reason', { enum: ['holiday', 'new_year'] }).notNull(),
+    status: text('status', { enum: ['applied', 'overridden'] })
+      .notNull()
+      .default('applied'),
+    createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('routine_auto_skips_settings_start_unique').on(
+      table.routineSettingsId,
+      table.originalStart,
+    ),
+    index('routine_auto_skips_settings_status_idx').on(table.routineSettingsId, table.status),
+    check('routine_auto_skips_reason_check', sql`reason IN ('holiday', 'new_year')`),
+    check('routine_auto_skips_status_check', sql`status IN ('applied', 'overridden')`),
+  ],
+);
+
+export type RoutineAutoSkip = typeof routineAutoSkips.$inferSelect;
+export type NewRoutineAutoSkip = typeof routineAutoSkips.$inferInsert;

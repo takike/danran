@@ -1,6 +1,6 @@
-# 20. 繰り返し予定（Task 3-1、3-2、3-5）
+# 20. 繰り返し予定（Task 3-1、3-2、3-3、3-5）
 
-Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。Task 3-2 では、直近4回を表示し、個別の回を休止・振替・復元する。Task 3-5 では、週 API が繰り返しの回か（`isRecurring`）と通常回か（`isRoutine`）を別々に返し、振替・開始時刻変更をした回を週ビューで目立たせる。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
+Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返し予定を作成し、S4（`/routines`）で一覧・作成・シリーズ全体の削除を行う。Task 3-2 では、直近4回を表示し、個別の回を休止・振替・復元する。Task 3-3 では祝日・年末年始設定に基づいて通常回を自動でお休みにし、設定をオフにした場合は該当する自動スキップだけを復元する。Task 3-5 では、週 API が繰り返しの回か（`isRecurring`）と通常回か（`isRoutine`）を別々に返し、振替・開始時刻変更をした回を週ビューで目立たせる。Google Calendar が予定の正本で、個人カレンダーにはアクセスしない。
 
 ## API
 
@@ -14,8 +14,10 @@ Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返�
 | `POST /api/families/:id/routines/:routineId/instances/:instanceId/skip` | その回だけ休みにする | `{ "instance": ... }` |
 | `POST /api/families/:id/routines/:routineId/instances/:instanceId/restore` | 休み・振替を元の日時へ戻す | `{ "instance": ... }` |
 | `POST /api/families/:id/routines/:routineId/instances/:instanceId/move` | その回を別日時へ振り替える | `{ "instance": ... }` |
+| `PATCH /api/families/:id/routines/:routineId/settings` | 祝日・年末年始の設定を保存して適用または復元 | `{ "skipHolidays": boolean, "skipNewYear": boolean, "hasMore": boolean }` |
+| `POST /api/families/:id/routines/:routineId/auto-skips/apply` | 現在の設定で適用範囲を補完 | `{ "skipHolidays": boolean, "skipNewYear": boolean, "hasMore": boolean }` |
 
-一覧の各 `ready` 項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。取得できないシリーズだけ `unavailable` となり、一覧全体の取得は続ける。`missing` / `unsupported` の項目は空の `ready` とする。
+一覧の各 `ready` 項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。取得できないシリーズだけ `unavailable` となり、一覧全体の取得は続ける。`missing` / `unsupported` の項目は空の `ready` とする。Task 3-3 後は各項目に `skipHolidays`, `skipNewYear`, `autoSkipDue` を返し、各 upcoming instance が自動適用によってキャンセル中の場合にその理由 `autoSkipReason`（`holiday` / `new_year`）を含める。それ以外は `null`。`GET` は読み取り専用で、Google Calendar を変更しない。
 
 Google [`events.instances`](https://developers.google.com/workspace/calendar/api/v3/reference/events/instances) の `timeMin` は実際の回の終了時刻を対象にするため、`timeMin=now` を使うと、元は今後の回でも過去へ振り替えたものが取得結果から外れる。このため Google からは JST の今日の31日前 00:00 から今日の120日後 00:00 までを取得する（`timeMax` の境界は含まない）。取得した回は元の開始日が今日以降のものに絞ってから、元の日時順に4件を選ぶ。繰り返し予定の RRULE は変更せず、Google の `orderBy` も使わない。取得範囲外、つまり今日の31日前より前に終了する回や、今日の120日後 00:00 以降に始まる回は候補に含まれない。このため、元の予定日が今日以降でも、過去へ大きく振り替えて実際の終了が範囲より前になった回は表示されない。各シリーズの取得は最大4ページ（1ページ最大250件）とし、シリーズの並列数は4件までに制限する。4ページ以内に取得が終わらない場合はそのシリーズだけ `unavailable` とし、部分的な結果を返さない。
 
@@ -50,7 +52,23 @@ Google `events.patch` では `sendUpdates=none` を使い、開始・終了に `
 
 開始日は選択曜日と一致しないことがある。その場合は開始日以降で選んだ曜日に当たる最初の日へ開始日を移してから Google へ送る。終了日は補正後の初回日付より前にはできない。Google の `UNTIL` は終了日の23:59:59 JSTを含む UTC RFC3339 値にする。複数曜日を選んだ場合は1つのシリーズにまとめる。作成したシリーズは常に確定状態。
 
-D1 の `routine_settings` は `id`, `family_id`, `calendar_id`, `recurring_event_id`, `category`, `skip_holidays`, `skip_new_year`, `affects_availability`, `default_assignee_member_id`, `created_at`, `updated_at` を保持する。家族削除で連動削除し、担当メンバー削除時は担当を `null` にする。`(calendar_id, recurring_event_id)` は一意。`skip_holidays` と `skip_new_year` は初期値 false だが、このタスクでは UI に出さず、予定の回にも適用しない。
+D1 の `routine_settings` は `id`, `family_id`, `calendar_id`, `recurring_event_id`, `category`, `skip_holidays`, `skip_new_year`, `affects_availability`, `default_assignee_member_id`, `auto_skip_applied_until`, `created_at`, `updated_at` を保持する。家族削除で連動削除し、担当メンバー削除時は担当を `null` にする。`(calendar_id, recurring_event_id)` は一意。`skip_holidays` と `skip_new_year` は初期値 false。
+
+`routine_auto_skips` は自動でお休みにする回の記録で、`id`, `routine_settings_id`, `original_start`, `reason`（`holiday` / `new_year`）, `status`（`applied` / `overridden`）, `created_at` を持つ。`(routine_settings_id, original_start)` は一意で、シリーズ設定の削除に連動して消す。Google イベントのタイトル・場所・説明などの内容は保存しない。`status: applied` は自動キャンセル済み、または曖昧な Google 応答後の再試行で照合するため保持中の記録を表す。`overridden` は利用者がその自動処理を上書きした記録で、後者は以後の自動適用・復元から除外する。`auto_skip_applied_until` は適用済み範囲の終端日を表す nullable な日付。
+
+## 祝日・年末年始の自動スキップ（Task 3-3）
+
+この機能に Cron は使わない。Google Calendar の変更は、設定を保存した利用者のリクエスト、または `/routines` 表示後に行う補完リクエストで、その利用者自身の Google トークンを使って実行する。利用者が操作していないときに自動で Google Calendar を変更する処理はない。追加の OAuth scope は要求しない。
+
+対象範囲は Asia/Tokyo の今日から183日後までで、両端を含む。設定をオンにした時点でこの範囲を適用する。さらに `GET /api/families/:id/routines` が示す `autoSkipDue` が true のシリーズは、S4 の一覧を表示した後に同じ apply API で範囲を補完する。`autoSkipDue` は、少なくとも一方の設定がオンで、`auto_skip_applied_until` が未設定または今日から150日後より前なら true。半年以上 `/routines` を開かなければ、その時点での適用範囲より先にある回はお休みにならない。
+
+対象日は `skipHolidays` がオンなら日本の祝日（振替休日を含む）、`skipNewYear` がオンなら12/29〜1/3。両方に該当する1/1は `holiday` を優先する。休園日のスキップと、年末年始期間を家族ごとに変更する設定は対象外。対象日は `originalStart` の Asia/Tokyo 日付で判定し、今日以降の通常回だけを変更する。すでにキャンセル済みの回、振替済みまたは開始・終了時刻や長さを手動変更した回、手動操作で `overridden` と記録された回は自動処理から除く。RRULE は変更しない。
+
+設定 API の PATCH 本文は `{ "skipHolidays": boolean, "skipNewYear": boolean }` で、両方の値を必須とする。設定値を先に保存してから、オンにした理由の適用とオフにした理由の復元を行う。apply API の本文は空の JSON object `{}`。両 API は設定値と `hasMore` を返す。同じリクエストで変更する回は最大20件（キャンセルと復元を合わせて20件）とし、続きがあれば `hasMore: true` を返す。画面は同じ apply API を続けて呼び、完了まで「適用中...」を表示する。OAuth トークン更新と Google Calendar REST（リトライを含む）の外部呼び出しは、合計で1リクエストあたり最大48回に制限する。同じリクエスト内では利用者自身のアクセストークンをメモリ上で再利用する。上限に達して完了できない場合は失敗として返し、未確定の自動スキップ記録を残して再試行に備える。続きの API リクエストでは改めて本人のトークンを使う。
+
+キャンセル対象は `events.patch` で `status: "cancelled"` にし、`sendUpdates=none` を指定する。オフにした理由の `applied` 記録について、今日以降の回がまだキャンセル状態なら元の日時へ `confirmed` で復元して記録を削除する。過去回は Google Calendar を変えずに履歴を削除する。自動スキップ回を S4 から手動で復元または振替した場合は、記録を削除せず `overridden` として保持する。これにより設定がオンのままでも再キャンセルせず、後から設定をオフにしても触れない。自動履歴の状態はアプリ内の手動復元・振替で更新する。
+
+Google を変更する前に履歴行を作る。Google が明確に拒否した場合は失敗した行を整理し、応答が曖昧な場合は行を残す。再試行ではその回の Google 現在状態を確認し、通常回ならキャンセルを再試行し、キャンセル済みなら適用済みに収束させる。設定は保存済み値を表示するため、途中失敗後もトグルを巻き戻さない。再試行成功後に一覧を再取得し、残りがあれば続きも処理する。
 
 ## 週 API と空き判定
 
@@ -78,7 +96,7 @@ S4 の回状態表示は Google の実際の日時・長さと元の日時・長
 
 週ビューまたは S2 で繰り返し予定を選ぶと、「この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。」と「繰り返し」タブへのリンクを表示する。シリーズ全体の変更は引き続き S4 から行う。
 
-このタスクではカテゴリフィルタ、祝日・年末年始・休園日の自動スキップ、重複検出、シリーズ内容の編集を扱わない。
+このタスクではカテゴリフィルタ、休園日の自動スキップ、重複検出、シリーズ内容の編集を扱わない。祝日・年末年始の自動スキップは Task 3-3 の範囲。
 
 ## staging 確認
 
@@ -93,5 +111,19 @@ S4 の回状態表示は Google の実際の日時・長さと元の日時・長
 7. 毎週のシリーズで次の4回が元の日付順に表示されることを確認し、1回を休みにして Google Calendar でその回だけがキャンセル表示になることを確認する。Danran から休みを取り消し、元の日時に戻ることを確認する。
 8. 別の回を未来または過去の日付へ振り替え、Google Calendar でその回だけの日時が変わることを確認する。振替を取り消し、元の日時に戻ることを確認する。振替前後も private extended properties の対象・担当が維持されることを確認する。
 9. Google 側で回の更新権限がない場合は、Danran に固定のエラー案内が出て表示が更新されないことを確認する。
+
+### Task 3-3 の staging 確認
+
+staging にマイグレーションとアプリを反映した後、人間が合成の繰り返し予定を使って確認する。Google Cloud のスコープ変更や Secret 登録は不要。実行主体の Google アカウント自身が家族カレンダーを更新できることを前提とする。
+
+1. JST の今後183日以内に祝日または12/29〜1/3に当たる予定を持つテスト用シリーズを作る。S4 を開き、「祝日はお休み」または「年末年始はお休み」をオンにする。処理中表示の後に、該当する通常回だけ Google Calendar 上でキャンセルされ、S4 のチップに理由が表示されることを確認する。
+2. その設定をオフにし、自動でお休みにした未来の回だけが元の日時に復元されることを確認する。手動でお休みにした回は復元されない。
+3. 別の回を自動でお休みにした後、S4 から手動で「休みを取り消す」。その後、設定をオフにして再度オンにし、再び自動スキップが適用されてもその回がキャンセルされないことを確認する。画面の再読込だけでは補完 API が起動しない状態（`autoSkipDue: false`）もあるため、`POST .../auto-skips/apply` を使った確認も行う。
+4. 自動でお休みにした別の回を手動で振り替える。後続の自動適用・設定オフ処理がその回を変更せず、手動の日時を維持することを確認する。
+5. 1シリーズに20件を超える対象回を用意できる場合は、1回の応答で最大20件だけが変更され、`hasMore` に応じて画面が続きの呼び出しを行い、最後まで適用または復元することを確認する。
+6. staging で管理可能な一時的な Google API エラー条件を使い、設定値は保存されたまま固定のエラー案内と再試行が表示されることを確認する。条件を戻して再試行し、Google と D1 の状態が一致することを確認する。結果が曖昧な失敗では記録を残し、再試行で Google の現在状態と照合して完了することを確認する。
+7. `autoSkipDue` のシリーズがある状態で `/routines` を開く。一覧表示を待たせずに補完が始まり、成功後に理由つきチップへ更新されることを確認する。補完に失敗しても一覧は表示され、再試行できる。
+
+実アカウントで行う前に、合成データ以外の繰り返し予定が対象に含まれないこと、手動変更した回を上書きしないことを確認する。この機能は Cron を使わないため、利用者が `/routines` を開かない期間は適用範囲を先へ進めない。半年以上画面を開かなかった場合、その期間の先にある該当回は自動でお休みにならない。休園日の回は対象外。
 
 ローカルの Playwright API モックでは合成データを使う。Task 3-2 の Google Calendar 実アカウント staging 確認は人間による確認が必要であり、自動テストの結果として扱わない。Task 3-1 の staging 手順も人間による確認項目として残る。

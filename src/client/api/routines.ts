@@ -1,12 +1,15 @@
 import {
   type RoutineInput,
+  type RoutineSettingsInput,
   createRoutineInputSchema,
+  routineAutoSkipResponseSchema,
   routineDeleteResponseSchema,
   routineErrorResponseSchema,
   routineInstanceMutationResponseSchema,
   routineListResponseSchema,
   routineMoveInputSchema,
   routineMutationResponseSchema,
+  routineSettingsInputSchema,
 } from '@shared/schemas/routines';
 
 export class RoutineApiError extends Error {
@@ -56,14 +59,16 @@ async function readError(response: Response): Promise<RoutineApiError> {
 async function requestRoutine<T>(
   familyId: string,
   routineId: string | undefined,
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   body: unknown,
   responseSchema: {
     safeParse: (value: unknown) => { success: true; data: T } | { success: false };
   },
   signal?: AbortSignal,
+  suffix = '',
 ): Promise<T> {
-  const path = `/api/families/${encodeURIComponent(familyId)}/routines${routineId ? `/${encodeURIComponent(routineId)}` : ''}`;
+  const routinePath = routineId ? `/${encodeURIComponent(routineId)}${suffix}` : '';
+  const path = `/api/families/${encodeURIComponent(familyId)}/routines${routinePath}`;
   let response: Response;
   try {
     response = await fetch(path, {
@@ -120,6 +125,37 @@ export function deleteRoutine(familyId: string, routineId: string, signal?: Abor
     undefined,
     routineDeleteResponseSchema,
     signal,
+  );
+}
+
+export function updateRoutineSettings(
+  familyId: string,
+  routineId: string,
+  input: RoutineSettingsInput,
+  signal?: AbortSignal,
+) {
+  const parsed = routineSettingsInputSchema.safeParse(input);
+  if (!parsed.success) throw new RoutineApiError('入力内容を確認してください。', 'INVALID_INPUT');
+  return requestRoutine(
+    familyId,
+    routineId,
+    'PATCH',
+    parsed.data,
+    routineAutoSkipResponseSchema,
+    signal,
+    '/settings',
+  );
+}
+
+export function applyRoutineAutoSkips(familyId: string, routineId: string, signal?: AbortSignal) {
+  return requestRoutine(
+    familyId,
+    routineId,
+    'POST',
+    {},
+    routineAutoSkipResponseSchema,
+    signal,
+    '/auto-skips/apply',
   );
 }
 

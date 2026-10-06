@@ -11,6 +11,7 @@ const clockTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 export const routineInstanceStatusSchema = z.enum(['normal', 'skipped', 'moved']);
 export type RoutineInstanceStatus = z.infer<typeof routineInstanceStatusSchema>;
+export const routineAutoSkipReasonSchema = z.enum(['holiday', 'new_year']).nullable();
 export const routineInstanceSchema = z
   .object({
     id: z.string().min(1),
@@ -19,6 +20,7 @@ export const routineInstanceSchema = z
     start: isoInstantStringSchema.nullable(),
     end: isoInstantStringSchema.nullable(),
     status: routineInstanceStatusSchema,
+    autoSkipReason: routineAutoSkipReasonSchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -123,6 +125,15 @@ export const routineInstanceMutationResponseSchema = z
   .strict();
 export const routineInstanceActionInputSchema = z.object({}).strict();
 
+export const routineSettingsInputSchema = z
+  .object({ skipHolidays: z.boolean(), skipNewYear: z.boolean() })
+  .strict();
+export type RoutineSettingsInput = z.infer<typeof routineSettingsInputSchema>;
+
+export const routineAutoSkipResponseSchema = z
+  .object({ skipHolidays: z.boolean(), skipNewYear: z.boolean(), hasMore: z.boolean() })
+  .strict();
+
 export const routineInputSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
@@ -193,6 +204,9 @@ export const routineSchema = z
     assigneeMemberId: z.string().nullable(),
     category: routineCategorySchema,
     affectsAvailability: z.boolean(),
+    skipHolidays: z.boolean(),
+    skipNewYear: z.boolean(),
+    autoSkipDue: z.boolean(),
     status: z.enum(['ready', 'missing', 'unsupported']),
     upcoming: routineUpcomingSchema,
   })

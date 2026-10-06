@@ -602,6 +602,9 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 assigneeMemberId: null,
                 category: 'lesson',
                 affectsAvailability: true,
+                skipHolidays: false,
+                skipNewYear: false,
+                autoSkipDue: false,
                 status: 'ready',
                 upcoming: {
                   status: 'ready',
@@ -613,6 +616,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                       start: '2026-10-13T17:00:00+09:00',
                       end: '2026-10-13T18:00:00+09:00',
                       status: 'normal',
+                      autoSkipReason: null,
                     },
                   ],
                 },
@@ -669,6 +673,9 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 assigneeMemberId: null,
                 category: 'lesson',
                 affectsAvailability: true,
+                skipHolidays: false,
+                skipNewYear: false,
+                autoSkipDue: false,
                 status: 'ready',
                 upcoming: {
                   status: 'ready',
@@ -680,6 +687,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                       start: '2026-10-13T17:00:00+09:00',
                       end: '2026-10-13T18:00:00+09:00',
                       status: 'normal',
+                      autoSkipReason: null,
                     },
                   ],
                 },
@@ -704,6 +712,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 start: null,
                 end: null,
                 status: 'skipped',
+                autoSkipReason: null,
               },
             }),
           });
@@ -731,6 +740,82 @@ test.describe('PWA update handover with a real Service Worker', () => {
       expect(await navigationCount(page)).toBe(1);
     } finally {
       releaseMutation?.();
+      await fixture.close();
+    }
+  });
+
+  test('an automatic routine continuation blocks PWA reload until every batch settles', async ({
+    page,
+  }) => {
+    const fixture = await createPwaFixtureServer();
+    let releaseApply: (() => void) | undefined;
+    let applyStarted: (() => void) | undefined;
+    const applyGate = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    const applyStartedPromise = new Promise<void>((resolve) => {
+      applyStarted = resolve;
+    });
+    try {
+      await mockOnboardingApis(page, makeFamily());
+      await page.route(`**/api/families/${TEST_FAMILY_ID}/routines`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            routines: [
+              {
+                id: 'routine_pwa_auto_pending',
+                title: '更新中に守る繰り返し',
+                weekdays: ['TU'],
+                interval: 1,
+                startDate: '2026-10-13',
+                endDate: null,
+                startTime: '17:00',
+                endTime: '18:00',
+                memberIds: [],
+                assigneeMemberId: null,
+                category: 'lesson',
+                affectsAvailability: true,
+                skipHolidays: true,
+                skipNewYear: false,
+                autoSkipDue: true,
+                status: 'ready',
+                upcoming: { status: 'ready', instances: [] },
+              },
+            ],
+          }),
+        });
+      });
+      await page.route(
+        `**/api/families/${TEST_FAMILY_ID}/routines/routine_pwa_auto_pending/auto-skips/apply`,
+        async (route) => {
+          applyStarted?.();
+          await applyGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ skipHolidays: true, skipNewYear: false, hasMore: false }),
+          });
+        },
+      );
+      await page.goto(`${fixture.origin}/routines`);
+      await expect(page.getByTestId('routines-screen')).toBeVisible();
+      await applyStartedPromise;
+      await waitForActiveController(page);
+      const updateButton = page.getByRole('button', { name: '更新', exact: true });
+      await requestWorkerUpdate(page, fixture);
+      await expect(page.getByTestId('pwa-update-banner')).toBeVisible();
+      await expect(updateButton).toBeDisabled();
+      expect(await navigationCount(page)).toBe(1);
+      releaseApply?.();
+      await expect(
+        page.getByTestId('routine-auto-skips-pending-routine_pwa_auto_pending'),
+      ).toHaveCount(0);
+      await expect(updateButton).toBeEnabled();
+      expect(await navigationCount(page)).toBe(1);
+    } finally {
+      releaseApply?.();
       await fixture.close();
     }
   });

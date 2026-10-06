@@ -41,7 +41,15 @@ function formatClock(value: string): string {
 /** Produces the short Japanese label shown on an upcoming routine chip. */
 export function formatRoutineInstanceChip(instance: RoutineInstance): string {
   const originalDate = formatRoutineDate(instance.originalStart);
-  if (instance.status === 'skipped') return `${originalDate} お休み`;
+  if (instance.status === 'skipped') {
+    const reason =
+      instance.autoSkipReason === 'holiday'
+        ? '（祝日）'
+        : instance.autoSkipReason === 'new_year'
+          ? '（年末年始）'
+          : '';
+    return `${originalDate} お休み${reason}`;
+  }
   if (instance.status === 'normal') return originalDate;
   if (instance.start === null || instance.end === null) {
     throw new TypeError('Moved instance needs actual times');

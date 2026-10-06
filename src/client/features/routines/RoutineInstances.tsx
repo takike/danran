@@ -41,6 +41,7 @@ export function RoutineInstances({
   onChanged,
   onPendingChange,
   isSeriesDeleting,
+  isRoutineBusy,
 }: {
   familyId: string;
   userId: string;
@@ -51,6 +52,7 @@ export function RoutineInstances({
   onChanged: (instance: RoutineInstance) => void;
   onPendingChange: (pending: boolean) => void;
   isSeriesDeleting: boolean;
+  isRoutineBusy: boolean;
 }): React.ReactElement | null {
   const pendingRef = useRef(false);
   const [selected, setSelected] = useState<RoutineInstance | null>(null);
@@ -60,7 +62,7 @@ export function RoutineInstances({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
-  const controlsDisabled = pending || isSeriesDeleting;
+  const controlsDisabled = pending || isSeriesDeleting || isRoutineBusy;
   useReloadProtection((moveFormOpen && dirty) || pending, pending);
 
   async function perform(action: 'skip' | 'restore' | 'move') {
@@ -118,6 +120,7 @@ export function RoutineInstances({
         直近の回を取得できませんでした。
         <button
           type="button"
+          disabled={controlsDisabled}
           className="ml-[var(--spacing-xs)] min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] underline"
           onClick={() =>
             void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] })

@@ -438,6 +438,7 @@ describe('Task 1-2: Google Calendar REST Client', () => {
         );
         expect(urlObj.searchParams.get('maxResults')).toBe('50');
         expect(urlObj.searchParams.get('timeZone')).toBe('Asia/Tokyo');
+        expect(urlObj.searchParams.get('originalStart')).toBe('2026-10-06T16:00:00+09:00');
         return new Response(JSON.stringify(expectedInstances), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -445,7 +446,10 @@ describe('Task 1-2: Google Calendar REST Client', () => {
       });
 
       const client = createGoogleCalendarClient(TEST_ENV, testUserId);
-      const result = await client.events.instances(calendarId, eventId, { maxResults: 50 });
+      const result = await client.events.instances(calendarId, eventId, {
+        maxResults: 50,
+        originalStart: '2026-10-06T16:00:00+09:00',
+      });
       expect(result).toEqual(expectedInstances);
     });
 
@@ -2016,6 +2020,81 @@ describe('Task 1-2: Google Calendar REST Client', () => {
 
       expect(tokenEndpointReceivedRefreshToken).toBe(liveRefreshToken);
       expect(res.items[0]?.summary).toBe('Real Integration Cal');
+    });
+  });
+
+  describe('request-scoped Google request policy', () => {
+    it('reuses one short-lived token across methods on the same client', async () => {
+      setupMockFetch(() =>
+        Response.json(
+          { items: [] },
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId, {
+        reuseAccessToken: true,
+        maxExternalRequests: 48,
+      });
+      await client.events.instances('calendar_one', 'series_one');
+      await client.events.instances('calendar_one', 'series_two');
+      expect(tokenCounter).toBe(1);
+      expect(recordedRequests).toHaveLength(2);
+    });
+
+    it('refreshes a reused token after a Calendar 401', async () => {
+      let first = true;
+      setupMockFetch(() => {
+        if (first) {
+          first = false;
+          return Response.json(
+            { error: { code: 401, message: 'Unauthorized', errors: [{ reason: 'authError' }] } },
+            { status: 401 },
+          );
+        }
+        return Response.json({ items: [] });
+      });
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId, {
+        reuseAccessToken: true,
+        maxExternalRequests: 48,
+      });
+      await client.events.instances('calendar_one', 'series_one');
+      await client.events.instances('calendar_one', 'series_two');
+      expect(tokenCounter).toBe(2);
+      expect(recordedRequests.map((record) => record.headers.authorization)).toEqual([
+        'Bearer mock-access-token-1',
+        'Bearer mock-access-token-2',
+        'Bearer mock-access-token-2',
+      ]);
+    });
+
+    it('stops before a fetch when the shared OAuth and Calendar budget is exhausted', async () => {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      setupMockFetch(() =>
+        Response.json(
+          { error: { code: 500, message: 'Unavailable', errors: [{ reason: 'backendError' }] } },
+          { status: 500 },
+        ),
+      );
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId, {
+        reuseAccessToken: true,
+        maxExternalRequests: 3,
+      });
+      const promise = client.events.instances('calendar_one', 'series_one').then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await vi.waitFor(() => expect(recordedRequests).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(recordedRequests).toHaveLength(2));
+      await vi.advanceTimersByTimeAsync(2000);
+      const result = await promise;
+      const caught = result.ok ? undefined : result.error;
+      expect(caught).toBeInstanceOf(GoogleCalendarError);
+      if (!(caught instanceof GoogleCalendarError)) throw new Error('Expected budget error');
+      expect(caught?.code).toBe('API_ERROR');
+      expect(caught?.status).toBe(503);
+      expect(tokenCounter).toBe(1);
+      expect(recordedRequests).toHaveLength(2);
     });
   });
 });
