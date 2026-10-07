@@ -21,21 +21,20 @@ export function toTokyoDateTimeInputValues(instant: string): { date: DateKey; ti
   return { date: toTokyoDateKey(instant), time: canonical.slice(11, 16) };
 }
 
-/** Builds the editor's default one-hour timed range, rounded up to the next Tokyo hour. */
+/** Builds the editor's default one-hour timed range without moving the chosen start date. */
 export function getDefaultEventTime(
   selectedDate?: DateKey,
   now: number | Date = Date.now(),
 ): EventInputTime {
   const tokyoNow = new TZDate(typeof now === 'number' ? now : now.getTime(), TOKYO_TIMEZONE);
-  const startHour = tokyoNow.getHours() + 1;
-  const anchorDate = selectedDate ?? getTodayDateKey(now);
-  const startDate = startHour >= 24 ? addCalendarDays(anchorDate, 1) : anchorDate;
-  const normalizedHour = startHour >= 24 ? startHour - 24 : startHour;
-  const endDate = normalizedHour === 23 ? addCalendarDays(startDate, 1) : startDate;
-  const endHour = normalizedHour === 23 ? 0 : normalizedHour + 1;
+  const today = getTodayDateKey(now);
+  const startDate = selectedDate ?? today;
+  const startHour = startDate === today ? Math.min(tokyoNow.getHours() + 1, 23) : 10;
+  const endDate = startHour === 23 ? addCalendarDays(startDate, 1) : startDate;
+  const endHour = startHour === 23 ? 0 : startHour + 1;
   return {
     kind: 'timed',
-    start: `${startDate}T${String(normalizedHour).padStart(2, '0')}:00:00+09:00`,
+    start: `${startDate}T${String(startHour).padStart(2, '0')}:00:00+09:00`,
     endExclusive: `${endDate}T${String(endHour).padStart(2, '0')}:00:00+09:00`,
   };
 }

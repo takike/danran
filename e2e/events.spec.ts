@@ -53,7 +53,7 @@ const RECURRING_EVENT: WeekEvent = {
   movedFrom: null,
 };
 
-function buildWeek(events: WeekEvent[]): WeekResponse {
+function buildWeek(events: WeekEvent[], holidayDates: readonly DateKey[] = []): WeekResponse {
   const range = getWeekRange(BASE_WEEK);
   const days = range.days.map((date) => {
     const dayEvents = events.filter((event) => {
@@ -68,13 +68,14 @@ function buildWeek(events: WeekEvent[]): WeekResponse {
       );
     });
     const weekday = getWeekday(date);
+    const holidayName = holidayDates.includes(date) ? 'スポーツの日' : null;
     return {
       date,
       weekday,
-      holidayName: null,
+      holidayName,
       closures: [],
       layout:
-        weekday === 0 || weekday === 6
+        weekday === 0 || weekday === 6 || holidayName !== null
           ? ('weekend-card' as const)
           : dayEvents.some((event) => !event.isRoutine)
             ? ('expanded' as const)
@@ -97,8 +98,11 @@ function buildWeek(events: WeekEvent[]): WeekResponse {
   };
 }
 
-async function mockEventApis(page: import('@playwright/test').Page) {
-  let events = [ONE_TIME_EVENT, RECURRING_EVENT];
+async function mockEventApis(
+  page: import('@playwright/test').Page,
+  options: { extraEvents?: WeekEvent[]; holidayDates?: DateKey[] } = {},
+) {
+  let events = [ONE_TIME_EVENT, RECURRING_EVENT, ...(options.extraEvents ?? [])];
   let eventSequence = 0;
   const createBodies: ReturnType<typeof createEventInputSchema.parse>[] = [];
   const updateBodies: ReturnType<typeof eventInputSchema.parse>[] = [];
@@ -135,7 +139,7 @@ async function mockEventApis(page: import('@playwright/test').Page) {
   await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith('/week/personal')) {
-      const familyWeek = buildWeek(events);
+      const familyWeek = buildWeek(events, options.holidayDates);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -152,7 +156,7 @@ async function mockEventApis(page: import('@playwright/test').Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildWeek(events)),
+      body: JSON.stringify(buildWeek(events, options.holidayDates)),
     });
   });
   await page.route(`**/api/families/${FAMILY_ID}/events`, async (route) => {
@@ -429,6 +433,66 @@ test.describe('Task 1-8: family event editing', () => {
     expect(deleteCalls).toBe(1);
     expect(api.deleteCalls).toBe(0);
     await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeFocused();
+  });
+
+  test('keeps selected add dates at 23:30 JST across compact, expanded, weekend, and holiday days', async ({
+    page,
+  }) => {
+    const extraEvent: WeekEvent = {
+      ...ONE_TIME_EVENT,
+      id: 'evt_thursday_expanded',
+      title: '木曜の単発予定',
+      time: {
+        kind: 'timed',
+        start: '2026-10-08T13:00:00+09:00',
+        endExclusive: '2026-10-08T14:00:00+09:00',
+      },
+    };
+    await mockEventApis(page, {
+      extraEvents: [extraEvent],
+      holidayDates: ['2026-10-12'],
+    });
+    await page.goto('/?week=2026-10-05');
+    await page.clock.setFixedTime(new Date('2026-10-07T14:30:00.000Z'));
+
+    const checkDefaults = async (
+      startDate: string,
+      startTime: string,
+      endDate: string,
+      endTime: string,
+    ) => {
+      const dialog = page.getByTestId('event-dialog');
+      await expect(dialog.getByLabel('開始日')).toHaveValue(startDate);
+      await expect(dialog.getByLabel('開始時刻')).toHaveValue(startTime);
+      await expect(dialog.getByLabel('終了日')).toHaveValue(endDate);
+      await expect(dialog.getByLabel('終了時刻')).toHaveValue(endTime);
+      await dialog.getByRole('button', { name: 'キャンセル' }).click();
+      await expect(dialog).toHaveCount(0);
+    };
+
+    const compactToday = page.locator('[data-testid="week-day"][data-date="2026-10-07"]');
+    await expect(compactToday).toHaveAttribute('data-layout', 'compact');
+    await compactToday.getByTestId('add-event-2026-10-07').click();
+    await checkDefaults('2026-10-07', '23:00', '2026-10-08', '00:00');
+
+    const expandedThursday = page.locator('[data-testid="week-day"][data-date="2026-10-08"]');
+    await expect(expandedThursday).toHaveAttribute('data-layout', 'expanded');
+    await expandedThursday.getByTestId('add-event-2026-10-08').click();
+    await checkDefaults('2026-10-08', '10:00', '2026-10-08', '11:00');
+
+    const saturday = page.locator('[data-testid="week-day"][data-date="2026-10-10"]');
+    await expect(saturday).toHaveAttribute('data-layout', 'weekend-card');
+    await saturday.getByTestId('add-event-2026-10-10').click();
+    await checkDefaults('2026-10-10', '10:00', '2026-10-10', '11:00');
+
+    const holiday = page.locator('[data-testid="week-day"][data-date="2026-10-12"]');
+    await expect(holiday).toHaveAttribute('data-layout', 'weekend-card');
+    await expect(holiday).toContainText('スポーツの日');
+    await holiday.getByTestId('add-event-2026-10-12').click();
+    await checkDefaults('2026-10-12', '10:00', '2026-10-12', '11:00');
+
+    await page.getByRole('button', { name: '予定を追加', exact: true }).click();
+    await checkDefaults('2026-10-07', '23:00', '2026-10-08', '00:00');
   });
 
   test('retains input on a fixed API error and reuses the same client request UUID on retry', async ({
