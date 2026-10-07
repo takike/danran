@@ -129,11 +129,9 @@ export function RoutineInstances({
       setSelected(null);
       setMoveFormOpen(false);
       setDirty(false);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
-        queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
-        queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] });
+      void queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] });
+      void queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] });
     } catch (cause: unknown) {
       if (!isIdentityCurrent()) return;
       if (cause instanceof RoutineApiError && cause.status === 401) onUnauthorized();

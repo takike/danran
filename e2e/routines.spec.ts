@@ -143,6 +143,14 @@ async function mockRoutineApis(
   const settingsMutations: Array<{ routineId: string; body: unknown }> = [];
   const autoSkipMutations: string[] = [];
   let listCalls = 0;
+  let accountUserId = OWNER_ID;
+  let nextListError: number | null = null;
+  let heldListResponse: {
+    started: Promise<void>;
+    release: () => void;
+    startedResolve: () => void;
+    gate: Promise<void>;
+  } | null = null;
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   let signalInstanceMutationStarted: () => void = () => {};
   let releaseInstanceMutation: () => void = () => {};
@@ -155,7 +163,7 @@ async function mockRoutineApis(
   await page.route('**/api/auth/me', (route) =>
     route.fulfill(
       jsonResponse(200, {
-        user: { id: OWNER_ID, email: 'routine@example.test', displayName: '大人甲' },
+        user: { id: accountUserId, email: 'routine@example.test', displayName: '大人甲' },
       }),
     ),
   );
@@ -166,6 +174,18 @@ async function mockRoutineApis(
     const request = route.request();
     if (request.method() === 'GET') {
       listCalls++;
+      if (nextListError !== null) {
+        const status = nextListError;
+        nextListError = null;
+        await route.fulfill(jsonResponse(status, { code: 'NOT_FOUND', error: 'Not found' }));
+        return;
+      }
+      const held = heldListResponse;
+      if (held) {
+        heldListResponse = null;
+        held.startedResolve();
+        await held.gate;
+      }
       await route.fulfill(jsonResponse(200, { routines }));
       return;
     }
@@ -307,6 +327,24 @@ async function mockRoutineApis(
     setRoutines: (next: Routine[]) => {
       routines = [...next];
     },
+    setAccountUserId: (next: string) => {
+      accountUserId = next;
+    },
+    failNextRoutineList: (status: number) => {
+      nextListError = status;
+    },
+    holdNextListResponse: () => {
+      let startedResolve!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        startedResolve = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      heldListResponse = { started, release, startedResolve, gate };
+      return { started, release };
+    },
     setFailNextInstanceMutation: () => {
       failNextInstanceMutation = true;
     },
@@ -316,6 +354,18 @@ async function mockRoutineApis(
 async function openRoutinePage(page: import('@playwright/test').Page) {
   await page.goto('/routines');
   await expect(page.getByTestId('routines-screen')).toBeVisible();
+}
+
+async function triggerVisibilityCycle(page: import('@playwright/test').Page) {
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    window.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+  });
 }
 
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
@@ -774,6 +824,148 @@ test.describe('Task 3-1: recurring routines', () => {
     );
     expect(api.instanceMutations).toHaveLength(7);
     expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
+  });
+
+  test('keeps the updated chip and exact list DOM while the post-mutation list refetch is pending', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-stable', title: 'ピアノ' })],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const chip = card.getByTestId('routine-instance-chip-instance-routine-stable-1');
+    const cardElement = await card.elementHandle();
+    const chipElement = await chip.elementHandle();
+    expect(cardElement).not.toBeNull();
+    expect(chipElement).not.toBeNull();
+    await chip.click();
+    const actions = card.getByTestId('routine-instance-actions-instance-routine-stable-1');
+    const delayedList = api.holdNextListResponse();
+    await actions.getByTestId('routine-instance-skip').click();
+    await expect(chip).toContainText('お休み');
+    await delayedList.started;
+
+    const list = page.getByTestId('routine-list');
+    await expect(page.getByTestId('routine-list-placeholder')).toHaveCount(0);
+    await expect(list).toHaveCount(1);
+    await expect(chip).toBeVisible();
+    await expect(chip).toBeEnabled();
+    await expect(chip).toContainText('お休み');
+    expect(await cardElement?.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await chipElement?.evaluate((node) => node.isConnected)).toBe(true);
+    expect(await card.evaluate((node, original) => node === original, cardElement)).toBe(true);
+    expect(await chip.evaluate((node, original) => node === original, chipElement)).toBe(true);
+
+    delayedList.release();
+    await expect(page.getByTestId('routine-list-placeholder')).toHaveCount(0);
+    await expect(chip).toContainText('お休み');
+  });
+
+  test('shows cached routines immediately on tab return while refreshing in the background', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-tab-return', title: '水泳' })],
+    });
+    await openRoutinePage(page);
+    const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    await navigation.getByRole('link', { name: /やること/ }).click();
+    await expect(page).toHaveURL(/\/tasks$/);
+
+    const delayedList = api.holdNextListResponse();
+    await navigation.getByRole('link', { name: /繰り返し/ }).click();
+    await delayedList.started;
+    await expect(page.getByTestId('routine-card')).toContainText('水泳');
+    await expect(page.getByTestId('routine-list-placeholder')).toHaveCount(0);
+    delayedList.release();
+    await expect(page.getByTestId('routine-card')).toContainText('水泳');
+  });
+
+  test('hides cached routine cards when a background refetch reports lost family access', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-no-access', title: '家族だけの予定' })],
+    });
+    await openRoutinePage(page);
+    await expect(page.getByTestId('routine-card')).toContainText('家族だけの予定');
+    api.failNextRoutineList(404);
+    const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    await navigation.getByRole('link', { name: /やること/ }).click();
+    await expect(page).toHaveURL(/\/tasks$/);
+    await navigation.getByRole('link', { name: /繰り返し/ }).click();
+    await expect(page.getByText('家族だけの予定')).toHaveCount(0);
+    await expect(page.getByText('繰り返し予定を読み込めませんでした。')).toBeVisible();
+  });
+
+  test('shows two static card placeholders during the initial routine list request', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-initial', title: '水泳' })],
+    });
+    const delayedList = api.holdNextListResponse();
+    await openRoutinePage(page);
+    await delayedList.started;
+    await expect(page.getByTestId('routine-list-placeholder').locator('li')).toHaveCount(2);
+    await expect(page.getByRole('status', { name: '繰り返し予定を読み込み中' })).toBeVisible();
+    await expect(page.getByTestId('routine-list')).toHaveCount(0);
+    delayedList.release();
+    await expect(page.getByTestId('routine-card')).toContainText('水泳');
+  });
+
+  test('shows a retryable information error for an unsupported routine with unavailable details', async ({
+    page,
+  }) => {
+    await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-budget-limit',
+          title: null,
+          status: 'unsupported',
+          weekdays: [],
+          interval: null,
+          startDate: null,
+          endDate: null,
+          startTime: null,
+          endTime: null,
+          memberIds: [],
+          assigneeMemberId: null,
+          upcoming: { status: 'unavailable', conflictsStatus: 'unavailable', instances: [] },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card');
+    await expect(card).toContainText('繰り返し予定の情報を取得できませんでした');
+    await expect(card).not.toContainText('Google カレンダーで繰り返し設定を確認してください');
+    await expect(card.getByRole('button', { name: '再試行' })).toBeVisible();
+  });
+
+  test('does not show the previous account list while the new account list is loading', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-account-a', title: 'アカウントAの予定' })],
+    });
+    await openRoutinePage(page);
+    await expect(page.getByTestId('routine-card')).toContainText('アカウントAの予定');
+    api.setRoutines([routine({ id: 'routine-account-b', title: 'アカウントBの予定' })]);
+    api.setAccountUserId('usr_routine_partner');
+    const delayedList = api.holdNextListResponse();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().includes('/api/auth/me') && response.status() === 200,
+      ),
+      triggerVisibilityCycle(page),
+    ]);
+    await delayedList.started;
+    await expect(page.getByText('アカウントAの予定')).toHaveCount(0);
+    await expect(page.getByTestId('routine-list-placeholder').locator('li')).toHaveCount(2);
+    delayedList.release();
+    await expect(page.getByTestId('routine-card')).toContainText('アカウントBの予定');
+    await expect(page.getByText('アカウントAの予定')).toHaveCount(0);
   });
 
   test('resolves conflict panels through existing skip and move actions and refetches conflicts', async ({

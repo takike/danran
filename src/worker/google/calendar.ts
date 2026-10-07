@@ -80,6 +80,7 @@ export interface GoogleCalendarErrorOptions {
   reason?: string;
   outcome?: 'uncertain' | 'failed';
   googleStatus?: number;
+  budgetExceeded?: boolean;
 }
 
 /**
@@ -92,6 +93,7 @@ export class GoogleCalendarError extends Error {
   readonly reason?: string;
   readonly outcome: 'uncertain' | 'failed';
   readonly googleStatus?: number;
+  readonly budgetExceeded: boolean;
 
   constructor(options: GoogleCalendarErrorOptions) {
     super(options.message);
@@ -101,6 +103,7 @@ export class GoogleCalendarError extends Error {
     this.reason = options.reason;
     this.outcome = options.outcome ?? 'failed';
     this.googleStatus = options.googleStatus;
+    this.budgetExceeded = options.budgetExceeded ?? false;
   }
 }
 
@@ -250,6 +253,7 @@ async function sendHttpRequestWithRetry(
           message: 'Google external request budget exhausted',
           code: 'API_ERROR',
           status: 503,
+          budgetExceeded: true,
         });
       }
       if (err instanceof ReauthNeededError) {
@@ -271,7 +275,7 @@ async function sendHttpRequestWithRetry(
   async function refreshAccessToken(): Promise<string> {
     try {
       return requestContext
-        ? await requestContext.accessToken(true)
+        ? await requestContext.accessToken(true, accessToken ?? undefined)
         : (await getGoogleAccessToken(env, userId)).accessToken;
     } catch (err) {
       if (err instanceof GoogleRequestBudgetExceededError) {
@@ -279,6 +283,7 @@ async function sendHttpRequestWithRetry(
           message: 'Google external request budget exhausted',
           code: 'API_ERROR',
           status: 503,
+          budgetExceeded: true,
         });
       }
       if (err instanceof ReauthNeededError) {
@@ -328,6 +333,7 @@ async function sendHttpRequestWithRetry(
           message: 'Google external request budget exhausted',
           code: 'API_ERROR',
           status: 503,
+          budgetExceeded: true,
         });
       }
       // Transport / network failure (connection reset, timeout, DNS failure)
@@ -649,6 +655,7 @@ function createGoogleRequestContext(
   }
   let requestCount = 0;
   let cachedAccessToken: string | null = null;
+  let accessTokenPromise: Promise<string> | null = null;
   const fetcher: typeof fetch = async (input, init) => {
     if (maxRequests !== undefined && requestCount >= maxRequests) {
       throw new GoogleRequestBudgetExceededError();
@@ -658,13 +665,28 @@ function createGoogleRequestContext(
   };
   return {
     fetcher,
-    async accessToken(forceRefresh = false) {
-      if (options.reuseAccessToken && cachedAccessToken !== null && !forceRefresh) {
-        return cachedAccessToken;
+    async accessToken(forceRefresh = false, rejectedToken?: string) {
+      if (options.reuseAccessToken) {
+        if (forceRefresh && cachedAccessToken !== null && cachedAccessToken !== rejectedToken) {
+          return cachedAccessToken;
+        }
+        if (!forceRefresh && cachedAccessToken !== null) return cachedAccessToken;
+        if (accessTokenPromise !== null) return await accessTokenPromise;
       }
-      const result = await getGoogleAccessToken(env, userId, { fetcher });
-      cachedAccessToken = result.accessToken;
-      return cachedAccessToken;
+      const pending = getGoogleAccessToken(env, userId, { fetcher }).then(
+        (result) => result.accessToken,
+      );
+      if (options.reuseAccessToken) {
+        cachedAccessToken = null;
+        accessTokenPromise = pending;
+      }
+      try {
+        const token = await pending;
+        if (options.reuseAccessToken) cachedAccessToken = token;
+        return token;
+      } finally {
+        if (options.reuseAccessToken && accessTokenPromise === pending) accessTokenPromise = null;
+      }
     },
   };
 }

@@ -2024,6 +2024,14 @@ describe('Task 1-2: Google Calendar REST Client', () => {
   });
 
   describe('request-scoped Google request policy', () => {
+    it('keeps fetching a token for each method when reuse is not opted in', async () => {
+      setupMockFetch(() => Response.json({ items: [] }));
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId);
+      await client.events.instances('calendar_one', 'series_one');
+      await client.events.instances('calendar_one', 'series_two');
+      expect(tokenCounter).toBe(2);
+    });
+
     it('reuses one short-lived token across methods on the same client', async () => {
       setupMockFetch(() =>
         Response.json(
@@ -2039,6 +2047,21 @@ describe('Task 1-2: Google Calendar REST Client', () => {
       await client.events.instances('calendar_one', 'series_two');
       expect(tokenCounter).toBe(1);
       expect(recordedRequests).toHaveLength(2);
+    });
+
+    it('shares an in-flight token acquisition across concurrent methods', async () => {
+      setupMockFetch(() => Response.json({ items: [] }));
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId, {
+        reuseAccessToken: true,
+        maxExternalRequests: 48,
+      });
+      await Promise.all(
+        Array.from({ length: 4 }, (_, index) =>
+          client.events.instances('calendar_one', `series_${index}`),
+        ),
+      );
+      expect(tokenCounter).toBe(1);
+      expect(recordedRequests).toHaveLength(4);
     });
 
     it('refreshes a reused token after a Calendar 401', async () => {
@@ -2065,6 +2088,34 @@ describe('Task 1-2: Google Calendar REST Client', () => {
         'Bearer mock-access-token-2',
         'Bearer mock-access-token-2',
       ]);
+    });
+
+    it('shares a refreshed token across concurrent 401 responses', async () => {
+      let initialUnauthorizedResponses = 0;
+      setupMockFetch(() => {
+        if (initialUnauthorizedResponses < 4) {
+          initialUnauthorizedResponses += 1;
+          return Response.json(
+            { error: { code: 401, message: 'Unauthorized', errors: [{ reason: 'authError' }] } },
+            { status: 401 },
+          );
+        }
+        return Response.json({ items: [] });
+      });
+      const client = createGoogleCalendarClient(TEST_ENV, testUserId, {
+        reuseAccessToken: true,
+        maxExternalRequests: 48,
+      });
+      await Promise.all(
+        Array.from({ length: 4 }, (_, index) =>
+          client.events.instances('calendar_one', `series_${index}`),
+        ),
+      );
+      expect(tokenCounter).toBe(2);
+      expect(recordedRequests).toHaveLength(8);
+      expect(recordedRequests.slice(4).map((record) => record.headers.authorization)).toEqual(
+        Array(4).fill('Bearer mock-access-token-2'),
+      );
     });
 
     it('stops before a fetch when the shared OAuth and Calendar budget is exhausted', async () => {

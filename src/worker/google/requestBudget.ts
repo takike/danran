@@ -8,7 +8,7 @@ export class GoogleRequestBudgetExceededError extends Error {
 
 export interface GoogleRequestContext {
   fetcher: typeof fetch;
-  accessToken(forceRefresh?: boolean): Promise<string>;
+  accessToken(forceRefresh?: boolean, rejectedToken?: string): Promise<string>;
 }
 
 export interface GoogleCalendarClientOptions {

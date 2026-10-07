@@ -42,7 +42,10 @@ describe('Task 3-1 routine API', () => {
   let patchUrls: URL[] = [];
   let instanceFailures = new Set<string>();
   let instanceRequests: URL[] = [];
+  let conflictRequests: URL[] = [];
+  let conflictPagination = false;
   let eventGetCount = 0;
+  let eventGetUnauthorizedOnce = false;
   let instancePageItems = new Map<string, Record<string, unknown>[][]>();
   let deleteStatus = 204;
   let refreshTokenValues: string[] = [];
@@ -57,7 +60,10 @@ describe('Task 3-1 routine API', () => {
     patchUrls = [];
     instanceFailures = new Set();
     instanceRequests = [];
+    conflictRequests = [];
+    conflictPagination = false;
     eventGetCount = 0;
+    eventGetUnauthorizedOnce = false;
     instancePageItems = new Map();
     deleteStatus = 204;
     refreshTokenValues = [];
@@ -139,10 +145,22 @@ describe('Task 3-1 routine API', () => {
         return Response.json(events.get(id));
       }
       if (request.method === 'GET' && url.pathname.endsWith('/events')) {
-        return Response.json({ items: [...events.values()] });
+        conflictRequests.push(url);
+        const pageIndex = Number(url.searchParams.get('pageToken')?.slice(4) ?? '0');
+        return Response.json({
+          items: [...events.values()],
+          ...(conflictPagination ? { nextPageToken: `page${pageIndex + 1}` } : {}),
+        });
       }
       if (request.method === 'GET' && url.pathname.includes('/events/')) {
         eventGetCount += 1;
+        if (eventGetUnauthorizedOnce) {
+          eventGetUnauthorizedOnce = false;
+          return Response.json(
+            { error: { code: 401, message: 'Unauthorized', errors: [{ reason: 'authError' }] } },
+            { status: 401 },
+          );
+        }
         const event = events.get(eventId);
         return event
           ? Response.json(
@@ -385,6 +403,37 @@ describe('Task 3-1 routine API', () => {
     });
   }
 
+  async function seedRoutineSeries(index: number, withInstance: boolean): Promise<string> {
+    const routineId = `routine_budget_${index}`;
+    const eventId = `routine_master_budget_${index}`;
+    await db.insert(routineSettings).values({
+      id: routineId,
+      familyId: 'routine_family',
+      calendarId: CALENDAR_ID,
+      recurringEventId: eventId,
+      category: 'lesson',
+      defaultAssigneeMemberId: 'routine_adult',
+    });
+    events.set(eventId, {
+      id: eventId,
+      summary: `Routine ${index}`,
+      start: { dateTime: '2026-10-06T17:00:00+09:00', timeZone: 'Asia/Tokyo' },
+      end: { dateTime: '2026-10-06T18:00:00+09:00', timeZone: 'Asia/Tokyo' },
+      recurrence: ['RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=TU'],
+      status: 'confirmed',
+      extendedProperties: {
+        private: {
+          danran: '1',
+          members: 'routine_child',
+          assignee: 'routine_adult',
+          status: 'confirmed',
+        },
+      },
+    });
+    if (withInstance) addInstance(`routine_instance_budget_${index}`, eventId, '2026-10-13');
+    return routineId;
+  }
+
   it('creates a Tokyo-time recurring master and recovers D1 failure on the same request', async () => {
     const cookie = await makeCaller();
     await env.DB.prepare(
@@ -434,11 +483,7 @@ describe('Task 3-1 routine API', () => {
       'Bearer routine-access-token',
       'Bearer routine-access-token',
     ]);
-    expect(refreshTokenValues).toEqual([
-      'routine-refresh-token',
-      'routine-refresh-token',
-      'routine-refresh-token',
-    ]);
+    expect(refreshTokenValues).toEqual(['routine-refresh-token', 'routine-refresh-token']);
   });
 
   it('uses the invited adult caller token and ignores client calendar IDs', async () => {
@@ -589,6 +634,79 @@ describe('Task 3-1 routine API', () => {
     expect(await deleted.json()).toEqual({ ok: true });
     expect(deleteCount).toBe(1);
     expect((await db.select().from(routineSettings)).length).toBe(0);
+  });
+
+  it('uses one token per list request across parallel routines and the single conflict scan', async () => {
+    const cookie = await makeCaller();
+    const firstResponse = await request(
+      'POST',
+      '/api/families/routine_family/routines',
+      cookie,
+      payload,
+    );
+    const first = (await firstResponse.json()) as { eventId: string };
+    const secondResponse = await request('POST', '/api/families/routine_family/routines', cookie, {
+      ...payload,
+      title: '英語',
+      clientRequestId: '123e4567-e89b-42d3-a456-426614174001',
+    });
+    const second = (await secondResponse.json()) as { eventId: string };
+    addInstance('routine_instance_first', first.eventId, '2026-10-13');
+    addInstance('routine_instance_second', second.eventId, '2026-10-13');
+
+    const tokenCountBeforeFirstList = refreshTokenValues.length;
+    const firstList = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(firstList.status).toBe(200);
+    expect(refreshTokenValues).toHaveLength(tokenCountBeforeFirstList + 1);
+    expect(instanceRequests).toHaveLength(2);
+    expect(conflictRequests).toHaveLength(1);
+
+    const tokenCountBeforeSecondList = refreshTokenValues.length;
+    const secondList = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(secondList.status).toBe(200);
+    expect(refreshTokenValues).toHaveLength(tokenCountBeforeSecondList + 1);
+    expect(conflictRequests).toHaveLength(2);
+  });
+
+  it('refreshes once and retries a routine list Calendar request after 401', async () => {
+    const cookie = await makeCaller();
+    const created = await request('POST', '/api/families/routine_family/routines', cookie, payload);
+    expect(created.status).toBe(200);
+    eventGetUnauthorizedOnce = true;
+    const tokenCountBeforeList = refreshTokenValues.length;
+    const eventGetCountBeforeList = eventGetCount;
+
+    const response = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(response.status).toBe(200);
+    expect(refreshTokenValues).toHaveLength(tokenCountBeforeList + 2);
+    expect(eventGetCount).toBe(eventGetCountBeforeList + 2);
+  });
+
+  it('fits ten one-page routine series and one conflict scan inside the shared budget', async () => {
+    const cookie = await makeCaller();
+    for (let index = 0; index < 10; index += 1) {
+      await seedRoutineSeries(index, true);
+    }
+    const tokenCountBeforeList = refreshTokenValues.length;
+    const calendarCallCountBeforeList = calendarAuthorization.length;
+
+    const response = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      routines: Array<{ status: string; upcoming: { status: string; conflictsStatus: string } }>;
+    };
+    expect(body.routines).toHaveLength(10);
+    expect(
+      body.routines.every(
+        (routine) =>
+          routine.status === 'ready' &&
+          routine.upcoming.status === 'ready' &&
+          routine.upcoming.conflictsStatus === 'ready',
+      ),
+    ).toBe(true);
+    expect(refreshTokenValues).toHaveLength(tokenCountBeforeList + 1);
+    expect(calendarAuthorization).toHaveLength(calendarCallCountBeforeList + 21);
+    expect(conflictRequests).toHaveLength(1);
   });
 
   it('does not expose or delete another family routine', async () => {
@@ -832,6 +950,51 @@ describe('Task 3-1 routine API', () => {
     }
   });
 
+  it('returns partial routines when the shared budget expires on master or instance reads', async () => {
+    const cookie = await makeCaller();
+    for (let index = 0; index < 25; index += 1) {
+      await seedRoutineSeries(index, false);
+    }
+
+    const response = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      routines: Array<{ status: string; upcoming: { status: string } }>;
+    };
+    expect(body.routines).toHaveLength(25);
+    expect(body.routines.some((routine) => routine.status === 'unsupported')).toBe(true);
+    expect(
+      body.routines.some(
+        (routine) => routine.status === 'unsupported' && routine.upcoming.status === 'unavailable',
+      ),
+    ).toBe(true);
+    expect(
+      body.routines.some(
+        (routine) => routine.status === 'ready' && routine.upcoming.status === 'unavailable',
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the list and marks conflict verification unavailable when its budget runs out', async () => {
+    const cookie = await makeCaller();
+    conflictPagination = true;
+    for (let index = 0; index < 22; index += 1) {
+      await seedRoutineSeries(index, true);
+    }
+
+    const response = await request('GET', '/api/families/routine_family/routines', cookie);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      routines: Array<{ upcoming: { status: string; conflictsStatus: string } }>;
+    };
+    expect(body.routines).toHaveLength(22);
+    expect(body.routines.every((routine) => routine.upcoming.status === 'ready')).toBe(true);
+    expect(
+      body.routines.every((routine) => routine.upcoming.conflictsStatus === 'unavailable'),
+    ).toBe(true);
+    expect(conflictRequests).toHaveLength(3);
+  });
+
   it('sorts instances from every page by their original date even when actual dates reorder them', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-06T03:00:00.000Z'));
@@ -878,8 +1041,10 @@ describe('Task 3-1 routine API', () => {
     addInstance('instance_owned', eventId, '2026-10-13');
     const path = `/api/families/routine_family/routines/${routineId}/instances/instance_owned`;
 
+    const tokenCountBeforeSkip = refreshTokenValues.length;
     const firstSkip = await request('POST', `${path}/skip`, cookie);
     expect(firstSkip.status).toBe(200);
+    expect(refreshTokenValues).toHaveLength(tokenCountBeforeSkip + 1);
     expect(await firstSkip.json()).toMatchObject({
       instance: {
         id: 'instance_owned',

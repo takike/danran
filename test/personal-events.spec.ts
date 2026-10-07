@@ -569,6 +569,7 @@ describe('personal calendar APIs', () => {
     expect(pages.status).toBe('ready');
     if (pages.status === 'ready')
       expect(pages.calendars.map((item) => item.id)).toContain('calendar-secondary');
+    expect(tokenRefreshes).toHaveLength(2);
 
     await db
       .insert(memberCalendars)
@@ -582,6 +583,7 @@ describe('personal calendar APIs', () => {
     expect(pagedWeek.events.map((event) => event.id)).toContain(
       'calendar-a-primary::event-a-page-two',
     );
+    expect(tokenRefreshes).toHaveLength(4);
 
     await db.delete(memberCalendars).where(eq(memberCalendars.memberId, memberA));
     await db.insert(memberCalendars).values([

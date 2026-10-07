@@ -465,8 +465,8 @@ describe('family busy week API', () => {
     expect(JSON.stringify(googleRequests)).not.toContain(CALENDAR_A_DISPLAY_ONLY);
     expect(JSON.stringify(googleRequests)).not.toContain(FAMILY_CALENDAR_ID);
     expect(JSON.stringify(googleRequests)).not.toContain(UNSELECTED_RESPONSE_CALENDAR);
-    expect(refreshes).toContain('refresh-a');
-    expect(refreshes).toContain('refresh-b');
+    expect(refreshes.filter((token) => token === 'refresh-a')).toHaveLength(1);
+    expect(refreshes.filter((token) => token === 'refresh-b')).toHaveLength(1);
 
     const json = JSON.stringify(rawObject);
     for (const secret of [
