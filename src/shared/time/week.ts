@@ -21,6 +21,13 @@ export interface WeekRange {
   nextWeekStart: DateKey;
 }
 
+/** A fixed Monday-to-Sunday calendar week without national-holiday extension. */
+export interface CalendarWeekBounds {
+  start: DateKey;
+  endInclusive: DateKey;
+  endExclusive: DateKey;
+}
+
 /**
  * Returns the Monday anchor DateKey for any given date in Asia/Tokyo.
  */
@@ -72,5 +79,16 @@ export function getWeekRange(anchorDate: DateKey): WeekRange {
     days,
     prevWeekStart: addCalendarWeeks(monday, -1),
     nextWeekStart: addCalendarWeeks(monday, 1),
+  };
+}
+
+/** Returns the standard Tokyo Monday-to-Sunday week used for task summaries. */
+export function getCalendarWeekBounds(anchorDate: DateKey): CalendarWeekBounds {
+  const start = getMondayAnchor(anchorDate);
+  const endInclusive = addCalendarDays(start, 6);
+  return {
+    start,
+    endInclusive,
+    endExclusive: addCalendarDays(endInclusive, 1),
   };
 }

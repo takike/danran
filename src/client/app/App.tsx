@@ -2,6 +2,7 @@ import { OfflineFallback } from '@client/components/OfflineFallback';
 import { useSessionQuery } from '@client/features/auth/useSession';
 import { PwaUpdateBanner } from '@client/features/pwa/PwaUpdateBanner';
 import RoutinesPage from '@client/features/routines/RoutinesPage';
+import TasksPage from '@client/features/tasks/TasksPage';
 import { useIsOnline } from '@client/hooks/useIsOnline';
 import ComingSoonPage from '@client/pages/ComingSoonPage';
 import FamilyPage from '@client/pages/FamilyPage';
@@ -43,12 +44,14 @@ function PrivateCacheGuard(): null {
         await queryClient.cancelQueries({ queryKey: ['personal-calendars', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['families', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['routines', oldUserId] });
+        await queryClient.cancelQueries({ queryKey: ['tasks', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week-busy', oldUserId] });
         queryClient.removeQueries({ queryKey: ['personal-week', oldUserId] });
         queryClient.removeQueries({ queryKey: ['personal-calendars', oldUserId] });
         queryClient.removeQueries({ queryKey: ['families', oldUserId] });
         queryClient.removeQueries({ queryKey: ['routines', oldUserId] });
+        queryClient.removeQueries({ queryKey: ['tasks', oldUserId] });
       })();
     }
   }, [isError, queryClient, userId]);
@@ -85,7 +88,7 @@ export function App() {
               <Route path="/coming-soon" element={<ComingSoonPage feature="capture" />} />
               <Route path="/import" element={<ComingSoonPage feature="capture" />} />
               <Route path="/routines" element={<RoutinesPage />} />
-              <Route path="/tasks" element={<ComingSoonPage feature="tasks" />} />
+              <Route path="/tasks" element={<TasksPage />} />
               <Route path="/onboarding" element={<OnboardingPage />} />
               <Route path="/invite" element={<InviteJoinPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />

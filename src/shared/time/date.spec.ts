@@ -2,6 +2,7 @@ import { type DateKey, dateKeySchema, isoInstantStringSchema } from '@shared/sch
 import {
   addCalendarDays,
   addCalendarWeeks,
+  differenceInCalendarDays,
   getDayBounds,
   getTodayDateKey,
   getWeekday,
@@ -123,6 +124,14 @@ describe('src/shared/time/date', () => {
       expect(() => addCalendarDays('2026-10-05' as DateKey, 1.5)).toThrow(TypeError);
       expect(() => addCalendarDays('2026-10-05' as DateKey, Number.NaN)).toThrow(TypeError);
       expect(() => addCalendarWeeks('2026-10-05' as DateKey, 0.5)).toThrow(TypeError);
+    });
+  });
+
+  describe('differenceInCalendarDays', () => {
+    it('returns signed calendar-day distance across months and years', () => {
+      expect(differenceInCalendarDays('2027-01-02' as DateKey, '2026-12-31' as DateKey)).toBe(2);
+      expect(differenceInCalendarDays('2026-12-31' as DateKey, '2027-01-02' as DateKey)).toBe(-2);
+      expect(differenceInCalendarDays('2026-10-05' as DateKey, '2026-10-05' as DateKey)).toBe(0);
     });
   });
 

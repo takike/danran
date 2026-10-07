@@ -868,10 +868,14 @@ test.describe('Task 3-1: recurring routines', () => {
     const api = await mockRoutineApis(page, {
       routines: [routine({ id: 'routine-tab-return', title: '水泳' })],
     });
+    await page.route('**/api/families/*/tasks', async (route) => {
+      await route.fulfill(jsonResponse(200, { tasks: [] }));
+    });
     await openRoutinePage(page);
     const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
     await navigation.getByRole('link', { name: /やること/ }).click();
     await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page.getByRole('heading', { name: 'やること', exact: true })).toBeVisible();
 
     const delayedList = api.holdNextListResponse();
     await navigation.getByRole('link', { name: /繰り返し/ }).click();
@@ -887,6 +891,9 @@ test.describe('Task 3-1: recurring routines', () => {
   }) => {
     const api = await mockRoutineApis(page, {
       routines: [routine({ id: 'routine-no-access', title: '家族だけの予定' })],
+    });
+    await page.route('**/api/families/*/tasks', async (route) => {
+      await route.fulfill(jsonResponse(200, { tasks: [] }));
     });
     await openRoutinePage(page);
     await expect(page.getByTestId('routine-card')).toContainText('家族だけの予定');
@@ -1549,6 +1556,9 @@ test.describe('Task 3-1: recurring routines', () => {
     await mockRoutineApis(page, {
       routines: [routine({ id: 'routine-long', title: '家族みんなで参加する長めの習い事' })],
     });
+    await page.route('**/api/families/*/tasks', async (route) => {
+      await route.fulfill(jsonResponse(200, { tasks: [] }));
+    });
     await openRoutinePage(page);
     for (const width of [390, 445]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1564,7 +1574,7 @@ test.describe('Task 3-1: recurring routines', () => {
     const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
     await expect(navigation.getByRole('link', { name: /繰り返し/ })).toBeVisible();
     await expect(navigation.getByRole('link', { name: /繰り返し/ })).not.toContainText('準備中');
-    await expect(navigation.getByRole('link', { name: /やること/ })).toContainText('準備中');
-    await expect(navigation.getByText('準備中', { exact: true })).toHaveCount(2);
+    await expect(navigation.getByRole('link', { name: /やること/ })).not.toContainText('準備中');
+    await expect(navigation.getByText('準備中', { exact: true })).toHaveCount(1);
   });
 });

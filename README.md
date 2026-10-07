@@ -149,4 +149,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 3-3（祝日・年末年始の自動スキップ）**: S4 の設定から本人の Google トークンで今後183日分を適用し、画面利用時に範囲を補完します。Cron は使わず、休園日は対象外です。API・保存仕様・staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。自動テストの結果は PR の検証記録を参照してください。実 Google アカウントによる staging 確認は人間による実施待ちです。
   - **タスク 3-4（繰り返し回と単発予定の重複）**: 実装中です。`shared/domain/conflicts` で時刻指定の繰り返し回と確定済み単発家族予定を比較し、S4 に解決パネル、S1 に両予定の重複印を表示します。確認範囲・staging 手順は [docs/20-routines.md](docs/20-routines.md)。staging の実 Google カレンダー確認は人間による実施待ちです。
 - Phase 5：やること：
-  - **タスク 5-1（tasks API と持ち物からの自動生成）**: 実装済み（自動テスト済み、staging 確認待ち）。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。S5 画面と週ビュー連携は後続タスクです。
+  - **タスク 5-1（tasks API と持ち物からの自動生成）**: PR #36 で main にマージ済み。自動テスト済み、staging 確認待ちです。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。
+  - **タスク 5-2（S5 やること画面）**: `/tasks` の予定ごと・期限順・自分の担当、完了・担当変更、手動タスクの追加・編集・削除を実装。自動テストの検証結果は PR に記載します。staging の人間による確認は未実施です。画面仕様・手順は [docs/02-screens.md](docs/02-screens.md#s5-やること) と [docs/21-tasks.md](docs/21-tasks.md) を参照してください。週ビュー連携は Task 5-3 です。
