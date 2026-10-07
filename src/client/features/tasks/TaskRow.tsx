@@ -89,7 +89,7 @@ export function TaskRow({
                 data-testid={`task-edit-${task.id}`}
                 onClick={() => onEdit(task)}
                 disabled={busy || disableEdit}
-                className={`min-h-[var(--tap-target-min)] min-w-0 flex-1 text-left text-sm font-medium [overflow-wrap:anywhere] underline decoration-transparent underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${hasDone ? 'text-muted line-through' : 'text-ink'}`}
+                className={`min-h-[var(--tap-target-min)] min-w-0 flex-1 text-left text-sm font-medium [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${hasDone ? 'text-muted line-through decoration-current' : 'text-ink underline decoration-transparent underline-offset-2 hover:decoration-current'}`}
               >
                 {task.title}
               </button>

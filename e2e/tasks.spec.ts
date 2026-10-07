@@ -410,6 +410,63 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
   await expect(page.getByTestId('tasks-mine-view').getByText('自分が担当')).toBeVisible();
 });
 
+test('manual and automatic task titles update strikethrough with completion state', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  await installTaskHarness(page, [
+    task('task-manual-style', { title: '手動の確認', linkedEvent: ready }),
+    task('task-done-auto', {
+      title: '自動の確認',
+      source: 'items',
+      linkedEvent: ready,
+    }),
+  ]);
+
+  await page.goto('/tasks');
+  const manualTitle = page.getByTestId('task-edit-task-manual-style');
+  const automaticTitle = page.getByText('自動の確認', { exact: true });
+  await expect(manualTitle).toBeVisible();
+  await expect(automaticTitle).toBeVisible();
+
+  const assertStrikethrough = async () => {
+    for (const title of [manualTitle, automaticTitle]) {
+      const style = await title.evaluate((element) => {
+        const computed = getComputedStyle(element);
+        return {
+          decorationLine: computed.textDecorationLine,
+          decorationColor: computed.textDecorationColor,
+        };
+      });
+      expect(style.decorationLine).toContain('line-through');
+      expect(style.decorationColor).not.toBe('rgba(0, 0, 0, 0)');
+      expect(style.decorationColor).not.toBe('transparent');
+    }
+  };
+  const assertNoStrikethrough = async () => {
+    for (const title of [manualTitle, automaticTitle]) {
+      const decorationLine = await title.evaluate(
+        (element) => getComputedStyle(element).textDecorationLine,
+      );
+      expect(decorationLine).not.toContain('line-through');
+    }
+  };
+
+  await assertNoStrikethrough();
+  await page.getByRole('checkbox', { name: '手動の確認を完了にする' }).click();
+  await expect(page.getByRole('checkbox', { name: '手動の確認を未完了に戻す' })).toBeChecked();
+  await page.getByRole('checkbox', { name: '自動の確認を完了にする' }).click();
+  await expect(page.getByRole('checkbox', { name: '自動の確認を未完了に戻す' })).toBeChecked();
+  await assertStrikethrough();
+  await manualTitle.hover();
+  await assertStrikethrough();
+  await page.getByRole('checkbox', { name: '手動の確認を未完了に戻す' }).click();
+  await expect(page.getByRole('checkbox', { name: '手動の確認を完了にする' })).not.toBeChecked();
+  await page.getByRole('checkbox', { name: '自動の確認を未完了に戻す' }).click();
+  await expect(page.getByRole('checkbox', { name: '自動の確認を完了にする' })).not.toBeChecked();
+  await assertNoStrikethrough();
+});
+
 test('shows summaries and sorts each view in event, due, and assigned order', async ({ page }) => {
   await freezeClock(page);
   const earlierEvent = {
