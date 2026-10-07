@@ -528,6 +528,16 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('秋の行事')).toBeVisible();
     const saturdayCard = page.locator('[data-testid="week-day"][data-date="2026-10-10"]');
     const sundayCard = page.locator('[data-testid="week-day"][data-date="2026-10-11"]');
+    await expect(saturdayCard.getByTestId('week-event-conflict-evt_club')).toBeVisible();
+    await expect(saturdayCard.getByTestId('week-event-conflict-evt_all_day')).toBeVisible();
+    await expect(
+      saturdayCard.getByRole('button', { name: '予定を編集: 工作クラブ、重複' }),
+    ).toBeVisible();
+    await expect(
+      saturdayCard.getByRole('button', { name: '予定を編集: 秋の行事、重複' }),
+    ).toBeVisible();
+    await expect(page.getByTestId('week-event-conflict-evt_outing')).toHaveCount(0);
+    await expect(page.getByTestId('week-event-conflict-evt_import')).toHaveCount(0);
     const saturdayAddButton = saturdayCard.locator('button[data-testid="add-event-2026-10-10"]');
     await expect(saturdayAddButton).toHaveAttribute('aria-label', '10月10日に予定を追加');
     await expect(saturdayAddButton).toHaveText('');
@@ -553,7 +563,7 @@ test.describe('Task 1-7: S1 week view', () => {
       .getByText('秋の行事', { exact: true })
       .locator('..')
       .locator('..');
-    await expect(externalEventContent.locator('[aria-hidden="true"]')).toHaveCount(0);
+    await expect(externalEventContent.locator('[aria-hidden="true"]')).toHaveCount(1);
     await expect(page.getByText('夜の予定')).toBeVisible();
     await expect(page.getByText('夜の予定')).toHaveCount(1);
     await expect(page.getByText('終日（10/10〜10/11）')).toHaveCount(2);

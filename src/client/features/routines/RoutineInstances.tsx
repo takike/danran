@@ -1,9 +1,15 @@
 import { RoutineApiError, updateRoutineInstance } from '@client/api/routines';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
 import { formatRoutineInstanceChip } from '@shared/domain/routineInstances';
-import type { RoutineInstance, RoutineUpcoming } from '@shared/schemas/routines';
-import { toTokyoDateKey, toTokyoIsoString } from '@shared/time';
+import type {
+  RoutineInstance,
+  RoutineUpcoming,
+  RoutineUpcomingInstance,
+} from '@shared/schemas/routines';
+import { getWeekday, toTokyoDateKey, toTokyoIsoString } from '@shared/time';
+import { formatEventTime } from '@shared/time/format';
 import { useQueryClient } from '@tanstack/react-query';
+import { CircleAlert } from 'lucide-react';
 import type React from 'react';
 import { useRef, useState } from 'react';
 
@@ -14,6 +20,29 @@ const primaryButtonClass = `${buttonBaseClass} border-accent bg-accent text-surf
 const fieldClass =
   'mt-[var(--spacing-2xs)] min-h-[var(--tap-target-min)] w-full rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-sm)] text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
 const OPERATION_ERROR = '変更を保存できませんでした。時間をおいて再度お試しください。';
+
+function ConflictBadge(): React.ReactElement {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] border border-line bg-chip px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-muted">
+      <CircleAlert size={13} aria-hidden="true" className="shrink-0" />
+      重複
+    </span>
+  );
+}
+
+function conflictLabel(instance: RoutineUpcomingInstance): string {
+  const actualDate = toTokyoDateKey(instance.start ?? instance.originalStart);
+  const [, month, day] = actualDate.split('-');
+  const weekday = ['日', '月', '火', '水', '木', '金', '土'][getWeekday(actualDate)];
+  const dateLabel = `${Number(month)}/${Number(day)}（${weekday}）`;
+  const events = instance.conflicts.map((conflict) => {
+    const time = formatEventTime(conflict.time);
+    return conflict.time.kind === 'all-day'
+      ? `『${conflict.title}』（${time}）`
+      : `『${conflict.title}』 ${time}`;
+  });
+  return `${dateLabel}は${events.join('、')}と重なっています`;
+}
 
 function timeLabel(instant: string): string {
   return toTokyoIsoString(instant).slice(11, 16);
@@ -65,8 +94,11 @@ export function RoutineInstances({
   const controlsDisabled = pending || isSeriesDeleting || isRoutineBusy;
   useReloadProtection((moveFormOpen && dirty) || pending, pending);
 
-  async function perform(action: 'skip' | 'restore' | 'move') {
-    if (!selected || pendingRef.current || isSeriesDeleting) return;
+  async function perform(
+    action: 'skip' | 'restore' | 'move',
+    target: RoutineInstance | null = selected,
+  ) {
+    if (!target || pendingRef.current || isSeriesDeleting || isRoutineBusy) return;
     if (
       action === 'move' &&
       (!moveValue.date ||
@@ -86,7 +118,7 @@ export function RoutineInstances({
       const response = await updateRoutineInstance(
         familyId,
         routineId,
-        selected.id,
+        target.id,
         action,
         action === 'move' ? moveValue : undefined,
       );
@@ -98,6 +130,7 @@ export function RoutineInstances({
       setMoveFormOpen(false);
       setDirty(false);
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
         queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
         queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
       ]);
@@ -116,22 +149,28 @@ export function RoutineInstances({
 
   if (upcoming.status === 'unavailable') {
     return (
-      <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">
-        直近の回を取得できませんでした。
-        <button
-          type="button"
-          disabled={controlsDisabled}
-          className="ml-[var(--spacing-xs)] min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] underline"
-          onClick={() =>
-            void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] })
-          }
-        >
-          再試行
-        </button>
-      </p>
+      <div className="mt-[var(--spacing-md)] text-sm text-muted">
+        <p className="m-0">
+          直近の回を取得できませんでした。
+          <button
+            type="button"
+            disabled={controlsDisabled}
+            className="ml-[var(--spacing-xs)] min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] underline"
+            onClick={() =>
+              void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] })
+            }
+          >
+            再試行
+          </button>
+        </p>
+        {upcoming.conflictsStatus === 'unavailable' && (
+          <p className="mt-[var(--spacing-xs)] mb-0">重複を確認できませんでした。</p>
+        )}
+      </div>
     );
   }
-  if (!upcoming.instances.length) return null;
+  const canShowConflicts = upcoming.conflictsStatus === 'ready';
+  if (!upcoming.instances.length && upcoming.conflictsStatus === 'ready') return null;
 
   return (
     <section
@@ -158,9 +197,68 @@ export function RoutineInstances({
             <span className={instance.status === 'skipped' ? 'line-through decoration-2' : ''}>
               {formatRoutineInstanceChip(instance)}
             </span>
+            {canShowConflicts && instance.conflicts.length > 0 && <ConflictBadge />}
           </button>
         ))}
       </div>
+      {upcoming.conflictsStatus === 'unavailable' && (
+        <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-muted">
+          重複を確認できませんでした。
+        </p>
+      )}
+      {canShowConflicts &&
+        upcoming.instances
+          .filter((instance) => instance.conflicts.length > 0)
+          .map((instance) => (
+            <section
+              key={`conflicts-${instance.id}`}
+              data-testid={`routine-conflicts-${instance.id}`}
+              className="mt-[var(--spacing-sm)] rounded-[var(--radius-md)] border border-line bg-bg p-[var(--spacing-sm)]"
+              aria-label={`${formatRoutineInstanceChip(instance)}の重複解決`}
+            >
+              <p className="m-0 text-sm font-semibold">{conflictLabel(instance)}</p>
+              <ul className="mt-[var(--spacing-xs)] mb-0 list-disc space-y-[var(--spacing-2xs)] pl-[var(--spacing-lg)] text-sm text-muted">
+                {instance.conflicts.map((conflict) => (
+                  <li key={conflict.id}>
+                    {conflict.title}（{formatEventTime(conflict.time)}）
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-[var(--spacing-sm)] grid grid-cols-1 gap-[var(--spacing-xs)]">
+                {instance.status !== 'skipped' && (
+                  <button
+                    type="button"
+                    data-testid={`routine-conflict-skip-${instance.id}`}
+                    disabled={controlsDisabled}
+                    onClick={() => {
+                      setSelected(instance);
+                      setMoveFormOpen(false);
+                      setError('');
+                      void perform('skip', instance);
+                    }}
+                    className={secondaryButtonClass}
+                  >
+                    この回を休む
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid={`routine-conflict-move-${instance.id}`}
+                  disabled={controlsDisabled}
+                  onClick={() => {
+                    setSelected(instance);
+                    setMoveValue(initialMoveValue(instance));
+                    setMoveFormOpen(true);
+                    setDirty(false);
+                    setError('');
+                  }}
+                  className={secondaryButtonClass}
+                >
+                  振替を設定
+                </button>
+              </div>
+            </section>
+          ))}
       {selected && (
         <div
           data-testid={`routine-instance-actions-${selected.id}`}

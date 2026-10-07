@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 import type { FamilyPublic } from '../src/shared/schemas/family';
-import type { Routine, RoutineInstance } from '../src/shared/schemas/routines';
+import type {
+  Routine,
+  RoutineInstance,
+  RoutineUpcomingInstance,
+} from '../src/shared/schemas/routines';
 
 test.use({
   serviceWorkers: 'block',
@@ -74,7 +78,11 @@ function routine(
     skipNewYear: false,
     autoSkipDue: false,
     status: 'ready',
-    upcoming: { status: 'ready', instances: sampleInstances(`instance-${id}`) },
+    upcoming: {
+      status: 'ready',
+      conflictsStatus: 'ready',
+      instances: sampleInstances(`instance-${id}`),
+    },
     ...fields,
   };
 }
@@ -87,7 +95,7 @@ function instance(
   startTime = '17:00',
   endTime = '18:00',
   autoSkipReason: RoutineInstance['autoSkipReason'] = null,
-): RoutineInstance {
+): RoutineUpcomingInstance {
   const originalStart = `${originalDate}T17:00:00+09:00`;
   const originalEnd = `${originalDate}T18:00:00+09:00`;
   return {
@@ -98,10 +106,11 @@ function instance(
     end: actualDate === null ? null : `${actualDate}T${endTime}:00+09:00`,
     status,
     autoSkipReason,
+    conflicts: [],
   };
 }
 
-function sampleInstances(prefix: string): RoutineInstance[] {
+function sampleInstances(prefix: string): RoutineUpcomingInstance[] {
   return [
     instance(`${prefix}-1`, '2026-10-13'),
     instance(`${prefix}-2`, '2026-10-20'),
@@ -240,12 +249,31 @@ async function mockRoutineApis(
                 upcoming: {
                   ...candidate.upcoming,
                   instances: candidate.upcoming.instances.map((entry) =>
-                    entry.id === instanceId ? updated : entry,
+                    entry.id === instanceId
+                      ? {
+                          ...updated,
+                          conflicts:
+                            action === 'skip' ||
+                            (action === 'move' &&
+                              (body as { date: string; startTime: string }).startTime >= '18:00')
+                              ? []
+                              : entry.conflicts,
+                        }
+                      : entry,
                   ),
                 },
               },
         );
-        await route.fulfill(jsonResponse(200, { instance: updated }));
+        const mutationInstance: RoutineInstance = {
+          id: updated.id,
+          originalStart: updated.originalStart,
+          originalEnd: updated.originalEnd,
+          start: updated.start,
+          end: updated.end,
+          status: updated.status,
+          autoSkipReason: updated.autoSkipReason,
+        };
+        await route.fulfill(jsonResponse(200, { instance: mutationInstance }));
         return;
       }
       const body = request.postDataJSON() as Record<string, unknown>;
@@ -397,8 +425,22 @@ test.describe('Task 3-1: recurring routines', () => {
           skipNewYear: true,
           upcoming: {
             status: 'ready',
+            conflictsStatus: 'ready',
             instances: [
-              instance('piano-normal', '2026-10-13'),
+              {
+                ...instance('piano-normal', '2026-10-13'),
+                conflicts: [
+                  {
+                    id: 'event-sports-day',
+                    title: '運動会',
+                    time: {
+                      kind: 'timed',
+                      start: '2026-10-13T17:00:00+09:00',
+                      endExclusive: '2026-10-13T18:00:00+09:00',
+                    },
+                  },
+                ],
+              },
               instance('piano-skipped', '2026-11-03', 'skipped', null, '17:00', '18:00', 'holiday'),
               instance(
                 'piano-year-end',
@@ -420,6 +462,7 @@ test.describe('Task 3-1: recurring routines', () => {
           interval: 2,
           upcoming: {
             status: 'ready',
+            conflictsStatus: 'ready',
             instances: [
               instance('cleaning-1', '2026-10-17'),
               instance('cleaning-2', '2026-10-31'),
@@ -451,6 +494,15 @@ test.describe('Task 3-1: recurring routines', () => {
       await expect(pianoCard.getByTestId('routine-instance-chip-piano-year-end')).toContainText(
         '12/29（火） お休み（年末年始）',
       );
+      await expect(pianoCard.getByTestId('routine-instance-chip-piano-normal')).toContainText(
+        '重複',
+      );
+      await pianoCard.getByTestId('routine-instance-chip-piano-normal').click();
+      await expect(pianoCard.getByTestId('routine-conflicts-piano-normal')).toContainText(
+        '10/13（火）は『運動会』 17:00–18:00と重なっています',
+      );
+      await pianoCard.getByTestId('routine-instance-chip-piano-normal').click();
+      await expect(pianoCard.getByTestId('routine-instance-actions-piano-normal')).toHaveCount(0);
       const fullHeight = await page.evaluate(() => document.documentElement.scrollHeight);
       await page.setViewportSize({ width: 390, height: fullHeight });
       await page.screenshot({ path: 'docs/screenshots/s4-routines.png', fullPage: true });
@@ -628,6 +680,7 @@ test.describe('Task 3-1: recurring routines', () => {
           title: 'ピアノ',
           upcoming: {
             status: 'ready',
+            conflictsStatus: 'ready',
             instances: [
               instance('instance-normal', '2026-10-13'),
               instance('instance-skipped', '2026-10-20', 'skipped', null),
@@ -723,6 +776,107 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
   });
 
+  test('resolves conflict panels through existing skip and move actions and refetches conflicts', async ({
+    page,
+  }) => {
+    const conflictEvent = (id: string, date: string) => ({
+      id,
+      title: '運動会',
+      time: {
+        kind: 'timed' as const,
+        start: `${date}T17:00:00+09:00`,
+        endExclusive: `${date}T18:00:00+09:00`,
+      },
+    });
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-conflict-resolution',
+          title: 'ピアノ',
+          weekdays: ['SA'],
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [
+              {
+                ...instance('conflict-skip', '2026-10-17'),
+                conflicts: [conflictEvent('sports-skip', '2026-10-17')],
+              },
+              {
+                ...instance('conflict-move', '2026-10-24'),
+                conflicts: [conflictEvent('sports-move', '2026-10-24')],
+              },
+              {
+                ...instance('conflict-moved-skip', '2026-10-31'),
+                conflicts: [conflictEvent('sports-moved-skip', '2026-10-31')],
+              },
+            ],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const firstPanel = card.getByTestId('routine-conflicts-conflict-skip');
+    const secondPanel = card.getByTestId('routine-conflicts-conflict-move');
+    await expect(firstPanel).toContainText('10/17（土）は『運動会』 17:00–18:00と重なっています');
+    await expect(secondPanel).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await expectVisibleTargetsAtLeast44px(page);
+    await page.setViewportSize({ width: 445, height: 844 });
+    await expectNoHorizontalOverflow(page);
+    await expectVisibleTargetsAtLeast44px(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const beforeSkipRefetch = api.listCalls;
+    await firstPanel.getByTestId('routine-conflict-skip-conflict-skip').click();
+    await expect(firstPanel).toHaveCount(0);
+    await expect.poll(() => api.listCalls).toBeGreaterThan(beforeSkipRefetch);
+    expect(api.instanceMutations[0]).toMatchObject({ action: 'skip', instanceId: 'conflict-skip' });
+
+    const moveButton = secondPanel.getByTestId('routine-conflict-move-conflict-move');
+    await moveButton.click();
+    const actions = card.getByTestId('routine-instance-actions-conflict-move');
+    await actions.getByTestId('routine-instance-move-date').fill('2026-10-24');
+    await actions.getByTestId('routine-instance-move-start').fill('17:15');
+    await actions.getByTestId('routine-instance-move-end').fill('18:15');
+    const beforeOverlapRefetch = api.listCalls;
+    await actions.getByTestId('routine-instance-move-save').click();
+    await expect(secondPanel).toBeVisible();
+    await expect.poll(() => api.listCalls).toBeGreaterThan(beforeOverlapRefetch);
+
+    await secondPanel.getByTestId('routine-conflict-move-conflict-move').click();
+    const moveActions = card.getByTestId('routine-instance-actions-conflict-move');
+    await moveActions.getByTestId('routine-instance-move-date').fill('2026-10-24');
+    await moveActions.getByTestId('routine-instance-move-start').fill('19:00');
+    await moveActions.getByTestId('routine-instance-move-end').fill('20:00');
+    const beforeResolvedRefetch = api.listCalls;
+    await moveActions.getByTestId('routine-instance-move-save').click();
+    await expect(secondPanel).toHaveCount(0);
+    await expect.poll(() => api.listCalls).toBeGreaterThan(beforeResolvedRefetch);
+    expect(api.instanceMutations.at(-1)).toMatchObject({
+      action: 'move',
+      instanceId: 'conflict-move',
+    });
+
+    const movedSkipPanel = card.getByTestId('routine-conflicts-conflict-moved-skip');
+    await movedSkipPanel.getByTestId('routine-conflict-move-conflict-moved-skip').click();
+    const movedActions = card.getByTestId('routine-instance-actions-conflict-moved-skip');
+    await movedActions.getByTestId('routine-instance-move-date').fill('2026-10-31');
+    await movedActions.getByTestId('routine-instance-move-start').fill('17:15');
+    await movedActions.getByTestId('routine-instance-move-end').fill('18:15');
+    await movedActions.getByTestId('routine-instance-move-save').click();
+    await expect(movedSkipPanel).toBeVisible();
+    const movedSkipButton = movedSkipPanel.getByTestId('routine-conflict-skip-conflict-moved-skip');
+    await expect(movedSkipButton).toBeVisible();
+    await movedSkipButton.click();
+    await expect(movedSkipPanel).toHaveCount(0);
+    expect(api.instanceMutations.at(-1)).toMatchObject({
+      action: 'skip',
+      instanceId: 'conflict-moved-skip',
+    });
+  });
+
   test('keeps move save and cancel readable while saving', async ({ page }) => {
     const api = await mockRoutineApis(page, {
       holdInstanceMutation: true,
@@ -732,6 +886,7 @@ test.describe('Task 3-1: recurring routines', () => {
           title: 'ピアノ',
           upcoming: {
             status: 'ready',
+            conflictsStatus: 'ready',
             instances: [instance('instance-move-colors', '2026-10-13')],
           },
         }),
@@ -767,16 +922,59 @@ test.describe('Task 3-1: recurring routines', () => {
     const unavailable = routine({
       id: 'routine-unavailable',
       title: '水泳',
-      upcoming: { status: 'unavailable', instances: [] },
+      upcoming: { status: 'unavailable', conflictsStatus: 'unavailable', instances: [] },
     });
     const api = await mockRoutineApis(page, {
       routines: [
         routine({
           id: 'routine-error',
           title: 'ピアノ',
-          upcoming: { status: 'ready', instances: [instance('instance-error', '2026-10-13')] },
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [
+              {
+                ...instance('instance-error', '2026-10-13'),
+                conflicts: [
+                  {
+                    id: 'event-error-conflict',
+                    title: '運動会',
+                    time: {
+                      kind: 'timed',
+                      start: '2026-10-13T17:00:00+09:00',
+                      endExclusive: '2026-10-13T18:00:00+09:00',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
         }),
         unavailable,
+        routine({
+          id: 'routine-conflicts-unavailable',
+          title: '合唱',
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'unavailable',
+            instances: [
+              {
+                ...instance('unknown-conflict-instance', '2026-10-13'),
+                conflicts: [
+                  {
+                    id: 'unknown-conflict-event',
+                    title: '見えない予定',
+                    time: {
+                      kind: 'timed',
+                      start: '2026-10-13T17:00:00+09:00',
+                      endExclusive: '2026-10-13T18:00:00+09:00',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
       ],
       failNextInstanceMutation: true,
     });
@@ -784,9 +982,9 @@ test.describe('Task 3-1: recurring routines', () => {
     const errorCard = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
     const chip = errorCard.getByTestId('routine-instance-chip-instance-error');
     await expect(chip).toContainText('10/13');
-    await chip.click();
+    await expect(errorCard.getByTestId('routine-conflicts-instance-error')).toBeVisible();
+    await errorCard.getByTestId('routine-conflict-skip-instance-error').click();
     const actions = errorCard.getByTestId('routine-instance-actions-instance-error');
-    await actions.getByTestId('routine-instance-skip').click();
     await expect(actions.getByRole('alert')).toHaveText(
       '変更を保存できませんでした。時間をおいて再度お試しください。',
     );
@@ -801,6 +999,14 @@ test.describe('Task 3-1: recurring routines', () => {
     await retry.click();
     await expect(retry).toBeVisible();
     await expect.poll(() => api.listCalls).toBeGreaterThan(callsBeforeRetry);
+    const unknownCard = page.getByTestId('routine-card').filter({ hasText: '合唱' });
+    await expect(unknownCard).toContainText('重複を確認できませんでした。');
+    await expect(
+      unknownCard.getByTestId('routine-instance-chip-unknown-conflict-instance'),
+    ).not.toContainText('重複');
+    await expect(
+      unknownCard.getByTestId('routine-conflicts-unknown-conflict-instance'),
+    ).toHaveCount(0);
   });
 
   test('saves holiday settings and continues 20-item batches while locking the routine card', async ({
@@ -811,7 +1017,11 @@ test.describe('Task 3-1: recurring routines', () => {
         routine({
           id: 'routine-holidays',
           title: 'ピアノ',
-          upcoming: { status: 'ready', instances: [instance('holiday-instance', '2026-10-13')] },
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [instance('holiday-instance', '2026-10-13')],
+          },
         }),
       ],
     });
@@ -838,7 +1048,11 @@ test.describe('Task 3-1: recurring routines', () => {
             title: 'ピアノ',
             skipHolidays: body.skipHolidays,
             skipNewYear: body.skipNewYear,
-            upcoming: { status: 'ready', instances: [instance('holiday-instance', '2026-10-13')] },
+            upcoming: {
+              status: 'ready',
+              conflictsStatus: 'ready',
+              instances: [instance('holiday-instance', '2026-10-13')],
+            },
           }),
         ]);
         await route.fulfill(jsonResponse(200, { ...body, hasMore: !body.skipNewYear }));
@@ -1064,6 +1278,7 @@ test.describe('Task 3-1: recurring routines', () => {
           autoSkipDue: true,
           upcoming: {
             status: 'ready',
+            conflictsStatus: 'ready',
             instances: [
               instance(
                 'instance-holiday',

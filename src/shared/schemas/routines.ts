@@ -1,6 +1,7 @@
 import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { z } from 'zod';
 import { dateKeySchema, isoInstantStringSchema } from './date';
+import { weekEventTimeSchema } from './week';
 
 export const weekdayCodeSchema = z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']);
 export type WeekdayCode = z.infer<typeof weekdayCodeSchema>;
@@ -12,7 +13,7 @@ const clockTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 export const routineInstanceStatusSchema = z.enum(['normal', 'skipped', 'moved']);
 export type RoutineInstanceStatus = z.infer<typeof routineInstanceStatusSchema>;
 export const routineAutoSkipReasonSchema = z.enum(['holiday', 'new_year']).nullable();
-export const routineInstanceSchema = z
+const routineInstanceBaseSchema = z
   .object({
     id: z.string().min(1),
     originalStart: isoInstantStringSchema,
@@ -22,73 +23,93 @@ export const routineInstanceSchema = z
     status: routineInstanceStatusSchema,
     autoSkipReason: routineAutoSkipReasonSchema,
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    const timestamps = [value.originalStart, value.originalEnd, value.start, value.end].filter(
-      (timestamp): timestamp is string => timestamp !== null,
-    );
-    if (timestamps.some((timestamp) => !isoInstantStringSchema.safeParse(timestamp).success))
-      return;
-    if (
-      parseIsoInstantMilliseconds(value.originalStart) >=
-      parseIsoInstantMilliseconds(value.originalEnd)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['originalEnd'],
-        message: 'End must follow start',
-      });
-    }
-    if (value.status === 'skipped') {
-      if (value.start !== null || value.end !== null) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['start'],
-          message: 'Skipped instances have no actual times',
-        });
-      }
-      return;
-    }
-    if (value.start === null || value.end === null) {
+  .strict();
+
+function refineRoutineInstance(
+  value: z.infer<typeof routineInstanceBaseSchema>,
+  ctx: z.RefinementCtx,
+): void {
+  const timestamps = [value.originalStart, value.originalEnd, value.start, value.end].filter(
+    (timestamp): timestamp is string => timestamp !== null,
+  );
+  if (timestamps.some((timestamp) => !isoInstantStringSchema.safeParse(timestamp).success)) return;
+  if (
+    parseIsoInstantMilliseconds(value.originalStart) >=
+    parseIsoInstantMilliseconds(value.originalEnd)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['originalEnd'],
+      message: 'End must follow start',
+    });
+  }
+  if (value.status === 'skipped') {
+    if (value.start !== null || value.end !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['start'],
-        message: 'Active instances need actual times',
-      });
-      return;
-    }
-    const originalStart = parseIsoInstantMilliseconds(value.originalStart);
-    const originalEnd = parseIsoInstantMilliseconds(value.originalEnd);
-    const start = parseIsoInstantMilliseconds(value.start);
-    const end = parseIsoInstantMilliseconds(value.end);
-    if (start >= end) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['end'],
-        message: 'End must follow start',
+        message: 'Skipped instances have no actual times',
       });
     }
-    if (value.status === 'normal' && (start !== originalStart || end !== originalEnd)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['status'],
-        message: 'Normal instances keep original times',
-      });
-    }
-    if (value.status === 'moved' && start === originalStart && end === originalEnd) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['status'],
-        message: 'Moved instances change their times',
-      });
-    }
-  });
+    return;
+  }
+  if (value.start === null || value.end === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['start'],
+      message: 'Active instances need actual times',
+    });
+    return;
+  }
+  const originalStart = parseIsoInstantMilliseconds(value.originalStart);
+  const originalEnd = parseIsoInstantMilliseconds(value.originalEnd);
+  const start = parseIsoInstantMilliseconds(value.start);
+  const end = parseIsoInstantMilliseconds(value.end);
+  if (start >= end) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['end'],
+      message: 'End must follow start',
+    });
+  }
+  if (value.status === 'normal' && (start !== originalStart || end !== originalEnd)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['status'],
+      message: 'Normal instances keep original times',
+    });
+  }
+  if (value.status === 'moved' && start === originalStart && end === originalEnd) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['status'],
+      message: 'Moved instances change their times',
+    });
+  }
+}
+
+export const routineInstanceSchema = routineInstanceBaseSchema.superRefine(refineRoutineInstance);
 export type RoutineInstance = z.infer<typeof routineInstanceSchema>;
+
+export const routineConflictEventSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string(),
+    time: weekEventTimeSchema,
+  })
+  .strict();
+export type RoutineConflictEvent = z.infer<typeof routineConflictEventSchema>;
+
+export const routineUpcomingInstanceSchema = routineInstanceBaseSchema
+  .extend({ conflicts: z.array(routineConflictEventSchema) })
+  .superRefine(refineRoutineInstance);
+export type RoutineUpcomingInstance = z.infer<typeof routineUpcomingInstanceSchema>;
 
 export const routineUpcomingSchema = z
   .object({
     status: z.enum(['ready', 'unavailable']),
-    instances: z.array(routineInstanceSchema).max(4),
+    conflictsStatus: z.enum(['ready', 'unavailable']),
+    instances: z.array(routineUpcomingInstanceSchema).max(4),
   })
   .strict();
 export type RoutineUpcoming = z.infer<typeof routineUpcomingSchema>;
