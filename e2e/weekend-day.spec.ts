@@ -1594,7 +1594,9 @@ test.describe('Task 2-6: weekend day detail', () => {
     await page.getByTestId('weekend-day-add').click();
     const dialog = page.getByTestId('event-dialog');
     await expect(dialog.getByLabel('開始日')).toHaveValue(SATURDAY);
-    await expect(dialog.getByLabel('開始時刻')).toHaveValue('13:00');
+    await expect(dialog.getByLabel('開始時刻')).toHaveValue('10:00');
+    await expect(dialog.getByLabel('終了日')).toHaveValue(SATURDAY);
+    await expect(dialog.getByLabel('終了時刻')).toHaveValue('11:00');
     await dialog.getByLabel('タイトル').fill('API失敗中の予定');
     await dialog.getByRole('button', { name: '保存', exact: true }).click();
     await expect(dialog).toHaveCount(0);
