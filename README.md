@@ -46,6 +46,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/18-personal-events.md](docs/18-personal-events.md) | 本人だけに表示する個人予定 API・段階的認可・プライバシー保証 |
 | [docs/19-busy-sharing.md](docs/19-busy-sharing.md) | free/busy 用カレンダー選択、家族 busy 週 API・プライバシー保証・staging 手順 |
 | [docs/20-routines.md](docs/20-routines.md) | 繰り返し予定と個別の回の作成・一覧・変更 API、Google Calendar との対応、再試行、staging 手順 |
+| [docs/21-tasks.md](docs/21-tasks.md) | やること API、持ち物からの自動生成、予定との同期、staging 手順 |
 
 ## 前提条件
 
@@ -147,3 +148,5 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 3-2（回ごとの休み・振替）**: `/routines` に元の予定日順の直近4回を表示し、回ごとの休み・振替と取消しを行います。週ビューと S2 から繰り返しタブへ案内します。API・staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。ローカル E2E は API モックと合成データを使い、実 Google アカウントでの staging 確認は人間による実施待ちです。
   - **タスク 3-3（祝日・年末年始の自動スキップ）**: S4 の設定から本人の Google トークンで今後183日分を適用し、画面利用時に範囲を補完します。Cron は使わず、休園日は対象外です。API・保存仕様・staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。自動テストの結果は PR の検証記録を参照してください。実 Google アカウントによる staging 確認は人間による実施待ちです。
   - **タスク 3-4（繰り返し回と単発予定の重複）**: 実装中です。`shared/domain/conflicts` で時刻指定の繰り返し回と確定済み単発家族予定を比較し、S4 に解決パネル、S1 に両予定の重複印を表示します。確認範囲・staging 手順は [docs/20-routines.md](docs/20-routines.md)。staging の実 Google カレンダー確認は人間による実施待ちです。
+- Phase 5：やること：
+  - **タスク 5-1（tasks API と持ち物からの自動生成）**: 実装済み（自動テスト済み、staging 確認待ち）。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。S5 画面と週ビュー連携は後続タスクです。

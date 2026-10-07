@@ -17,6 +17,7 @@ import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
 import { eventMeta, families, members } from '@worker/db/schema';
+import { detachTasksFromEventMeta, reconcileItemsTask } from '@worker/db/tasks';
 import type { WorkerEnv } from '@worker/env';
 import {
   GoogleCalendarError,
@@ -301,6 +302,25 @@ eventsRoute.post('/:id/events', async (c) => {
     } catch {
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }
+    try {
+      const [metadata] = await access.db
+        .select({ id: eventMeta.id })
+        .from(eventMeta)
+        .where(
+          and(
+            eq(eventMeta.familyId, access.family.id),
+            eq(eventMeta.calendarId, access.calendarId),
+            eq(eventMeta.eventId, event.id),
+          ),
+        );
+      if (metadata)
+        await reconcileItemsTask(access.db, {
+          familyId: access.family.id,
+          eventMetaId: metadata.id,
+        });
+    } catch {
+      // The next successful save reconciles automatic tasks from persisted event metadata.
+    }
     return c.json(eventMutationResponseSchema.parse({ eventId: event.id }), 200);
   } catch (err) {
     return err instanceof GoogleCalendarError
@@ -362,6 +382,25 @@ eventsRoute.patch('/:id/events/:eventId', async (c) => {
     } catch {
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }
+    try {
+      const [metadata] = await access.db
+        .select({ id: eventMeta.id })
+        .from(eventMeta)
+        .where(
+          and(
+            eq(eventMeta.familyId, access.family.id),
+            eq(eventMeta.calendarId, access.calendarId),
+            eq(eventMeta.eventId, updated.id),
+          ),
+        );
+      if (metadata)
+        await reconcileItemsTask(access.db, {
+          familyId: access.family.id,
+          eventMetaId: metadata.id,
+        });
+    } catch {
+      // The next successful save reconciles automatic tasks from persisted event metadata.
+    }
     return c.json(eventMutationResponseSchema.parse({ eventId: updated.id }), 200);
   } catch (err) {
     return err instanceof GoogleCalendarError
@@ -390,15 +429,11 @@ eventsRoute.delete('/:id/events/:eventId', async (c) => {
       if (!isGoogleMissing(err)) return responseForGoogleFailure(c, err);
     }
     try {
-      await access.db
-        .delete(eventMeta)
-        .where(
-          and(
-            eq(eventMeta.familyId, access.family.id),
-            eq(eventMeta.calendarId, access.calendarId),
-            eq(eventMeta.eventId, eventId),
-          ),
-        );
+      await detachTasksFromEventMeta(access.db, {
+        familyId: access.family.id,
+        calendarId: access.calendarId,
+        eventId,
+      });
     } catch {
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }

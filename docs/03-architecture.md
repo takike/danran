@@ -149,9 +149,10 @@ attachments      id, family_id, r2_key, content_type, width, height, created_by,
 event_attachments event_meta_id, attachment_id
 import_jobs      id, family_id, attachment_id, status(pending|extracted|failed|committed),
                  extracted_json, error, model, created_by, created_at
-tasks            id, family_id, title, due_at NULL, due_kind(date|datetime|none), done_at NULL,
-                 assignee_member_id NULL, event_meta_id NULL, source(import|items|conflict|manual),
-                 source_ref NULL, created_at
+tasks            id, family_id FK families CASCADE, title, due_at NULL, due_kind(date|datetime|none),
+                 done_at NULL (epoch seconds), assignee_member_id NULL FK members SET NULL,
+                 event_meta_id NULL FK event_meta SET NULL, source(import|items|conflict|manual),
+                 source_ref NULL, created_at, updated_at (epoch seconds)
 mirrored_blocks  id, member_id, personal_calendar_id, event_id, start, end   -- 二重表示の差し引き用
 publish_rules    id, member_id, kind(multi_day|all_day|calendar|hashtag|title_keyword),
                  value NULL, visibility(title|details), enabled
@@ -288,11 +289,15 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 | 発生元 | 生成ルール | 期限の既定 |
 |---|---|---|
 | 締切（取り込み） | 締切1件 → TODO 1件 | 締切日 |
-| 持ち物 | 予定1件につき「〈持ち物〉を準備」1件（まとめる） | 前日 20:00 |
+| 持ち物 | 持ち物が1つ以上ある予定につき「持ち物を準備」1件。0件なら削除 | 開始日の前日 20:00 JST（イベントの現在時刻から算出し、D1 には保存しない） |
 | 重複 | 「〈習い事〉に欠席を連絡」 | 重複する回の前日 |
 | 手動 | — | 任意 |
 
 担当は未設定で作り、画面で割り当てる。
+
+持ち物タスクは `(event_meta_id, source)` の部分一意インデックスで予定ごとに1件に制限する。手動タスクの再送キーは家族・作成ユーザー・`clientRequestId` から決定し、`source_ref` に保存する。予定のタイトルと日時は D1 に保存しない。持ち物タスクは固定タイトルだけを保存し、一覧取得時に Google Calendar から予定情報をまとめて取得する。自動期限は取得したイベント開始日から計算し、Google 取得が失敗した場合は `unknown` として返す。
+
+`GET /api/families/:id/tasks` は未完了タスクと完了後14日以内のタスクを返す。完了時刻は epoch seconds。予定削除では持ち物タスクを消し、手動タスクは予定との紐づけを外して残す。詳細な API 契約と失敗時の扱いは [21-tasks.md](21-tasks.md) を参照。
 
 ## 公開ルールと週1まとめ（Phase 5）
 

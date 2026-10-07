@@ -287,6 +287,48 @@ export const eventMeta = sqliteTable(
 export type EventMetaRecord = typeof eventMeta.$inferSelect;
 export type NewEventMetaRecord = typeof eventMeta.$inferInsert;
 
+/** A family task, either manually created or derived from a family's event metadata. */
+export const tasks = sqliteTable(
+  'tasks',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id')
+      .notNull()
+      .references(() => families.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    dueAt: text('due_at'),
+    dueKind: text('due_kind', { enum: ['date', 'datetime', 'none'] }).notNull(),
+    doneAt: integer('done_at', { mode: 'number' }),
+    assigneeMemberId: text('assignee_member_id').references(() => members.id, {
+      onDelete: 'set null',
+    }),
+    eventMetaId: text('event_meta_id').references(() => eventMeta.id, { onDelete: 'set null' }),
+    source: text('source', { enum: ['import', 'items', 'conflict', 'manual'] }).notNull(),
+    sourceRef: text('source_ref'),
+    createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('tasks_family_id_done_at_idx').on(table.familyId, table.doneAt),
+    index('tasks_event_meta_id_idx').on(table.eventMetaId),
+    uniqueIndex('tasks_items_event_meta_unique')
+      .on(table.eventMetaId, table.source)
+      .where(sql`source = 'items'`),
+    uniqueIndex('tasks_manual_source_ref_unique')
+      .on(table.familyId, table.sourceRef)
+      .where(sql`source = 'manual' AND source_ref IS NOT NULL`),
+    check('tasks_due_kind_check', sql`due_kind IN ('date', 'datetime', 'none')`),
+    check('tasks_source_check', sql`source IN ('import', 'items', 'conflict', 'manual')`),
+    check(
+      'tasks_due_value_check',
+      sql`(due_kind = 'none' AND due_at IS NULL) OR (due_kind IN ('date', 'datetime') AND due_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export type TaskRecord = typeof tasks.$inferSelect;
+export type NewTaskRecord = typeof tasks.$inferInsert;
+
 /** App-specific settings keyed to a recurring master event on a family calendar. */
 export const routineSettings = sqliteTable(
   'routine_settings',
