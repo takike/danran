@@ -31,8 +31,8 @@
 | 14 | [3-2-routine-instances.md](3-2-routine-instances.md) | 繰り返し予定の直近の回、「この回を休む」、「振替」 | 完了（PR #28。[3-2-review-fixes.md](3-2-review-fixes.md) 反映済み） |
 | 15 | [3-2-followup-move-save-button.md](3-2-followup-move-save-button.md) | 振替の「保存」ボタンが空白に見える問題の修正（実機確認の指摘） | 完了（PR #29） |
 | 16 | [3-5-routine-exceptions.md](3-5-routine-exceptions.md) | 振替した回を、週ビューで「いつもと違う日」として扱う（3-3 より先に実施） | 完了（PR #30） |
-| 17 | [s1-compact-unusual-day-card.md](s1-compact-unusual-day-card.md) | 週ビューの「いつもと違う日」のカードを小さくし、「＋」をカードの外に出す（実機確認の指摘） | 完了（PR #31）。実機確認待ち |
-| 18 | [3-3-routine-holiday-skips.md](3-3-routine-holiday-skips.md) | 祝日・年末年始に当たる回を、自動でお休みにする（Cron なし。休園日は別のタスク） | 完了（PR #32）。実機確認待ち |
+| 17 | [s1-compact-unusual-day-card.md](s1-compact-unusual-day-card.md) | 週ビューの「いつもと違う日」のカードを小さくし、「＋」をカードの外に出す（実機確認の指摘） | 完了（PR #31） |
+| 18 | [3-3-routine-holiday-skips.md](3-3-routine-holiday-skips.md) | 祝日・年末年始に当たる回を、自動でお休みにする（Cron なし。休園日は別のタスク） | 完了（PR #32） |
 | 19 | [3-4-routine-conflicts.md](3-4-routine-conflicts.md) | 繰り返し予定と単発の予定の重複を知らせる（「繰り返し」の解決パネル、週ビューの印） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
