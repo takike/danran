@@ -36,6 +36,7 @@
 | 19 | [3-4-routine-conflicts.md](3-4-routine-conflicts.md) | 繰り返し予定と単発の予定の重複を知らせる（「繰り返し」の解決パネル、週ビューの印） | 完了（PR #33） |
 | 20 | [fix-new-event-default-date.md](fix-new-event-default-date.md) | 23 時以降に「＋」から予定を追加すると、日付が翌日になる問題の修正（実機確認の指摘） | 完了（PR #34）。実機確認待ち |
 | 21 | [perf-routines-responsiveness.md](perf-routines-responsiveness.md) | 「繰り返し」の画面の待ち時間と、操作後のちらつきを減らす（実機確認の指摘） | 完了（PR #35）。実機確認待ち |
-| 22 | [5-1-tasks-api.md](5-1-tasks-api.md) | やること（tasks）の API と、持ち物からの自動生成（画面は次の 5-2） | 未着手 |
+| 22 | [5-1-tasks-api.md](5-1-tasks-api.md) | やること（tasks）の API と、持ち物からの自動生成（画面は次の 5-2） | 完了（PR #36） |
+| 23 | [5-2-tasks-screen.md](5-2-tasks-screen.md) | S5「やること」の画面（予定ごと・期限順・自分の担当、完了、担当、手動の追加） | 未着手 |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
