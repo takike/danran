@@ -128,6 +128,13 @@ export function addCalendarDays(dateKey: DateKey, days: number): DateKey {
   return formatTZDateToDateKey(shifted);
 }
 
+/** Returns the signed number of Tokyo calendar days from `earlier` to `later`. */
+export function differenceInCalendarDays(later: DateKey, earlier: DateKey): number {
+  const laterTime = toTokyoTZDate(later).getTime();
+  const earlierTime = toTokyoTZDate(earlier).getTime();
+  return Math.round((laterTime - earlierTime) / (24 * 60 * 60 * 1000));
+}
+
 /**
  * Pure calendar week arithmetic in Asia/Tokyo, returning a new DateKey.
  * Rejects non-integer or unsafe increments.

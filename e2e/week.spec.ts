@@ -570,7 +570,7 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('22:00–10/11 00:00')).toBeVisible();
     await expect(navigation.getByRole('link', { name: /やること/ })).toBeVisible();
     const preparingCaptions = navigation.getByText('準備中', { exact: true });
-    await expect(preparingCaptions).toHaveCount(2);
+    await expect(preparingCaptions).toHaveCount(1);
     for (const caption of await preparingCaptions.all()) {
       const box = await caption.boundingBox();
       expect(box).not.toBeNull();
@@ -1009,6 +1009,13 @@ test.describe('Task 1-7: S1 week view', () => {
     page,
   }) => {
     await mockWeekApis(page);
+    await page.route('**/api/families/*/tasks', async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ tasks: [] }),
+      }),
+    );
     await page.route('**/api/families/fam_synthetic/routines', async (route) =>
       route.fulfill({
         status: 200,
@@ -1032,8 +1039,8 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('朝の支度')).toBeVisible();
     await navigation.getByRole('link', { name: /やること/ }).click();
     await expect(page).toHaveURL(/\/tasks$/);
-    await expect(page.getByRole('heading', { name: 'やること' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'やること', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole('button', { name: 'プリントを撮影' }).click();

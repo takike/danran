@@ -1,5 +1,5 @@
 import type { DateKey } from '@shared/schemas/date';
-import { getMondayAnchor, getWeekRange } from '@shared/time/week';
+import { getCalendarWeekBounds, getMondayAnchor, getWeekRange } from '@shared/time/week';
 import { describe, expect, it } from 'vitest';
 
 describe('src/shared/time/week', () => {
@@ -72,6 +72,16 @@ describe('src/shared/time/week', () => {
       expect(range.days).toHaveLength(7);
       expect(range.prevWeekStart).toBe('2026-12-21');
       expect(range.nextWeekStart).toBe('2027-01-04');
+    });
+  });
+
+  describe('getCalendarWeekBounds', () => {
+    it('keeps the standard Monday-to-Sunday week without holiday extension', () => {
+      expect(getCalendarWeekBounds('2026-10-05' as DateKey)).toEqual({
+        start: '2026-10-05',
+        endInclusive: '2026-10-11',
+        endExclusive: '2026-10-12',
+      });
     });
   });
 });

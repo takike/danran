@@ -27,6 +27,7 @@ export default defineConfig({
         '**/week-busy.spec.ts',
         '**/weekend-day.spec.ts',
         '**/routines.spec.ts',
+        '**/tasks.spec.ts',
       ],
       use: {
         ...devices['Desktop Chrome'],

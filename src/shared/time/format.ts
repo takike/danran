@@ -17,7 +17,7 @@ function formatMonth(date: DateKey): string {
   return `${year}年${month}月`;
 }
 
-function formatShortDate(date: DateKey): string {
+export function formatShortDate(date: DateKey): string {
   const { month, day } = dateParts(date);
   return `${month}/${day}`;
 }

@@ -56,11 +56,6 @@ export function TabBar({
           size={20}
         />
         <span>{item.label}</span>
-        {showPreparingLabels && item.id === 'tasks' && (
-          <span className="text-[length:var(--nav-caption-size)] leading-tight text-muted">
-            準備中
-          </span>
-        )}
       </Link>
     );
   };

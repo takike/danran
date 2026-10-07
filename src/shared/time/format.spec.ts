@@ -4,6 +4,7 @@ import {
   formatEventTime,
   formatFullDateLabel,
   formatMonthHeading,
+  formatShortDate,
   formatWeekPeriod,
   formatWeekday,
 } from './format';
@@ -21,6 +22,7 @@ describe('week presentation date formatting', () => {
 
   it('uses the calendar date key for day and weekday labels', () => {
     expect(formatDayNumber('2026-10-05')).toBe('5');
+    expect(formatShortDate('2026-10-05')).toBe('10/5');
     expect(formatWeekday('2026-10-05')).toBe('月');
     expect(formatFullDateLabel('2026-10-05')).toBe('2026年10月5日 月曜日');
   });
