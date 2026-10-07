@@ -118,6 +118,10 @@ function isGoogleMissing(err: unknown): boolean {
   );
 }
 
+function isGoogleRequestBudgetExceeded(err: unknown): boolean {
+  return err instanceof GoogleCalendarError && err.budgetExceeded;
+}
+
 function encodeBase32Hex(data: Uint8Array): string {
   const alphabet = '0123456789abcdefghijklmnopqrstuv';
   let result = '';
@@ -615,7 +619,9 @@ async function mutateRoutineInstance(c: RouteContext, action: InstanceMutation):
       )
   )[0];
   if (!row) return errorResponse(c, 404, 'NOT_FOUND');
-  const client = createGoogleCalendarClient(c.env, access.session.user.id);
+  const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+    reuseAccessToken: true,
+  });
   let instance: GoogleEvent;
   let master: GoogleEvent;
   try {
@@ -1255,7 +1261,9 @@ routinesRoute.post('/:id/routines', async (c) => {
       access.session.user.id,
       input.clientRequestId,
     );
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+    });
     const privateProperties: Record<string, string> = {
       danran: '1',
       members: [...new Set(input.memberIds)].sort().join(','),
@@ -1370,7 +1378,10 @@ routinesRoute.get('/:id/routines', async (c) => {
       routineReasons.set(row.originalStart, row.reason);
       autoSkipReasonsByRoutine.set(row.routineSettingsId, routineReasons);
     }
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+      maxExternalRequests: 48,
+    });
     const results = await withConcurrency(rows, 4, async (row) => {
       try {
         const event = await client.events.get(access.calendarId, row.recurringEventId);
@@ -1434,6 +1445,30 @@ routinesRoute.get('/:id/routines', async (c) => {
               : { status: 'ready' as const, instances: [] },
         };
       } catch (err) {
+        if (isGoogleRequestBudgetExceeded(err)) {
+          return {
+            id: row.id,
+            title: null,
+            weekdays: [],
+            interval: null,
+            startDate: null,
+            endDate: null,
+            startTime: null,
+            endTime: null,
+            memberIds: [],
+            assigneeMemberId: null,
+            category: row.category,
+            affectsAvailability: row.affectsAvailability,
+            skipHolidays: row.skipHolidays,
+            skipNewYear: row.skipNewYear,
+            autoSkipDue: isRoutineAutoSkipDue(row),
+            status: 'unsupported' as const,
+            upcoming: {
+              status: 'unavailable' as const,
+              instances: [] as RoutineUpcomingInstance[],
+            },
+          };
+        }
         if (!isGoogleMissing(err)) throw err;
         return {
           id: row.id,
@@ -1643,7 +1678,9 @@ routinesRoute.delete('/:id/routines/:routineId', async (c) => {
         )
     )[0];
     if (!row) return errorResponse(c, 404, 'NOT_FOUND');
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+    });
     try {
       await client.events.delete(access.calendarId, row.recurringEventId, { sendUpdates: 'none' });
     } catch (err) {

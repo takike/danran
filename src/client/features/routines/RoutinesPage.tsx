@@ -46,6 +46,45 @@ const fieldClass =
   'mt-[var(--spacing-xs)] min-h-[var(--tap-target-min)] w-full rounded-[var(--radius-md)] border border-line bg-surface px-[var(--spacing-sm)] text-base text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
 type Member = NonNullable<ReturnType<typeof useFamiliesQuery>['data']>[number]['members'][number];
 
+function RoutineListPlaceholder(): React.ReactElement {
+  return (
+    <output aria-label="繰り返し予定を読み込み中" aria-live="polite" className="block">
+      <span className="sr-only">繰り返し予定を読み込み中...</span>
+      <ul
+        data-testid="routine-list-placeholder"
+        aria-hidden="true"
+        className="m-0 list-none space-y-[var(--spacing-sm)] p-0"
+      >
+        {[0, 1].map((item) => (
+          <li
+            key={item}
+            className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)]"
+          >
+            <div className="flex items-start justify-between gap-[var(--spacing-sm)]">
+              <div className="min-w-0 flex-1">
+                <div className="h-5 w-2/3 rounded-[var(--radius-sm)] bg-chip" />
+                <div className="mt-[var(--spacing-sm)] h-4 w-4/5 rounded-[var(--radius-sm)] bg-chip" />
+              </div>
+              <div className="h-6 w-16 shrink-0 rounded-[var(--radius-full)] bg-chip" />
+            </div>
+            <div className="mt-[var(--spacing-md)] flex gap-[var(--spacing-sm)]">
+              <div className="h-4 w-16 rounded-[var(--radius-sm)] bg-chip" />
+              <div className="h-4 w-20 rounded-[var(--radius-sm)] bg-chip" />
+            </div>
+            <div className="mt-[var(--spacing-md)] grid grid-cols-2 gap-[var(--spacing-xs)]">
+              <div className="h-[var(--tap-target-min)] w-24 rounded-[var(--radius-md)] bg-chip" />
+              <div className="h-[var(--tap-target-min)] w-24 rounded-[var(--radius-md)] bg-chip" />
+              <div className="h-[var(--tap-target-min)] w-24 rounded-[var(--radius-md)] bg-chip" />
+              <div className="h-[var(--tap-target-min)] w-24 rounded-[var(--radius-md)] bg-chip" />
+            </div>
+            <div className="mt-[var(--spacing-md)] h-[var(--tap-target-min)] rounded-[var(--radius-md)] bg-chip" />
+          </li>
+        ))}
+      </ul>
+    </output>
+  );
+}
+
 function RoutineDialog({
   familyId,
   userId,
@@ -579,6 +618,10 @@ export default function RoutinesPage(): React.ReactElement {
     staleTime: 0,
     retry: false,
   });
+  const routineAccessLost =
+    routinesQuery.error instanceof RoutineApiError &&
+    typeof routinesQuery.error.status === 'number' &&
+    [401, 403, 404].includes(routinesQuery.error.status);
   const [dialogEverOpened, setDialogEverOpened] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -977,7 +1020,7 @@ export default function RoutinesPage(): React.ReactElement {
             </>
           )}
         </section>
-      ) : routinesQuery.isError ? (
+      ) : routinesQuery.isError && (!routinesQuery.data || routineAccessLost) ? (
         <section
           role="alert"
           className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)]"
@@ -993,11 +1036,24 @@ export default function RoutinesPage(): React.ReactElement {
           </button>
         </section>
       ) : routinesQuery.isLoading ? (
-        <p aria-live="polite" className="text-sm text-muted">
-          繰り返し予定を読み込み中...
-        </p>
+        <RoutineListPlaceholder />
       ) : (routinesQuery.data?.routines.length ?? 0) === 0 ? (
         <section className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-lg)] text-center">
+          {routinesQuery.isError && !routineAccessLost && (
+            <div className="mb-[var(--spacing-md)]">
+              <output className="block text-sm text-muted">
+                最新の繰り返し予定を取得できませんでした。前回の表示を続けています。
+              </output>
+              <button
+                type="button"
+                onClick={() => void routinesQuery.refetch()}
+                className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
+              >
+                <RefreshCw size={16} aria-hidden="true" />
+                再試行
+              </button>
+            </div>
+          )}
           <div className="mx-auto mb-[var(--spacing-md)] flex h-[var(--icon-size-lg)] w-[var(--icon-size-lg)] items-center justify-center rounded-[var(--radius-full)] bg-chip text-muted">
             <Repeat size={24} aria-hidden="true" />
           </div>
@@ -1016,6 +1072,23 @@ export default function RoutinesPage(): React.ReactElement {
         </section>
       ) : (
         <ul data-testid="routine-list" className="m-0 list-none space-y-[var(--spacing-sm)] p-0">
+          {routinesQuery.isError && routinesQuery.data && !routineAccessLost && (
+            <li>
+              <div className="rounded-[var(--radius-md)] border border-line bg-surface p-[var(--spacing-sm)]">
+                <output className="block text-sm text-muted">
+                  最新の繰り返し予定を取得できませんでした。前回の表示を続けています。
+                </output>
+                <button
+                  type="button"
+                  onClick={() => void routinesQuery.refetch()}
+                  className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
+                >
+                  <RefreshCw size={16} aria-hidden="true" />
+                  再試行
+                </button>
+              </div>
+            </li>
+          )}
           {routinesQuery.data?.routines.map((routine) => {
             const memberById = new Map(family.members.map((member) => [member.id, member]));
             const selectedMembers = routine.memberIds
@@ -1037,7 +1110,9 @@ export default function RoutinesPage(): React.ReactElement {
                   })
                 : routine.status === 'missing'
                   ? 'Google カレンダーで見つかりません'
-                  : 'Google カレンダーで繰り返し設定を確認してください';
+                  : routine.upcoming.status === 'unavailable'
+                    ? '繰り返し予定の情報を取得できませんでした'
+                    : 'Google カレンダーで繰り返し設定を確認してください';
             return (
               <li
                 key={routine.id}
@@ -1191,12 +1266,27 @@ export default function RoutinesPage(): React.ReactElement {
                     Google カレンダーで見つかりません。予定を削除して登録し直してください。
                   </p>
                 )}
-                {routine.status === 'unsupported' && (
-                  <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-muted">
-                    この繰り返し設定は Danran で表示できません。Google
-                    カレンダー側で確認してください。
-                  </p>
-                )}
+                {routine.status === 'unsupported' &&
+                  (routine.upcoming.status === 'unavailable' ? (
+                    <div className="mt-[var(--spacing-sm)] rounded-[var(--radius-md)] bg-bg p-[var(--spacing-sm)]">
+                      <p className="m-0 text-sm text-muted">
+                        繰り返し予定の情報を取得できませんでした。
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void routinesQuery.refetch()}
+                        className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
+                      >
+                        <RefreshCw size={16} aria-hidden="true" />
+                        再試行
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-muted">
+                      この繰り返し設定は Danran で表示できません。Google
+                      カレンダー側で確認してください。
+                    </p>
+                  ))}
                 {deletingId === routine.id ? (
                   <div className="mt-[var(--spacing-md)] rounded-[var(--radius-md)] border border-line bg-bg p-[var(--spacing-sm)]">
                     <p className="m-0 text-sm">

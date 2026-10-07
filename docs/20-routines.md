@@ -17,7 +17,9 @@ Task 3-1 では、家族カレンダー上に毎週または隔週の繰り返�
 | `PATCH /api/families/:id/routines/:routineId/settings` | 祝日・年末年始の設定を保存して適用または復元 | `{ "skipHolidays": boolean, "skipNewYear": boolean, "hasMore": boolean }` |
 | `POST /api/families/:id/routines/:routineId/auto-skips/apply` | 現在の設定で適用範囲を補完 | `{ "skipHolidays": boolean, "skipNewYear": boolean, "hasMore": boolean }` |
 
-一覧の各 `ready` 項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。取得できないシリーズだけ `unavailable` となり、一覧全体の取得は続ける。`missing` / `unsupported` の項目は空の `ready` とする。Task 3-3 後は各項目に `skipHolidays`, `skipNewYear`, `autoSkipDue` を返し、各 upcoming instance が自動適用によってキャンセル中の場合にその理由 `autoSkipReason`（`holiday` / `new_year`）を含める。それ以外は `null`。`GET` は読み取り専用で、Google Calendar を変更しない。
+一覧の各項目は `upcoming: { status, instances }` を持つ。`status` は `ready` / `unavailable`、`instances` は次の回を最大4件含む。直近回の取得に失敗したシリーズだけ `unavailable` となり、一覧全体の取得は続ける。Google で削除を確認した `missing` と、取得済みの本体が対応外だった `unsupported` は空の `ready` とする。外部リクエスト上限に達して本体を読めなかった場合は、誤って `missing` とせず、`unsupported` と空の `unavailable` を組み合わせて取得不能を示す。Task 3-3 後は各項目に `skipHolidays`, `skipNewYear`, `autoSkipDue` を返し、各 upcoming instance が自動適用によってキャンセル中の場合にその理由 `autoSkipReason`（`holiday` / `new_year`）を含める。それ以外は `null`。`GET` は読み取り専用で、Google Calendar を変更しない。
+
+`/routines` の各 API リクエストでは、Google アクセストークンをリクエスト内のメモリだけで再利用する。保存やリクエスト間の共有はしない。`GET /api/families/:id/routines` の外部リクエスト予算は OAuth と Calendar REST の合計48回。直近4回が1ページで取れる典型的な10シリーズでは、トークン取得1回、master取得10回、instances取得10回、重複確認1回の計22回となる。重複確認が4ページまで必要な場合も計25回で、ページングや再試行の余裕を残す。シリーズ並列数4と一覧全体で1回の重複確認は維持する。上限到達時も一覧を返し、該当する直近回、本体または重複確認だけを取得不能として示す。
 
 Google [`events.instances`](https://developers.google.com/workspace/calendar/api/v3/reference/events/instances) の `timeMin` は実際の回の終了時刻を対象にするため、`timeMin=now` を使うと、元は今後の回でも過去へ振り替えたものが取得結果から外れる。このため Google からは JST の今日の31日前 00:00 から今日の120日後 00:00 までを取得する（`timeMax` の境界は含まない）。取得した回は元の開始日が今日以降のものに絞ってから、元の日時順に4件を選ぶ。繰り返し予定の RRULE は変更せず、Google の `orderBy` も使わない。取得範囲外、つまり今日の31日前より前に終了する回や、今日の120日後 00:00 以降に始まる回は候補に含まれない。このため、元の予定日が今日以降でも、過去へ大きく振り替えて実際の終了が範囲より前になった回は表示されない。各シリーズの取得は最大4ページ（1ページ最大250件）とし、シリーズの並列数は4件までに制限する。4ページ以内に取得が終わらない場合はそのシリーズだけ `unavailable` とし、部分的な結果を返さない。
 
@@ -92,7 +94,7 @@ S4 の回状態表示は Google の実際の日時・長さと元の日時・長
 
 ## 画面範囲
 
-`/routines` は一覧、追加フォーム、画面内の削除確認に加え、各カードに直近4回の日付チップを表示する。休みは取り消し線と「お休み」、振替は元の日付・時刻と振替先を示す。チップを押すとカード内に操作が開き、通常回は休止・振替、休みは復元・振替、振替は元に戻す・振替先変更を選べる。振替入力を開いている間は PWA 更新を保留する。操作中は同じカードの操作を無効にし、失敗時は固定の案内を表示して変更前の表示を保つ。週クエリを無効化し、週ビューと S2 のデータを再取得する。
+`/routines` は一覧、追加フォーム、画面内の削除確認に加え、各カードに直近4回の日付チップを表示する。初回取得中はカード形状のプレースホルダーを2件表示し、別タブから戻ったときは同じユーザー・家族のキャッシュをすぐ表示して裏で再取得する。休みは取り消し線と「お休み」、振替は元の日付・時刻と振替先を示す。チップを押すとカード内に操作が開き、通常回は休止・振替、休みは復元・振替、振替は元に戻す・振替先変更を選べる。振替入力を開いている間は PWA 更新を保留する。操作中は同じカードの操作を無効にし、成功応答で対象チップを即時更新してから、一覧を裏で再取得する。再取得中も既存の一覧・カード・チップを表示し続け、成功したら新しい一覧を反映する。一時的な再取得失敗ではキャッシュを保ち、固定の案内と再試行を表示する。401 / 403 / 404、認証セッション喪失、ユーザーまたは家族の切り替えでは以前の内容を隠す。週クエリを無効化し、週ビューと S2 のデータを再取得する。
 
 週ビューまたは S2 で繰り返し予定を選ぶと、「この予定は繰り返し予定です。休み・振替は『繰り返し』タブで設定できます。」と「繰り返し」タブへのリンクを表示する。シリーズ全体の変更は引き続き S4 から行う。
 

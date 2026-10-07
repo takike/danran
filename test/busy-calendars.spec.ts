@@ -268,6 +268,7 @@ describe('busy calendar selection APIs', () => {
     ]);
 
     const bGoogleRequestStart = googleRequests.length;
+    const bTokenRequestStart = refreshTokens.length;
     const bResponses = await Promise.all([
       request(`/api/families/${familyId}/busy-calendars`, cookieB),
       request(`/api/families/${familyId}/personal-calendars`, cookieB),
@@ -298,6 +299,7 @@ describe('busy calendar selection APIs', () => {
       .slice(bGoogleRequestStart)
       .filter(({ url }) => url.includes('/users/me/calendarList'));
     expect(bCalendarListRequests).toHaveLength(2);
+    expect(refreshTokens).toHaveLength(bTokenRequestStart + 3);
     expect(
       bCalendarListRequests.every(({ authorization }) => authorization === 'Bearer access-b'),
     ).toBe(true);
