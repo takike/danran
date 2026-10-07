@@ -34,6 +34,7 @@ interface MockOptions {
   delayBusyStart?: DateKey;
   malformedBusy?: boolean;
   longNames?: boolean;
+  conflictFixture?: boolean;
   unusualDay?: 'one-event' | 'two-events' | 'dense-event';
 }
 
@@ -88,6 +89,7 @@ function familyFixture(account: Account, longNames = false): FamilyPublic {
 function makeFamilyEvents(
   anchor: DateKey,
   unusualDay: MockOptions['unusualDay'] = 'two-events',
+  conflictFixture = false,
 ): WeekEvent[] {
   const saturday = addCalendarDays(anchor, 5);
   const wednesday = addCalendarDays(anchor, 2);
@@ -194,8 +196,8 @@ function makeFamilyEvents(
       title: unusualDay === 'dense-event' ? '単発予定' : '保護者会',
       time: {
         kind: 'timed',
-        start: `${wednesday}T18:30:00+09:00`,
-        endExclusive: `${wednesday}T19:00:00+09:00`,
+        start: `${wednesday}T${unusualDay === 'dense-event' || !conflictFixture ? '18:30' : '17:30'}:00+09:00`,
+        endExclusive: `${wednesday}T${unusualDay === 'dense-event' || !conflictFixture ? '19:00' : '18:00'}:00+09:00`,
       },
       memberIds: [CHILD],
       assigneeMemberId: null,
@@ -215,9 +217,10 @@ function makeWeek(
   anchor: DateKey,
   family: FamilyPublic,
   unusualDay?: MockOptions['unusualDay'],
+  conflictFixture = false,
 ): WeekResponse {
   const range = getWeekRange(anchor);
-  const events = makeFamilyEvents(range.start, unusualDay);
+  const events = makeFamilyEvents(range.start, unusualDay, conflictFixture);
   const days = range.days.map((date) => {
     const weekday = getWeekday(date);
     const isHoliday = date === '2026-10-12';
@@ -419,7 +422,7 @@ async function mockWeekApis(page: Page, options: MockOptions = {}): Promise<Mock
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(makeWeek(anchor, family, options.unusualDay)),
+      body: JSON.stringify(makeWeek(anchor, family, options.unusualDay, options.conflictFixture)),
     });
   });
   await page.route('**/api/families/*/events', async (route) => {
@@ -625,7 +628,8 @@ test.describe('Task 2-5: weekend busy timeline', () => {
   test('renders ready member and child busy bars, common windows, routine calculation and screenshot', async ({
     page,
   }) => {
-    await mockWeekApis(page);
+    const writeScreenshot = process.env.DANRAN_SCREENSHOTS === '1';
+    await mockWeekApis(page, { conflictFixture: writeScreenshot });
     await page.goto(`/?week=${BASE_WEEK}`);
 
     await expect(page.getByTestId(`busy-timeline-${SATURDAY}`)).toBeVisible();
@@ -653,6 +657,14 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     await expect(page.getByText('空き判定しない家事代行', { exact: true })).toBeVisible();
     await expect(page.getByText('家族の合成予定', { exact: true })).toBeVisible();
     await expect(page.getByText('本人だけの合成予定', { exact: true })).toBeVisible();
+    if (writeScreenshot) {
+      await expect(page.getByTestId('week-event-conflict-evt-weekday-exception')).toBeVisible();
+      await expect(page.getByTestId('week-event-conflict-evt-weekday-oneoff')).toBeVisible();
+      await expect(
+        page.getByRole('button', { name: '予定を編集: 水曜へ振替した習い事、重複' }),
+      ).toBeVisible();
+      await expect(page.getByRole('button', { name: '予定を編集: 保護者会、重複' })).toBeVisible();
+    }
 
     const commonReadout = page.getByTestId(`busy-common-readout-${SATURDAY}`);
     const commonBefore = await commonReadout.textContent();

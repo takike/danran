@@ -1,3 +1,4 @@
+import { type ConflictEvent, getRoutineConflicts } from '@shared/domain/conflicts';
 import {
   getRoutineAutoSkipCandidateReason,
   getRoutineAutoSkipHorizon,
@@ -15,6 +16,7 @@ import {
   type RoutineInput,
   type RoutineInstance,
   type RoutineMoveInput,
+  type RoutineUpcomingInstance,
   createRoutineInputSchema,
   routineAutoSkipResponseSchema,
   routineCreateResponseSchema,
@@ -68,6 +70,8 @@ type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 502 | 503 | 413;
 
 const INSTANCE_PAGE_SIZE = 250;
 const INSTANCE_PAGE_LIMIT = 4;
+const CONFLICT_PAGE_SIZE = 2500;
+const CONFLICT_PAGE_LIMIT = 4;
 const AUTO_SKIP_CHANGE_LIMIT = 20;
 
 const ERROR_TEXT: Record<ErrorCode, string> = {
@@ -386,6 +390,158 @@ async function listUpcomingInstances(
     return { status: 'ready', instances: topInstances };
   } catch {
     return { status: 'unavailable', instances: [] };
+  }
+}
+
+function conflictEventFromGoogle(
+  event: GoogleEvent,
+  activeMemberIds: ReadonlySet<string>,
+): ConflictEvent {
+  if (!event.start || !event.end) throw new TypeError('Calendar event is missing a time range');
+  const start = event.start;
+  const end = event.end;
+  let time: ConflictEvent['time'];
+  if (start.date && end.date) {
+    time = { kind: 'all-day', start: start.date, endExclusive: end.date };
+  } else if (start.dateTime && end.dateTime) {
+    time = {
+      kind: 'timed',
+      start: toTokyoIsoString(start.dateTime),
+      endExclusive: toTokyoIsoString(end.dateTime),
+    };
+  } else {
+    throw new TypeError('Calendar event has incompatible start and end values');
+  }
+
+  const properties = privateProperties(event);
+  const isDanranEvent = properties.danran === '1';
+  const rawMembers = isDanranEvent ? properties.members : undefined;
+  const memberIds =
+    typeof rawMembers === 'string'
+      ? [...new Set(rawMembers.split(',').filter((id) => activeMemberIds.has(id)))]
+      : [];
+  const rawAssignee = isDanranEvent ? properties.assignee : undefined;
+  const assigneeMemberId =
+    typeof rawAssignee === 'string' && activeMemberIds.has(rawAssignee) ? rawAssignee : null;
+  const rawStatus = isDanranEvent ? properties.status : undefined;
+  const status =
+    event.status === 'cancelled'
+      ? 'cancelled'
+      : rawStatus === 'confirmed' || rawStatus === 'tentative'
+        ? rawStatus
+        : event.status === 'tentative'
+          ? 'tentative'
+          : 'confirmed';
+
+  return {
+    id: event.id,
+    time,
+    memberIds,
+    assigneeMemberId,
+    status,
+    isRecurring: Boolean(event.recurringEventId || event.recurrence?.length),
+  };
+}
+
+async function addRoutineConflicts(
+  client: GoogleCalendarClient,
+  calendarId: string,
+  routines: Array<{
+    upcoming: { status: 'ready' | 'unavailable'; instances: RoutineUpcomingInstance[] };
+  }>,
+  activeMemberIds: readonly string[],
+): Promise<{
+  status: 'ready' | 'unavailable';
+  conflictsByInstance: Map<string, Map<string, RoutineUpcomingInstance['conflicts'][number]>>;
+}> {
+  const allInstances = routines.flatMap((routine) =>
+    routine.upcoming.instances.filter((instance) => instance.status !== 'skipped'),
+  );
+  if (routines.some((routine) => routine.upcoming.status !== 'ready')) {
+    return { status: 'unavailable', conflictsByInstance: new Map() };
+  }
+  if (allInstances.length === 0) return { status: 'ready', conflictsByInstance: new Map() };
+
+  try {
+    const starts = allInstances.map((instance) => toTokyoDateKey(instance.start ?? ''));
+    const ends = allInstances.map((instance) => instance.end ?? '');
+    const rangeStart = starts.sort()[0];
+    const lastEnd = ends.sort().at(-1);
+    if (!rangeStart || !lastEnd) throw new TypeError('Routine instance range is missing');
+    const lastEndDate = toTokyoDateKey(lastEnd);
+    const rangeEnd = /^\d{4}-\d{2}-\d{2}T00:00:00(?:\.000)?\+09:00$/.test(lastEnd)
+      ? lastEndDate
+      : addCalendarDays(lastEndDate, 1);
+    const timeMin = getDayBounds(rangeStart).startIso;
+    const timeMax = getDayBounds(rangeEnd).startIso;
+
+    const events: GoogleEvent[] = [];
+    const seenPageTokens = new Set<string>();
+    let pageToken: string | undefined;
+    for (let page = 0; page < CONFLICT_PAGE_LIMIT; page += 1) {
+      const result = await client.events.list(calendarId, {
+        singleEvents: true,
+        showDeleted: false,
+        orderBy: 'startTime',
+        maxResults: CONFLICT_PAGE_SIZE,
+        timeMin,
+        timeMax,
+        timeZone: 'Asia/Tokyo',
+        ...(pageToken ? { pageToken } : {}),
+      });
+      events.push(...result.items);
+      const nextToken = result.nextPageToken;
+      if (nextToken === undefined) break;
+      if (!nextToken.trim() || seenPageTokens.has(nextToken) || page === CONFLICT_PAGE_LIMIT - 1) {
+        return { status: 'unavailable', conflictsByInstance: new Map() };
+      }
+      seenPageTokens.add(nextToken);
+      pageToken = nextToken;
+    }
+
+    const selectedIds = new Set(allInstances.map((instance) => instance.id));
+    const foundSelectedIds = new Set<string>();
+    const activeSet = new Set(activeMemberIds);
+    const conflictEvents = events
+      .filter((event) => event.status !== 'cancelled')
+      .map((event) => {
+        if (selectedIds.has(event.id)) {
+          if (!event.recurringEventId)
+            throw new TypeError('Upcoming routine event is not recurring');
+          foundSelectedIds.add(event.id);
+        }
+        return conflictEventFromGoogle(event, activeSet);
+      })
+      .filter((event) => !event.isRecurring || selectedIds.has(event.id));
+    if (foundSelectedIds.size !== selectedIds.size) {
+      return { status: 'unavailable', conflictsByInstance: new Map() };
+    }
+
+    const conflictPairs = getRoutineConflicts(conflictEvents, activeMemberIds);
+    const eventsById = new Map(
+      events.filter((event) => event.status !== 'cancelled').map((event) => [event.id, event]),
+    );
+    const conflictsByInstance = new Map<
+      string,
+      Map<string, RoutineUpcomingInstance['conflicts'][number]>
+    >();
+    for (const pair of conflictPairs) {
+      if (!selectedIds.has(pair.routineInstanceId)) continue;
+      const event = eventsById.get(pair.eventId);
+      if (!event?.start || !event.end) throw new TypeError('Conflicting event time is missing');
+      const details = conflictEventFromGoogle(event, activeSet);
+      const conflict = {
+        id: event.id,
+        title: event.summary?.trim() || '（無題）',
+        time: details.time,
+      };
+      const instanceConflicts = conflictsByInstance.get(pair.routineInstanceId) ?? new Map();
+      instanceConflicts.set(event.id, conflict);
+      conflictsByInstance.set(pair.routineInstanceId, instanceConflicts);
+    }
+    return { status: 'ready', conflictsByInstance };
+  } catch {
+    return { status: 'unavailable', conflictsByInstance: new Map() };
   }
 }
 
@@ -1236,7 +1392,7 @@ routinesRoute.get('/:id/routines', async (c) => {
             skipNewYear: row.skipNewYear,
             autoSkipDue: isRoutineAutoSkipDue(row),
             status: 'missing' as const,
-            upcoming: { status: 'ready' as const, instances: [] },
+            upcoming: { status: 'ready' as const, instances: [] as RoutineUpcomingInstance[] },
           };
         }
         if (!event.recurrence?.length) {
@@ -1257,7 +1413,7 @@ routinesRoute.get('/:id/routines', async (c) => {
             skipNewYear: row.skipNewYear,
             autoSkipDue: isRoutineAutoSkipDue(row),
             status: 'unsupported' as const,
-            upcoming: { status: 'ready' as const, instances: [] },
+            upcoming: { status: 'ready' as const, instances: [] as RoutineUpcomingInstance[] },
           };
         }
         const routine = routineFromGoogle(
@@ -1296,11 +1452,33 @@ routinesRoute.get('/:id/routines', async (c) => {
           skipNewYear: row.skipNewYear,
           autoSkipDue: isRoutineAutoSkipDue(row),
           status: 'missing' as const,
-          upcoming: { status: 'ready' as const, instances: [] },
+          upcoming: { status: 'ready' as const, instances: [] as RoutineUpcomingInstance[] },
         };
       }
     });
-    return c.json(routineListResponseSchema.parse({ routines: results }), 200);
+    const conflictResult = await addRoutineConflicts(
+      client,
+      access.calendarId,
+      results.map((routine) => ({
+        upcoming: {
+          status: routine.upcoming.status,
+          instances: routine.upcoming.instances.map((instance) => ({ ...instance, conflicts: [] })),
+        },
+      })),
+      access.activeMembers.map((member) => member.id),
+    );
+    const enrichedResults = results.map((routine) => ({
+      ...routine,
+      upcoming: {
+        ...routine.upcoming,
+        conflictsStatus: conflictResult.status,
+        instances: routine.upcoming.instances.map((instance) => ({
+          ...instance,
+          conflicts: [...(conflictResult.conflictsByInstance.get(instance.id)?.values() ?? [])],
+        })),
+      },
+    }));
+    return c.json(routineListResponseSchema.parse({ routines: enrichedResults }), 200);
   } catch (err) {
     return err instanceof GoogleCalendarError
       ? responseForGoogleFailure(c, err)

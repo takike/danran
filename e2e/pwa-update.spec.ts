@@ -608,6 +608,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 status: 'ready',
                 upcoming: {
                   status: 'ready',
+                  conflictsStatus: 'ready',
                   instances: [
                     {
                       id: 'instance_pwa_move',
@@ -617,6 +618,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                       end: '2026-10-13T18:00:00+09:00',
                       status: 'normal',
                       autoSkipReason: null,
+                      conflicts: [],
                     },
                   ],
                 },
@@ -644,6 +646,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
 
   test('a pending instance mutation blocks reload until the response settles', async ({ page }) => {
     const fixture = await createPwaFixtureServer();
+    let skipMutationApplied = false;
     let releaseMutation: (() => void) | undefined;
     let mutationStarted: (() => void) | undefined;
     const mutationStartedPromise = new Promise<void>((resolve) => {
@@ -679,15 +682,17 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 status: 'ready',
                 upcoming: {
                   status: 'ready',
+                  conflictsStatus: 'ready',
                   instances: [
                     {
                       id: 'instance_pwa_pending',
                       originalStart: '2026-10-13T17:00:00+09:00',
                       originalEnd: '2026-10-13T18:00:00+09:00',
-                      start: '2026-10-13T17:00:00+09:00',
-                      end: '2026-10-13T18:00:00+09:00',
-                      status: 'normal',
+                      start: skipMutationApplied ? null : '2026-10-13T17:00:00+09:00',
+                      end: skipMutationApplied ? null : '2026-10-13T18:00:00+09:00',
+                      status: skipMutationApplied ? 'skipped' : 'normal',
                       autoSkipReason: null,
+                      conflicts: [],
                     },
                   ],
                 },
@@ -701,6 +706,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
         async (route) => {
           mutationStarted?.();
           await mutationGate;
+          skipMutationApplied = true;
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -781,7 +787,7 @@ test.describe('PWA update handover with a real Service Worker', () => {
                 skipNewYear: false,
                 autoSkipDue: true,
                 status: 'ready',
-                upcoming: { status: 'ready', instances: [] },
+                upcoming: { status: 'ready', conflictsStatus: 'ready', instances: [] },
               },
             ],
           }),

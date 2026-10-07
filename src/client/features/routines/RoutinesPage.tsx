@@ -1167,12 +1167,17 @@ export default function RoutinesPage(): React.ReactElement {
                             return {
                               ...item,
                               upcoming: {
-                                status: 'ready' as const,
+                                ...item.upcoming,
                                 instances: hasInstance
                                   ? item.upcoming.instances.map((row) =>
-                                      row.id === instance.id ? instance : row,
+                                      row.id === instance.id
+                                        ? { ...row, ...instance, conflicts: row.conflicts }
+                                        : row,
                                     )
-                                  : [...item.upcoming.instances, instance],
+                                  : [
+                                      ...item.upcoming.instances,
+                                      { ...instance, conflicts: [] },
+                                    ].slice(-4),
                               },
                             };
                           }),

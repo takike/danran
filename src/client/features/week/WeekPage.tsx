@@ -15,6 +15,7 @@ import { BusyTimeline } from '@client/features/week/BusyTimeline';
 import { EventDialog } from '@client/features/week/EventDialog';
 import { BUSY_WEEK_QUERY_KEY, useBusyWeekQuery } from '@client/features/week/useBusyWeek';
 import { useWeekQuery } from '@client/features/week/useWeek';
+import { type ConflictEvent, getRoutineConflicts } from '@shared/domain/conflicts';
 import {
   type PersonalCalendarEvent,
   getPersonalEventsForDate,
@@ -45,6 +46,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
+  CircleAlert,
   LockKeyhole,
   Plus,
   RefreshCw,
@@ -137,11 +139,23 @@ function EventBadges({
   event,
   members,
   showAssignee = true,
-}: { event: WeekEvent; members: WeekMember[]; showAssignee?: boolean }): React.ReactElement | null {
+  isConflicted = false,
+}: {
+  event: WeekEvent;
+  members: WeekMember[];
+  showAssignee?: boolean;
+  isConflicted?: boolean;
+}): React.ReactElement | null {
   const assignee = showAssignee
     ? members.find((member) => member.id === event.assigneeMemberId)
     : undefined;
-  if (!assignee && event.status !== 'tentative' && !event.isRecurring && !event.movedFrom)
+  if (
+    !assignee &&
+    event.status !== 'tentative' &&
+    !event.isRecurring &&
+    !event.movedFrom &&
+    !isConflicted
+  )
     return null;
   return (
     <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--spacing-xs)]">
@@ -164,6 +178,19 @@ function EventBadges({
       {getRoutineExceptionLabel(event) && (
         <span className="text-xs text-accent">{getRoutineExceptionLabel(event)}</span>
       )}
+      {isConflicted && <ConflictBadge eventId={event.id} />}
+    </span>
+  );
+}
+
+function ConflictBadge({ eventId }: { eventId: string }): React.ReactElement {
+  return (
+    <span
+      data-testid={`week-event-conflict-${eventId}`}
+      className="inline-flex shrink-0 items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] border border-line bg-chip px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs font-semibold text-muted"
+    >
+      <CircleAlert size={13} aria-hidden="true" className="shrink-0" />
+      重複
     </span>
   );
 }
@@ -194,7 +221,10 @@ function DateLabel({
   );
 }
 
-function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
+function RoutineChip({
+  event,
+  isConflicted,
+}: { event: WeekEvent; isConflicted: boolean }): React.ReactElement {
   return (
     <span className="inline-flex min-h-[var(--week-chip-min-height)] max-w-full items-center gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-chip px-[var(--spacing-sm)] py-[var(--spacing-xs)] text-xs text-muted">
       {event.isRecurring && <Repeat size={14} aria-hidden="true" className="shrink-0" />}
@@ -202,6 +232,7 @@ function RoutineChip({ event }: { event: WeekEvent }): React.ReactElement {
       <span className="break-words tabular-nums [overflow-wrap:anywhere]">
         {formatEventTime(event.time)}
       </span>
+      {isConflicted && <ConflictBadge eventId={event.id} />}
     </span>
   );
 }
@@ -355,6 +386,7 @@ function AddDayButton({
 
 function EventEditButton({
   event,
+  isConflicted = false,
   onEdit,
   disabled,
   children,
@@ -362,6 +394,7 @@ function EventEditButton({
   ariaDescribedBy,
 }: EventActions & {
   event: WeekEvent;
+  isConflicted?: boolean;
   children: React.ReactNode;
   className?: string;
   ariaDescribedBy?: string;
@@ -370,7 +403,7 @@ function EventEditButton({
     <button
       type="button"
       data-testid={`edit-event-${event.id}`}
-      aria-label={`予定を編集: ${event.title}`}
+      aria-label={`予定を編集: ${event.title}${isConflicted ? '、重複' : ''}`}
       aria-describedby={ariaDescribedBy}
       disabled={disabled}
       onClick={(clickEvent) => onEdit(event, clickEvent.currentTarget)}
@@ -384,6 +417,7 @@ function EventEditButton({
 function CompactDay({
   day,
   events,
+  conflictEventIds,
   personalEvents,
   members,
   personalMember,
@@ -395,6 +429,7 @@ function CompactDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
   personalMember?: WeekMember;
@@ -423,17 +458,19 @@ function CompactDay({
           <EventEditButton
             key={event.id}
             event={event}
+            isConflicted={conflictEventIds.has(event.id)}
             onAdd={onAdd}
             onEdit={onEdit}
             disabled={disabled}
           >
-            <RoutineChip event={event} />
+            <RoutineChip event={event} isConflicted={conflictEventIds.has(event.id)} />
           </EventEditButton>
         ))}
         {otherEvents.map((event) => (
           <EventEditButton
             key={event.id}
             event={event}
+            isConflicted={conflictEventIds.has(event.id)}
             onAdd={onAdd}
             onEdit={onEdit}
             disabled={disabled}
@@ -443,7 +480,11 @@ function CompactDay({
               <span className="break-words font-medium [overflow-wrap:anywhere]">
                 {event.title}
               </span>
-              <EventBadges event={event} members={members} />
+              <EventBadges
+                event={event}
+                members={members}
+                isConflicted={conflictEventIds.has(event.id)}
+              />
             </span>
           </EventEditButton>
         ))}
@@ -485,6 +526,7 @@ function CompactDay({
 function ExpandedDay({
   day,
   events,
+  conflictEventIds,
   personalEvents,
   members,
   personalMember,
@@ -495,6 +537,7 @@ function ExpandedDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
   personalMember?: WeekMember;
@@ -537,6 +580,7 @@ function ExpandedDay({
               <li key={event.id} className="flex min-w-0 flex-col">
                 <EventEditButton
                   event={event}
+                  isConflicted={conflictEventIds.has(event.id)}
                   onAdd={onAdd}
                   onEdit={onEdit}
                   disabled={disabled}
@@ -550,7 +594,11 @@ function ExpandedDay({
                   >
                     <span className="tabular-nums">{formatEventTime(event.time, day.date)}</span>
                     <span className="w-fit min-w-0 max-w-full justify-self-end">
-                      <EventBadges event={event} members={members} />
+                      <EventBadges
+                        event={event}
+                        members={members}
+                        isConflicted={conflictEventIds.has(event.id)}
+                      />
                     </span>
                   </span>
                   <span
@@ -596,10 +644,16 @@ function WeekendEvent({
   event,
   day,
   members,
+  isConflicted,
   onAdd,
   onEdit,
   disabled,
-}: { event: WeekEvent; day: WeekDay; members: WeekMember[] } & EventActions): React.ReactElement {
+}: {
+  event: WeekEvent;
+  day: WeekDay;
+  members: WeekMember[];
+  isConflicted: boolean;
+} & EventActions): React.ReactElement {
   const member = members.find((candidate) => event.memberIds.includes(candidate.id));
   const assignee = members.find((candidate) => candidate.id === event.assigneeMemberId);
   return (
@@ -608,7 +662,13 @@ function WeekendEvent({
         {formatEventTime(event.time, day.date)}
       </time>
       <div className="min-w-0">
-        <EventEditButton event={event} onAdd={onAdd} onEdit={onEdit} disabled={disabled}>
+        <EventEditButton
+          event={event}
+          isConflicted={isConflicted}
+          onAdd={onAdd}
+          onEdit={onEdit}
+          disabled={disabled}
+        >
           <span className="flex min-h-[var(--tap-target-min)] min-w-0 flex-wrap items-center gap-x-[var(--spacing-xs)] gap-y-[var(--spacing-xs)]">
             {member && (
               <span
@@ -620,7 +680,12 @@ function WeekendEvent({
             <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">
               {event.title}
             </span>
-            <EventBadges event={event} members={members} showAssignee={false} />
+            <EventBadges
+              event={event}
+              members={members}
+              showAssignee={false}
+              isConflicted={isConflicted}
+            />
           </span>
         </EventEditButton>
         <div className="mt-[var(--spacing-2xs)] flex min-w-0 flex-wrap items-center gap-x-[var(--spacing-sm)] gap-y-[var(--spacing-xs)]">
@@ -657,6 +722,7 @@ function WeekendDay({
   availability,
   selfMemberId,
   events,
+  conflictEventIds,
   personalEvents,
   members,
   personalMember,
@@ -671,6 +737,7 @@ function WeekendDay({
   availability: BusyTimelineData;
   selfMemberId?: string;
   events: WeekEvent[];
+  conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
   personalMember?: WeekMember;
@@ -740,6 +807,7 @@ function WeekendDay({
                 event={entry.event}
                 day={day}
                 members={members}
+                isConflicted={conflictEventIds.has(entry.event.id)}
                 onAdd={onAdd}
                 onEdit={onEdit}
                 disabled={disabled}
@@ -889,6 +957,23 @@ export default function WeekPage({
         ? 'ready'
         : 'error';
   const canEditEvents = Boolean(data && !weekQuery.isPlaceholderData && !invalidUrlWeek);
+  const conflictEventIds = new Set(
+    data
+      ? getRoutineConflicts(
+          data.events.map(
+            (event): ConflictEvent => ({
+              id: event.id,
+              time: event.time,
+              memberIds: event.memberIds,
+              assigneeMemberId: event.assigneeMemberId,
+              status: event.status,
+              isRecurring: event.isRecurring,
+            }),
+          ),
+          data.members.map((member) => member.id),
+        ).flatMap((conflict) => [conflict.routineInstanceId, conflict.eventId])
+      : [],
+  );
   const longWeekendCounts = new Map(
     data ? getLongWeekendBadges(data.days).map((badge) => [badge.start, badge.dayCount]) : [],
   );
@@ -1307,6 +1392,7 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      conflictEventIds={conflictEventIds}
                       personalEvents={getPersonalEventsForDate(
                         day.date,
                         personalEvents,
@@ -1324,6 +1410,7 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      conflictEventIds={conflictEventIds}
                       personalEvents={getPersonalEventsForDate(
                         day.date,
                         personalEvents,
@@ -1361,6 +1448,7 @@ export default function WeekPage({
                   availability={timelineForDay(day.date)}
                   selfMemberId={selfMemberId}
                   events={getVisibleEvents(day, data, hideRoutines)}
+                  conflictEventIds={conflictEventIds}
                   personalEvents={getPersonalEventsForDate(day.date, personalEvents, hideRoutines)}
                   members={data.members}
                   personalMember={personalMember}
