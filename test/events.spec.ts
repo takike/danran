@@ -5,7 +5,15 @@ import { SESSION_COOKIE_NAME } from '@worker/auth/config';
 import { encryptAesGcm } from '@worker/auth/crypto';
 import { createSession } from '@worker/auth/session';
 import { createDb } from '@worker/db';
-import { eventMeta, families, googleTokens, members, sessions, users } from '@worker/db/schema';
+import {
+  eventMeta,
+  families,
+  googleTokens,
+  members,
+  sessions,
+  tasks,
+  users,
+} from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import { app } from '@worker/index';
 import { and, eq } from 'drizzle-orm';
@@ -61,6 +69,7 @@ describe('Task 1-8 event API', () => {
     insertCount = 0;
     deleteStatus = 204;
     forcedCalendarStatus = null;
+    await db.delete(tasks);
     await db.delete(eventMeta);
     await db.delete(members);
     await db.delete(families);
@@ -176,6 +185,9 @@ describe('Task 1-8 event API', () => {
     vi.useRealTimers();
     try {
       await env.DB.prepare('DROP TRIGGER IF EXISTS fail_event_meta_insert').run();
+      await env.DB.prepare('DROP TRIGGER IF EXISTS fail_items_task_insert').run();
+      await env.DB.prepare('DROP TRIGGER IF EXISTS fail_items_task_delete').run();
+      await db.delete(tasks);
       await db.delete(eventMeta);
       await db.delete(members);
       await db.delete(families);
@@ -286,6 +298,15 @@ describe('Task 1-8 event API', () => {
     );
   }
 
+  async function createFamilyEvent(cookie: string, clientRequestId: string, eventInput = input) {
+    const response = await request('POST', '/api/families/fam_events/events', cookie, {
+      ...eventInput,
+      clientRequestId,
+    });
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { eventId: string }).eventId;
+  }
+
   it('creates a family event with only the caller token and private metadata', async () => {
     const cookie = await createCaller();
     const response = await request('POST', '/api/families/fam_events/events', cookie, {
@@ -357,6 +378,230 @@ describe('Task 1-8 event API', () => {
     });
     const [metadata] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
     expect(metadata?.itemsJson).toBe('["上履き"]');
+  });
+
+  it('creates one undated items task, preserves its completion and assignee, then removes it when items clear', async () => {
+    const cookie = await createCaller();
+    const eventId = await createFamilyEvent(cookie, '123e4567-e89b-42d3-a456-426614174020');
+    const [meta] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
+    expect(meta).toBeDefined();
+    const [generated] = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.eventMetaId, meta?.id ?? ''), eq(tasks.source, 'items')));
+    expect(generated).toMatchObject({
+      title: '持ち物を準備',
+      dueAt: null,
+      dueKind: 'none',
+      doneAt: null,
+      assigneeMemberId: null,
+    });
+    expect(
+      await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.eventMetaId, meta?.id ?? ''), eq(tasks.source, 'items'))),
+    ).toHaveLength(1);
+
+    await db
+      .update(tasks)
+      .set({ doneAt: 12345, assigneeMemberId: 'mem_adult' })
+      .where(eq(tasks.id, generated?.id ?? ''));
+    const savedAgain = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      {
+        ...input,
+        title: '変更後',
+      },
+    );
+    expect(savedAgain.status).toBe(200);
+    const [preserved] = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, generated?.id ?? ''));
+    expect(preserved).toMatchObject({ doneAt: 12345, assigneeMemberId: 'mem_adult' });
+    expect(preserved?.dueAt).toBeNull();
+    expect(preserved?.dueKind).toBe('none');
+
+    const cleared = await request('PATCH', `/api/families/fam_events/events/${eventId}`, cookie, {
+      ...input,
+      items: [],
+    });
+    expect(cleared.status).toBe(200);
+    expect(
+      await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, generated?.id ?? '')),
+    ).toEqual([]);
+  });
+
+  it('deletes the items task and detaches a manual task when its event is deleted', async () => {
+    const cookie = await createCaller();
+    const eventId = await createFamilyEvent(cookie, '123e4567-e89b-42d3-a456-426614174021');
+    const [meta] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
+    expect(meta).toBeDefined();
+    const [autoTask] = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.eventMetaId, meta?.id ?? ''), eq(tasks.source, 'items')));
+    await db.insert(tasks).values({
+      id: 'task_manual_for_deleted_event',
+      familyId: 'fam_events',
+      title: '予定に紐づく手動タスク',
+      dueAt: null,
+      dueKind: 'none',
+      eventMetaId: meta?.id ?? null,
+      source: 'manual',
+      sourceRef: null,
+    });
+
+    const response = await request('DELETE', `/api/families/fam_events/events/${eventId}`, cookie);
+    expect(response.status).toBe(200);
+    expect(await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId))).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, autoTask?.id ?? '')),
+    ).toEqual([]);
+    const [manual] = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, 'task_manual_for_deleted_event'));
+    expect(manual).toMatchObject({ familyId: 'fam_events', eventMetaId: null, source: 'manual' });
+  });
+
+  it('does not recreate an items task when a delayed create POST follows an edit that removed all items', async () => {
+    const cookie = await createCaller();
+    const payload = { ...input, clientRequestId: '123e4567-e89b-42d3-a456-426614174022' };
+    const eventId = await createFamilyEvent(cookie, payload.clientRequestId, payload);
+    const edit = await request('PATCH', `/api/families/fam_events/events/${eventId}`, cookie, {
+      ...input,
+      items: [],
+    });
+    expect(edit.status).toBe(200);
+    expect(await db.select().from(tasks).where(eq(tasks.source, 'items'))).toEqual([]);
+
+    const replay = await request('POST', '/api/families/fam_events/events', cookie, payload);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({ eventId });
+    expect(await db.select().from(tasks).where(eq(tasks.source, 'items'))).toEqual([]);
+    const [meta] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
+    expect(meta?.itemsJson).toBe('[]');
+  });
+
+  it('returns success when automatic task insertion fails and repairs it on the next create retry', async () => {
+    const cookie = await createCaller();
+    const payload = { ...input, clientRequestId: '123e4567-e89b-42d3-a456-426614174023' };
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_items_task_insert BEFORE INSERT ON tasks WHEN NEW.source = 'items' BEGIN SELECT RAISE(ABORT, 'test failure'); END",
+    ).run();
+    const created = await request('POST', '/api/families/fam_events/events', cookie, payload);
+    expect(created.status).toBe(200);
+    const eventId = ((await created.json()) as { eventId: string }).eventId;
+    expect(await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId))).toHaveLength(1);
+    expect(await db.select().from(tasks).where(eq(tasks.source, 'items'))).toEqual([]);
+
+    await env.DB.prepare('DROP TRIGGER fail_items_task_insert').run();
+    const retry = await request('POST', '/api/families/fam_events/events', cookie, payload);
+    expect(retry.status).toBe(200);
+    expect(((await retry.json()) as { eventId: string }).eventId).toBe(eventId);
+    const [recovered] = await db.select().from(tasks).where(eq(tasks.source, 'items'));
+    expect(recovered).toMatchObject({ title: '持ち物を準備', dueAt: null, dueKind: 'none' });
+  });
+
+  it('returns success when automatic task deletion fails and removes it on the next edit retry', async () => {
+    const cookie = await createCaller();
+    const eventId = await createFamilyEvent(cookie, '123e4567-e89b-42d3-a456-426614174025');
+    const [meta] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
+    const [generated] = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.eventMetaId, meta?.id ?? ''), eq(tasks.source, 'items')));
+    expect(generated).toBeDefined();
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_items_task_delete BEFORE DELETE ON tasks WHEN OLD.source = 'items' BEGIN SELECT RAISE(ABORT, 'test failure'); END",
+    ).run();
+
+    const payload = { ...input, items: [] };
+    const failedReconcile = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      payload,
+    );
+    expect(failedReconcile.status).toBe(200);
+    expect(
+      (await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId)))[0]?.itemsJson,
+    ).toBe('[]');
+    expect(
+      await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, generated?.id ?? '')),
+    ).toHaveLength(1);
+
+    await env.DB.prepare('DROP TRIGGER fail_items_task_delete').run();
+    const retry = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      payload,
+    );
+    expect(retry.status).toBe(200);
+    expect(
+      await db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, generated?.id ?? '')),
+    ).toEqual([]);
+  });
+
+  it('rolls back task cleanup when event deletion batch fails and completes cleanup on retry', async () => {
+    const cookie = await createCaller();
+    const eventId = await createFamilyEvent(cookie, '123e4567-e89b-42d3-a456-426614174024');
+    const [meta] = await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId));
+    await db.insert(tasks).values({
+      id: 'task_manual_delete_retry',
+      familyId: 'fam_events',
+      title: '予定に紐づく手動タスク',
+      dueAt: null,
+      dueKind: 'none',
+      eventMetaId: meta?.id ?? null,
+      source: 'manual',
+      sourceRef: null,
+    });
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_items_task_delete BEFORE DELETE ON tasks WHEN OLD.source = 'items' BEGIN SELECT RAISE(ABORT, 'test failure'); END",
+    ).run();
+
+    const failedDelete = await request(
+      'DELETE',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+    );
+    expect(failedDelete.status).toBe(500);
+    const [metaAfterFailure] = await db
+      .select()
+      .from(eventMeta)
+      .where(eq(eventMeta.eventId, eventId));
+    expect(metaAfterFailure).toBeDefined();
+    const tasksAfterFailure = await db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.eventMetaId, meta?.id ?? ''));
+    expect(tasksAfterFailure.map(({ source }) => source).sort()).toEqual(['items', 'manual']);
+
+    await env.DB.prepare('DROP TRIGGER fail_items_task_delete').run();
+    const retry = await request('DELETE', `/api/families/fam_events/events/${eventId}`, cookie);
+    expect(retry.status).toBe(200);
+    expect(await db.select().from(eventMeta).where(eq(eventMeta.eventId, eventId))).toEqual([]);
+    const [manual] = await db.select().from(tasks).where(eq(tasks.id, 'task_manual_delete_retry'));
+    expect(manual).toMatchObject({ eventMetaId: null, source: 'manual' });
+    expect(await db.select().from(tasks).where(eq(tasks.source, 'items'))).toEqual([]);
   });
 
   it('preserves unknown private/shared metadata when editing and updates event_meta items', async () => {
