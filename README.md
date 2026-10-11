@@ -152,3 +152,4 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 5-1（tasks API と持ち物からの自動生成）**: PR #36 で main にマージ済み。自動テストと staging 実機確認済みです。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。
   - **タスク 5-2（S5 やること画面）**: `/tasks` の予定ごと・期限順・自分の担当、完了・担当変更、手動タスクの追加・編集・削除を実装。Task 5-1 API を含めた staging 実機確認済みです。画面仕様・手順は [docs/02-screens.md](docs/02-screens.md#s5-やること) と [docs/21-tasks.md](docs/21-tasks.md) を参照してください。週ビュー連携は Task 5-3 です。
   - **タスク 5-2 フォローアップ（S5 の予定選択）**: `/tasks` の手動タスク追加・編集から、60日以内の単発家族予定を選べます。合成データの自動テストを整備し、staging 確認手順は [docs/21-tasks.md](docs/21-tasks.md) に記載しています。フォローアップ機能の staging 実機確認は未実施です。
+  - **タスク 5-3（週ビューの締切と未完了数）**: S1 に期限日の締切リンクと、カード内の単発家族予定の未完了数を表示します。API モック E2E と合成データの390pxスクリーンショット（`docs/screenshots/s1-week-view.png`）を整備し、staging 確認手順は [docs/21-tasks.md](docs/21-tasks.md) に記載しています。staging 実機確認は未実施です。
