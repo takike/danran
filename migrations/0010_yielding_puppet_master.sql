@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `tasks_conflict_source_ref_unique` ON `tasks` (`family_id`,`source_ref`) WHERE source = 'conflict' AND source_ref IS NOT NULL;

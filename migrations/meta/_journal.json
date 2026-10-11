@@ -71,6 +71,13 @@
       "when": 1791389140300,
       "tag": "0009_zippy_red_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791730893550,
+      "tag": "0010_yielding_puppet_master",
+      "breakpoints": true
     }
   ]
 }

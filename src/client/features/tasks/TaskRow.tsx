@@ -12,7 +12,7 @@ type Member = FamilyPublic['members'][number];
 function taskSourceLabel(source: Task['source']): string | null {
   if (source === 'items') return '持ち物から自動';
   if (source === 'import') return 'プリントから';
-  if (source === 'conflict') return '繰り返し予定の重複から';
+  if (source === 'conflict') return 'お休みから自動';
   return null;
 }
 

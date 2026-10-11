@@ -317,6 +317,9 @@ export const tasks = sqliteTable(
     uniqueIndex('tasks_manual_source_ref_unique')
       .on(table.familyId, table.sourceRef)
       .where(sql`source = 'manual' AND source_ref IS NOT NULL`),
+    uniqueIndex('tasks_conflict_source_ref_unique')
+      .on(table.familyId, table.sourceRef)
+      .where(sql`source = 'conflict' AND source_ref IS NOT NULL`),
     check('tasks_due_kind_check', sql`due_kind IN ('date', 'datetime', 'none')`),
     check('tasks_source_check', sql`source IN ('import', 'items', 'conflict', 'manual')`),
     check(

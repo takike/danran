@@ -196,7 +196,13 @@ function makeTask(
   id: string,
   title: string,
   due: Task['due'],
-  options: { done?: boolean; eventId?: string; eventTitle?: string; eventRecurring?: boolean } = {},
+  options: {
+    done?: boolean;
+    eventId?: string;
+    eventTitle?: string;
+    eventRecurring?: boolean;
+    source?: Task['source'];
+  } = {},
 ): Task {
   const eventId = options.eventId;
   return {
@@ -205,7 +211,7 @@ function makeTask(
     due,
     doneAt: options.done ? 1_791_290_000 : null,
     assigneeMemberId: null,
-    source: 'manual',
+    source: options.source ?? 'manual',
     linkedEvent: eventId
       ? {
           state: 'ready',
@@ -551,6 +557,32 @@ test('shows deadline links without changing day layout and counts only eligible 
   await deadline.click();
   await expect(page).toHaveURL(/\/tasks$/);
   await expect(page.getByRole('heading', { name: 'やること', exact: true })).toBeVisible();
+});
+
+test('shows an absence task deadline on its stored due date', async ({ page }) => {
+  const tasks = taskFixture();
+  tasks.push(
+    makeTask(
+      'task_absence_notice',
+      '「ピアノ」（10/17（土））に欠席を連絡',
+      { kind: 'date', dueAt: '2026-10-16' },
+      { source: 'conflict' },
+    ),
+  );
+  await installHarness(page, { tasks });
+  await page.goto('/?week=2026-10-12');
+
+  const deadline = page.getByTestId('week-deadline-2026-10-16-task_absence_notice');
+  await expect(deadline).toBeVisible();
+  await expect(deadline).toContainText('「ピアノ」（10/17（土））に欠席を連絡');
+  await expect(deadline).toHaveAttribute('href', '/tasks');
+  for (const width of [390, 445]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    expect((await deadline.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
 });
 
 test('keeps the week visible when tasks load slowly or a refresh fails', async ({ page }) => {

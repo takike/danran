@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:test';
+import { createAbsenceTaskSourceRef } from '@shared/domain/absenceTask';
 import {
   taskEventCandidatesResponseSchema,
   taskListResponseSchema,
@@ -13,6 +14,7 @@ import {
   families,
   googleTokens,
   members,
+  routineSettings,
   sessions,
   tasks,
   users,
@@ -606,6 +608,220 @@ describe('Task 5-1 task API', () => {
     expect(
       (await db.select().from(tasks).where(eq(tasks.id, 'task_items_meta_tasks_event')))[0]?.dueAt,
     ).toBeNull();
+  });
+
+  it('uses one bounded event list for absence titles and leaves task rows unchanged', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-12T03:00:00.000Z'));
+    await db.insert(routineSettings).values({
+      id: 'routine_absence_title',
+      familyId: 'fam_tasks',
+      calendarId: CALENDAR_ID,
+      recurringEventId: 'routine_master_absence',
+      category: 'lesson',
+    });
+    await db.insert(tasks).values({
+      id: 'task_absence_title',
+      familyId: 'fam_tasks',
+      title: '欠席を連絡',
+      dueAt: '2026-10-16',
+      dueKind: 'date',
+      doneAt: null,
+      assigneeMemberId: null,
+      eventMetaId: null,
+      source: 'conflict',
+      sourceRef: createAbsenceTaskSourceRef({
+        routineSettingsId: 'routine_absence_title',
+        originalStart: '2026-10-17T10:00:00+09:00',
+      }),
+    });
+    storedEvents.set('routine_instance_absence', {
+      id: 'routine_instance_absence',
+      recurringEventId: 'routine_master_absence',
+      status: 'confirmed',
+      summary: 'ピアノ',
+      start: { dateTime: '2026-10-17T10:00:00+09:00' },
+      end: { dateTime: '2026-10-17T11:00:00+09:00' },
+    });
+
+    const beforeList = await db.select().from(tasks);
+    repeatedPageToken = true;
+    const response = await request('GET', '/api/families/fam_tasks/tasks');
+    expect(response.status).toBe(200);
+    const result = taskListResponseSchema.parse(await response.json());
+    expect(result.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task_absence_title',
+        title: '「ピアノ」（10/17（土））に欠席を連絡',
+        due: { kind: 'date', dueAt: '2026-10-16' },
+        source: 'conflict',
+        linkedEvent: { state: 'none' },
+      }),
+    ]);
+    expect(googleRequests.filter((url) => url.includes('/events?'))).toHaveLength(1);
+    expect(new URL(googleRequests[0] ?? '').searchParams.get('pageToken')).toBeNull();
+    expect(googleMethods).toEqual(['GET']);
+    expect(await db.select().from(tasks)).toEqual(beforeList);
+    repeatedPageToken = false;
+
+    await db.insert(tasks).values({
+      id: 'task_absence_mixed_link',
+      familyId: 'fam_tasks',
+      title: '持ち物を準備',
+      dueAt: null,
+      dueKind: 'none',
+      doneAt: null,
+      assigneeMemberId: null,
+      eventMetaId: 'meta_tasks_event',
+      source: 'items',
+      sourceRef: null,
+    });
+    googleRequests.length = 0;
+    googleMethods.length = 0;
+    const mixedResponse = await request('GET', '/api/families/fam_tasks/tasks');
+    expect(mixedResponse.status).toBe(200);
+    const mixedResult = taskListResponseSchema.parse(await mixedResponse.json());
+    expect(mixedResult.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'task_absence_title',
+          title: '「ピアノ」（10/17（土））に欠席を連絡',
+        }),
+        expect.objectContaining({
+          id: 'task_absence_mixed_link',
+          linkedEvent: expect.objectContaining({ state: 'ready', eventId: EVENT_ID }),
+        }),
+      ]),
+    );
+    expect(googleRequests.filter((url) => url.includes('/events?'))).toHaveLength(1);
+    expect(googleRequests.every((url) => url.includes('/events?'))).toBe(true);
+    expect(googleMethods).toEqual(['GET']);
+
+    const linkedEvent = storedEvents.get(EVENT_ID);
+    const laterRoutineEvent = storedEvents.get('routine_instance_absence');
+    if (!linkedEvent || !laterRoutineEvent) throw new Error('Task list fixture event is missing');
+    candidatePages = [
+      { items: [linkedEvent], nextPageToken: 'page-1' },
+      { items: [laterRoutineEvent] },
+    ];
+    googleRequests.length = 0;
+    googleMethods.length = 0;
+    const missingSeriesTitle = await request('GET', '/api/families/fam_tasks/tasks');
+    expect(missingSeriesTitle.status).toBe(200);
+    const missingTitleResult = taskListResponseSchema.parse(await missingSeriesTitle.json());
+    expect(missingTitleResult.tasks.find((task) => task.id === 'task_absence_title')?.title).toBe(
+      '10/17（土）の欠席を連絡',
+    );
+    expect(googleRequests.filter((url) => url.includes('/events?'))).toHaveLength(1);
+    expect(new URL(googleRequests[0] ?? '').searchParams.get('pageToken')).toBeNull();
+    candidatePages = null;
+
+    failList = true;
+    googleRequests.length = 0;
+    googleMethods.length = 0;
+    const failedLookup = await request('GET', '/api/families/fam_tasks/tasks');
+    expect(failedLookup.status).toBe(200);
+    const failedResult = taskListResponseSchema.parse(await failedLookup.json());
+    expect(failedResult.tasks.find((task) => task.id === 'task_absence_title')?.title).toBe(
+      '10/17（土）の欠席を連絡',
+    );
+    expect(googleRequests.filter((url) => url.includes('/events?'))).toHaveLength(1);
+    expect(
+      failedResult.tasks.find((task) => task.id === 'task_absence_mixed_link')?.linkedEvent,
+    ).toEqual({
+      state: 'unavailable',
+      eventId: EVENT_ID,
+    });
+  });
+
+  it('allows absence task assignee and done changes while rejecting other mutation fields and deletion', async () => {
+    await db.insert(tasks).values({
+      id: 'task_absence_mutable',
+      familyId: 'fam_tasks',
+      title: '欠席を連絡',
+      dueAt: '2026-10-16',
+      dueKind: 'date',
+      doneAt: null,
+      assigneeMemberId: null,
+      eventMetaId: null,
+      source: 'conflict',
+      sourceRef: 'absence:v1:routine_mutable:2026-10-17T10%3A00%3A00%2B09%3A00',
+    });
+    const path = '/api/families/fam_tasks/tasks/task_absence_mutable';
+    const allowed = await request('PATCH', path, {
+      assigneeMemberId: 'mem_task_adult',
+      done: true,
+    });
+    expect(allowed.status).toBe(200);
+    const updated = taskMutationResponseSchema.parse(await allowed.json()).task;
+    expect(updated.assigneeMemberId).toBe('mem_task_adult');
+    expect(updated.doneAt).not.toBeNull();
+
+    for (const body of [
+      { title: 'changed' },
+      { due: { kind: 'date', dueAt: '2026-10-18' } },
+      { eventId: 'some_event' },
+    ]) {
+      const response = await request('PATCH', path, body);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'AUTO_TASK_IMMUTABLE' });
+    }
+    const deleted = await request('DELETE', path);
+    expect(deleted.status).toBe(409);
+    expect(await deleted.json()).toMatchObject({ code: 'AUTO_TASK_IMMUTABLE' });
+  });
+
+  it('returns 404 for an absence task stored in another family', async () => {
+    await db.insert(users).values({
+      id: 'usr_task_other_owner',
+      googleSub: 'sub-task-other-owner',
+      email: 'other@example.test',
+      displayName: 'Other',
+    });
+    await db.insert(families).values({
+      id: 'fam_tasks_other',
+      name: 'Other family',
+      ownerUserId: 'usr_task_other_owner',
+      familyCalendarId: 'other-calendar',
+      creationStatus: 'ready',
+    });
+    await db.insert(tasks).values({
+      id: 'task_absence_other_family',
+      familyId: 'fam_tasks_other',
+      title: '欠席を連絡',
+      dueAt: '2026-10-16',
+      dueKind: 'date',
+      source: 'conflict',
+      sourceRef: 'absence:v1:other:2026-10-17T10%3A00%3A00%2B09%3A00',
+    });
+    const ownTask = {
+      id: 'task_absence_owned_for_isolation',
+      familyId: 'fam_tasks',
+      title: '欠席を連絡',
+      dueAt: '2026-10-16',
+      dueKind: 'date' as const,
+      source: 'conflict' as const,
+      sourceRef: 'absence:v1:own:2026-10-17T10%3A00%3A00%2B09%3A00',
+    };
+    await db.insert(tasks).values(ownTask);
+    const snapshot = await db.select().from(tasks).where(eq(tasks.id, 'task_absence_other_family'));
+
+    const ownList = await request('GET', '/api/families/fam_tasks/tasks');
+    expect(ownList.status).toBe(200);
+    expect(JSON.stringify(await ownList.json())).not.toContain('task_absence_other_family');
+    expect((await request('GET', '/api/families/fam_tasks_other/tasks')).status).toBe(404);
+    const response = await request(
+      'PATCH',
+      '/api/families/fam_tasks/tasks/task_absence_other_family',
+      { done: true },
+    );
+    expect(response.status).toBe(404);
+    expect(
+      (await request('DELETE', '/api/families/fam_tasks/tasks/task_absence_other_family')).status,
+    ).toBe(404);
+    expect(await db.select().from(tasks).where(eq(tasks.id, 'task_absence_other_family'))).toEqual(
+      snapshot,
+    );
   });
 
   it('returns unavailable linked information and unknown automatic due after Google lookup failure', async () => {
