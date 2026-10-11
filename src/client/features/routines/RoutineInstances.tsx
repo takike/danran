@@ -1,5 +1,6 @@
 import { RoutineApiError, updateRoutineInstance } from '@client/api/routines';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
+import { getRoutineInstanceStatus } from '@shared/domain/routineInstances';
 import { formatRoutineInstanceChip } from '@shared/domain/routineInstances';
 import type {
   RoutineInstance,
@@ -68,6 +69,7 @@ export function RoutineInstances({
   isIdentityCurrent,
   onUnauthorized,
   onChanged,
+  onMutationSettled,
   onPendingChange,
   isSeriesDeleting,
   isRoutineBusy,
@@ -78,25 +80,32 @@ export function RoutineInstances({
   upcoming: RoutineUpcoming;
   isIdentityCurrent: () => boolean;
   onUnauthorized: () => void;
-  onChanged: (instance: RoutineInstance) => void;
+  onChanged: (
+    instance: RoutineInstance | RoutineUpcomingInstance,
+    keepOptimistic?: boolean,
+    operationId?: string,
+  ) => void;
+  onMutationSettled: (instanceId: string, operationId: string) => void;
   onPendingChange: (pending: boolean) => void;
   isSeriesDeleting: boolean;
   isRoutineBusy: boolean;
 }): React.ReactElement | null {
   const pendingRef = useRef(false);
-  const [selected, setSelected] = useState<RoutineInstance | null>(null);
+  const [selected, setSelected] = useState<RoutineUpcomingInstance | null>(null);
   const [moveFormOpen, setMoveFormOpen] = useState(false);
   const [moveValue, setMoveValue] = useState({ date: '', startTime: '', endTime: '' });
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [operationError, setOperationError] = useState(false);
+  const [pendingInstanceId, setPendingInstanceId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const controlsDisabled = pending || isSeriesDeleting || isRoutineBusy;
   useReloadProtection((moveFormOpen && dirty) || pending, pending);
 
   async function perform(
     action: 'skip' | 'restore' | 'move',
-    target: RoutineInstance | null = selected,
+    target: RoutineUpcomingInstance | null = selected,
   ) {
     if (!target || pendingRef.current || isSeriesDeleting || isRoutineBusy) return;
     if (
@@ -110,42 +119,127 @@ export function RoutineInstances({
       return;
     }
     const identity = `${userId}:${familyId}`;
+    const operationId = crypto.randomUUID();
+    const savedMoveValue = { ...moveValue };
     pendingRef.current = true;
+    setPendingInstanceId(target.id);
     setPending(true);
     onPendingChange(true);
     setError('');
+    setOperationError(false);
+    setSelected(null);
+    setMoveFormOpen(false);
+    if (action !== 'move') setDirty(false);
+    let snapshot: RoutineUpcomingInstance = target;
+    let optimistic: RoutineUpcomingInstance = target;
     try {
+      await queryClient.cancelQueries({ queryKey: ['routines', userId, familyId] });
+      if (!isIdentityCurrent()) return;
+      const current = queryClient.getQueryData<{
+        routines: Array<{ id: string; upcoming: RoutineUpcoming }>;
+      }>(['routines', userId, familyId]);
+      const cachedRoutine = current?.routines.find((routine) => routine.id === routineId);
+      const cachedInstance =
+        cachedRoutine?.upcoming.status === 'ready'
+          ? cachedRoutine.upcoming.instances.find((instance) => instance.id === target.id)
+          : undefined;
+      if (cachedInstance) snapshot = { ...cachedInstance };
+      if (action === 'skip') {
+        optimistic = {
+          ...snapshot,
+          start: null,
+          end: null,
+          conflicts: [],
+          status: getRoutineInstanceStatus({
+            originalStart: snapshot.originalStart,
+            originalEnd: snapshot.originalEnd,
+            start: null,
+            end: null,
+            cancelled: true,
+          }),
+          autoSkipReason: null,
+        };
+      } else if (action === 'restore') {
+        optimistic = {
+          ...snapshot,
+          start: snapshot.originalStart,
+          end: snapshot.originalEnd,
+          status: getRoutineInstanceStatus({
+            originalStart: snapshot.originalStart,
+            originalEnd: snapshot.originalEnd,
+            start: snapshot.originalStart,
+            end: snapshot.originalEnd,
+          }),
+          autoSkipReason: null,
+        };
+      } else {
+        const start = `${savedMoveValue.date}T${savedMoveValue.startTime}:00+09:00`;
+        const end = `${savedMoveValue.date}T${savedMoveValue.endTime}:00+09:00`;
+        optimistic = {
+          ...snapshot,
+          start,
+          end,
+          status: getRoutineInstanceStatus({
+            originalStart: snapshot.originalStart,
+            originalEnd: snapshot.originalEnd,
+            start,
+            end,
+          }),
+          autoSkipReason: null,
+        };
+      }
+      onChanged(optimistic, true, operationId);
       const response = await updateRoutineInstance(
         familyId,
         routineId,
         target.id,
         action,
-        action === 'move' ? moveValue : undefined,
+        action === 'move' ? savedMoveValue : undefined,
       );
       if (!isIdentityCurrent() || identity !== `${userId}:${familyId}`) return;
-      await queryClient.cancelQueries({ queryKey: ['routines', userId, familyId] });
-      if (!isIdentityCurrent()) return;
-      onChanged(response.instance);
-      setSelected(null);
-      setMoveFormOpen(false);
+      onChanged(response.instance, true, operationId);
       setDirty(false);
-      void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] });
-      void queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] });
-      void queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] });
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
+      ]).then(() => {
+        if (isIdentityCurrent()) onMutationSettled(target.id, operationId);
+      });
     } catch (cause: unknown) {
       if (!isIdentityCurrent()) return;
       if (cause instanceof RoutineApiError && cause.status === 401) onUnauthorized();
-      setError(OPERATION_ERROR);
+      await queryClient.cancelQueries({ queryKey: ['routines', userId, familyId] });
+      if (!isIdentityCurrent()) return;
+      onChanged(snapshot, false, operationId);
+      setOperationError(true);
+      if (action === 'move') {
+        setSelected(snapshot);
+        setMoveValue(savedMoveValue);
+        setMoveFormOpen(true);
+        setDirty(true);
+      }
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
+      ]);
     } finally {
       pendingRef.current = false;
       if (isIdentityCurrent()) {
         setPending(false);
+        setPendingInstanceId(null);
         onPendingChange(false);
       }
     }
   }
 
-  if (upcoming.status === 'unavailable') {
+  if (
+    upcoming.status === 'unavailable' &&
+    !pending &&
+    !operationError &&
+    !(moveFormOpen && selected)
+  ) {
     return (
       <div className="mt-[var(--spacing-md)] text-sm text-muted">
         <p className="m-0">
@@ -168,13 +262,36 @@ export function RoutineInstances({
     );
   }
   const canShowConflicts = upcoming.conflictsStatus === 'ready';
-  if (!upcoming.instances.length && upcoming.conflictsStatus === 'ready') return null;
+  if (
+    !upcoming.instances.length &&
+    upcoming.status === 'ready' &&
+    upcoming.conflictsStatus === 'ready' &&
+    !operationError &&
+    !selected
+  ) {
+    return null;
+  }
 
   return (
     <section
       className="mt-[var(--spacing-md)] border-t border-line pt-[var(--spacing-sm)]"
       aria-label="直近の予定"
     >
+      {upcoming.status === 'unavailable' && (
+        <p className="mb-[var(--spacing-xs)] mt-0 text-sm text-muted">
+          直近の回を取得できませんでした。
+          <button
+            type="button"
+            disabled={controlsDisabled}
+            className="ml-[var(--spacing-xs)] min-h-[var(--tap-target-min)] min-w-[var(--tap-target-min)] underline"
+            onClick={() =>
+              void queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] })
+            }
+          >
+            再試行
+          </button>
+        </p>
+      )}
       <p className="mb-[var(--spacing-xs)] mt-0 text-xs font-semibold text-muted">直近の回</p>
       <div className="flex flex-wrap gap-[var(--spacing-xs)]">
         {upcoming.instances.map((instance) => (
@@ -183,6 +300,11 @@ export function RoutineInstances({
             type="button"
             data-testid={`routine-instance-chip-${instance.id}`}
             aria-pressed={selected?.id === instance.id}
+            aria-label={
+              pendingInstanceId === instance.id
+                ? `${formatRoutineInstanceChip(instance)}、保存中`
+                : undefined
+            }
             disabled={controlsDisabled}
             onClick={() => {
               setSelected(selected?.id === instance.id ? null : instance);
@@ -192,13 +314,28 @@ export function RoutineInstances({
             }}
             className={`${buttonBaseClass} ${selected?.id === instance.id ? 'border-focus ring-1 ring-focus' : 'border-line'} bg-surface text-ink max-w-full text-left`}
           >
-            <span className={instance.status === 'skipped' ? 'line-through decoration-2' : ''}>
+            <span
+              className={`min-w-0 [overflow-wrap:anywhere] ${instance.status === 'skipped' ? 'line-through decoration-2' : ''}`}
+            >
               {formatRoutineInstanceChip(instance)}
             </span>
             {canShowConflicts && instance.conflicts.length > 0 && <ConflictBadge />}
+            {pendingInstanceId === instance.id && (
+              <output
+                aria-live="polite"
+                className="shrink-0 rounded-[var(--radius-sm)] border border-line bg-chip px-[var(--spacing-xs)] py-[var(--spacing-2xs)] text-xs text-muted"
+              >
+                保存中
+              </output>
+            )}
           </button>
         ))}
       </div>
+      {operationError && (
+        <p role="alert" className="mt-[var(--spacing-sm)] mb-0 text-sm text-accent">
+          {OPERATION_ERROR}
+        </p>
+      )}
       {upcoming.conflictsStatus === 'unavailable' && (
         <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-muted">
           重複を確認できませんでした。

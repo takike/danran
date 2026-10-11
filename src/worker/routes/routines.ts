@@ -622,18 +622,22 @@ async function mutateRoutineInstance(c: RouteContext, action: InstanceMutation):
   const client = createGoogleCalendarClient(c.env, access.session.user.id, {
     reuseAccessToken: true,
   });
-  let instance: GoogleEvent;
-  let master: GoogleEvent;
-  try {
-    instance = await client.events.get(access.calendarId, rawInstanceId);
-    if (instance.id !== rawInstanceId || instance.recurringEventId !== row.recurringEventId) {
-      return errorResponse(c, 404, 'NOT_FOUND');
-    }
-    master = await client.events.get(access.calendarId, row.recurringEventId);
-  } catch (err) {
-    if (isGoogleMissing(err)) return errorResponse(c, 404, 'NOT_FOUND');
-    return responseForGoogleFailure(c, err);
+  const instanceRequest = client.events.get(access.calendarId, rawInstanceId);
+  const masterRequest = client.events.get(access.calendarId, row.recurringEventId);
+  const [instanceResult, masterResult] = await Promise.allSettled([instanceRequest, masterRequest]);
+  if (instanceResult.status === 'rejected') {
+    if (isGoogleMissing(instanceResult.reason)) return errorResponse(c, 404, 'NOT_FOUND');
+    return responseForGoogleFailure(c, instanceResult.reason);
   }
+  const instance = instanceResult.value;
+  if (instance.id !== rawInstanceId || instance.recurringEventId !== row.recurringEventId) {
+    return errorResponse(c, 404, 'NOT_FOUND');
+  }
+  if (masterResult.status === 'rejected') {
+    if (isGoogleMissing(masterResult.reason)) return errorResponse(c, 404, 'NOT_FOUND');
+    return responseForGoogleFailure(c, masterResult.reason);
+  }
+  const master = masterResult.value;
   if (
     master.id !== row.recurringEventId ||
     master.status === 'cancelled' ||
