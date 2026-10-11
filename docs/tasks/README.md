@@ -41,5 +41,6 @@
 | 24 | [perf-routines-instant-actions.md](perf-routines-instant-actions.md) | 「繰り返し」の回の操作を、押した瞬間に画面へ反映する（実機確認の指摘） | 完了（PR #38）。実機確認待ち |
 | 25 | [5-2-followup-task-event-picker.md](5-2-followup-task-event-picker.md) | 「やること」の画面から、予定を選んでやることを足す（実機確認の要望）。スクリーンショットの書き出しの修正を含む | 完了（PR #39）。実機確認待ち |
 | 26 | [5-3-week-tasks.md](5-3-week-tasks.md) | 週ビューに、やることの締切のチップと、予定ごとの残りの数を出す | 完了（PR #40。[5-3-review-fixes.md](5-3-review-fixes.md) 反映済み）。実機確認待ち |
+| 27 | [5-4-absence-tasks.md](5-4-absence-tasks.md) | 習い事の回を休みにしたら、「欠席を連絡」のやることを作る | 指示済み |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
