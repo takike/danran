@@ -38,7 +38,7 @@
 | 21 | [perf-routines-responsiveness.md](perf-routines-responsiveness.md) | 「繰り返し」の画面の待ち時間と、操作後のちらつきを減らす（実機確認の指摘） | 完了（PR #35）。実機確認済み（ちらつきは解消。操作の反映に3秒ほどかかる点は 24 で対応） |
 | 22 | [5-1-tasks-api.md](5-1-tasks-api.md) | やること（tasks）の API と、持ち物からの自動生成（画面は次の 5-2） | 完了（PR #36） |
 | 23 | [5-2-tasks-screen.md](5-2-tasks-screen.md) | S5「やること」の画面（予定ごと・期限順・自分の担当、完了、担当、手動の追加） | 完了（PR #37。[5-2-review-fixes.md](5-2-review-fixes.md) 反映済み）。実機確認済み（5-1 の API を含む） |
-| 24 | [perf-routines-instant-actions.md](perf-routines-instant-actions.md) | 「繰り返し」の回の操作を、押した瞬間に画面へ反映する（実機確認の指摘） | 指示済み |
-| 25 | [5-2-followup-task-event-picker.md](5-2-followup-task-event-picker.md) | 「やること」の画面から、予定を選んでやることを足す（実機確認の要望）。スクリーンショットの書き出しの修正を含む | 未着手（24 のマージ後） |
+| 24 | [perf-routines-instant-actions.md](perf-routines-instant-actions.md) | 「繰り返し」の回の操作を、押した瞬間に画面へ反映する（実機確認の指摘） | 完了（PR #38）。実機確認待ち |
+| 25 | [5-2-followup-task-event-picker.md](5-2-followup-task-event-picker.md) | 「やること」の画面から、予定を選んでやることを足す（実機確認の要望）。スクリーンショットの書き出しの修正を含む | 指示済み |
 
 前の PR がマージされてから次に着手する（同じ画面を続けて変更するため、同時には進めない）。
