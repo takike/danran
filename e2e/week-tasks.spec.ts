@@ -292,9 +292,14 @@ function deferred() {
 interface Harness {
   setIdentity(identity: Identity): void;
   setTaskBehavior(behavior: TaskBehavior): void;
+  setTasks(tasks: Task[]): void;
+  holdNextTaskRequest(): { started: Promise<void>; release(): void };
+  waitForTaskResponse(index: number): Promise<void>;
   releaseTasks(): void;
   tasksStarted: Promise<void>;
   taskRequests: string[];
+  taskResponses: Promise<void>[];
+  weekRequests: string[];
 }
 
 async function installHarness(
@@ -302,10 +307,16 @@ async function installHarness(
   options: { taskBehavior?: TaskBehavior; tasks?: Task[] } = {},
 ): Promise<Harness> {
   let identity: Identity = { userId: USER_A, familyId: FAMILY_A, familyName: '合成家 A' };
-  const tasks = options.tasks ?? taskFixture();
+  let tasks = options.tasks ?? taskFixture();
   const taskRequests: string[] = [];
+  const taskResponses: Promise<void>[] = [];
+  const weekRequests: string[] = [];
   const tasksGate = deferred();
   const tasksStarted = deferred();
+  const queuedTaskGates: Array<{
+    gate: ReturnType<typeof deferred>;
+    started: ReturnType<typeof deferred>;
+  }> = [];
   let taskBehavior = options.taskBehavior ?? 'ready';
   await page.route('**/api/auth/me', async (route) =>
     fulfill(route, {
@@ -317,6 +328,13 @@ async function installHarness(
   );
   await page.route('**/api/families/*/week**', async (route) => {
     const url = new URL(route.request().url());
+    weekRequests.push(
+      url.pathname.endsWith('/week/personal')
+        ? 'personal'
+        : url.pathname.endsWith('/week/busy')
+          ? 'busy'
+          : 'week',
+    );
     const start = (url.searchParams.get('start') ?? BASE_WEEK) as DateKey;
     if (url.pathname.endsWith('/week/personal')) {
       const week = makeWeek(identity, start);
@@ -355,18 +373,31 @@ async function installHarness(
   await page.route('**/api/families/*/tasks**', async (route: Route) => {
     const url = new URL(route.request().url());
     const familyId = url.pathname.split('/')[3] ?? identity.familyId;
-    const requestUserId = identity.userId;
-    taskRequests.push(`${identity.userId}:${familyId}`);
+    const requestIdentity = { ...identity };
+    const requestBehavior = taskBehavior;
+    const requestTasks = structuredClone(tasks);
+    taskRequests.push(`${requestIdentity.userId}:${familyId}`);
     if (route.request().method() === 'GET' && url.pathname.endsWith('/tasks')) {
-      if (taskBehavior === 'delayed' && requestUserId === USER_A && familyId === FAMILY_A) {
+      const responseSignal = deferred();
+      taskResponses.push(responseSignal.promise);
+      const queuedGate = queuedTaskGates.shift();
+      if (queuedGate) {
+        queuedGate.started.resolve();
+        await queuedGate.gate.promise;
+      }
+      if (
+        requestBehavior === 'delayed' &&
+        requestIdentity.userId === USER_A &&
+        familyId === FAMILY_A
+      ) {
         tasksStarted.resolve();
         await tasksGate.promise;
       }
-      if (taskBehavior === 'failure') {
+      if (requestBehavior === 'failure') {
         await fulfill(route, { error: 'synthetic tasks failure', code: 'INTERNAL_ERROR' }, 500);
       } else {
         const accountTasks =
-          requestUserId === USER_B
+          requestIdentity.userId === USER_B
             ? [
                 makeTask(
                   familyId === FAMILY_B ? 'task_family_b' : 'task_b_private',
@@ -374,9 +405,10 @@ async function installHarness(
                   { kind: 'date', dueAt: '2026-10-06' },
                 ),
               ]
-            : tasks;
+            : requestTasks;
         await fulfill(route, { tasks: accountTasks });
       }
+      responseSignal.resolve();
       return;
     }
     if (route.request().method() === 'PATCH') {
@@ -406,11 +438,27 @@ async function installHarness(
     setTaskBehavior(next) {
       taskBehavior = next;
     },
+    setTasks(next) {
+      tasks = next;
+    },
+    holdNextTaskRequest() {
+      const gate = deferred();
+      const started = deferred();
+      queuedTaskGates.push({ gate, started });
+      return { started: started.promise, release: gate.resolve };
+    },
+    waitForTaskResponse(index) {
+      const response = taskResponses[index];
+      if (!response) throw new Error(`Task response ${index} has not started`);
+      return response;
+    },
     releaseTasks() {
       tasksGate.resolve();
     },
     tasksStarted: tasksStarted.promise,
     taskRequests,
+    taskResponses,
+    weekRequests,
   };
 }
 
@@ -474,7 +522,14 @@ test('shows deadline links without changing day layout and counts only eligible 
 
   const deadline = page.getByTestId('week-deadline-2026-10-06-task_tue_early');
   await expect(deadline).toHaveAttribute('href', /\/tasks$/);
-  await expect(deadline).toHaveAttribute('aria-label', /朝の締切.*水曜の家族予定/);
+  await expect(deadline).toHaveAttribute(
+    'aria-label',
+    /2026年10月6日 火曜日が期限.*朝の締切.*水曜の家族予定/,
+  );
+  await expect(page.getByTestId('week-deadlines-more-2026-10-06')).toHaveAttribute(
+    'aria-label',
+    '2026年10月6日 火曜日が期限のやることをすべて表示（ほか1件）',
+  );
   await expect(
     page.getByRole('button', { name: /水曜の家族予定.*やること 残り 4 件/ }),
   ).toBeVisible();
@@ -498,7 +553,7 @@ test('shows deadline links without changing day layout and counts only eligible 
   await expect(page.getByRole('heading', { name: 'やること', exact: true })).toBeVisible();
 });
 
-test('keeps the week visible when tasks load slowly or fail', async ({ page }) => {
+test('keeps the week visible when tasks load slowly or a refresh fails', async ({ page }) => {
   const harness = await installHarness(page, { taskBehavior: 'delayed' });
   await page.goto(`/?week=${BASE_WEEK}`);
   await expect(page.getByTestId('home-screen')).toBeVisible();
@@ -506,14 +561,149 @@ test('keeps the week visible when tasks load slowly or fail', async ({ page }) =
   await harness.tasksStarted;
   await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toHaveCount(0);
   harness.releaseTasks();
+  await harness.waitForTaskResponse(0);
   await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toBeVisible();
 
   harness.setTaskBehavior('failure');
   await simulateTabReturn(page);
-  await expect.poll(() => harness.taskRequests.length).toBeGreaterThan(1);
+  await expect.poll(() => harness.taskResponses.length).toBeGreaterThan(1);
+  await harness.waitForTaskResponse(1);
   await expect(page.getByText('水曜の家族予定', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toBeVisible();
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 4 件',
+  );
+});
+
+test('keeps the week visible without task markers when the initial task request fails', async ({
+  page,
+}) => {
+  const harness = await installHarness(page, { taskBehavior: 'failure' });
+  await page.goto(`/?week=${BASE_WEEK}`);
+  await expect.poll(() => harness.taskResponses.length).toBeGreaterThan(0);
+  await harness.waitForTaskResponse(0);
+
+  await expect(page.getByTestId('home-screen')).toBeVisible();
+  await expect(page.getByText('水曜の家族予定', { exact: true })).toBeVisible();
   await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toHaveCount(0);
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('keeps cached task markers and day heights while a focus refresh is pending', async ({
+  page,
+}) => {
+  const harness = await installHarness(page);
+  await page.goto(`/?week=${BASE_WEEK}`);
+  const earlyDeadline = page.getByTestId('week-deadline-2026-10-06-task_tue_early');
+  const personalEvent = page.getByTestId('personal-event-evt_personal');
+  await expect(earlyDeadline).toBeVisible();
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 4 件',
+  );
+  await expect(personalEvent).toBeVisible();
+
+  const compactDay = page.locator('[data-testid="week-day"][data-date="2026-10-06"]');
+  const expandedCard = page
+    .locator('[data-testid="week-day"][data-date="2026-10-07"]')
+    .getByTestId('expanded-day-card');
+  const compactHeight = (await compactDay.boundingBox())?.height;
+  const expandedHeight = (await expandedCard.boundingBox())?.height;
+  expect(compactHeight).toBeDefined();
+  expect(expandedHeight).toBeDefined();
+
+  const refreshedTasks = taskFixture();
+  const refreshedEarlyTask = refreshedTasks.find((task) => task.id === 'task_tue_early');
+  const refreshedWednesdayTask = refreshedTasks.find((task) => task.id === 'task_wed');
+  expect(refreshedEarlyTask).toBeDefined();
+  expect(refreshedWednesdayTask).toBeDefined();
+  if (refreshedEarlyTask) refreshedEarlyTask.title = '更新後の朝の締切';
+  if (refreshedWednesdayTask) refreshedWednesdayTask.doneAt = 1_791_290_000;
+  harness.setTasks(refreshedTasks);
+  const weekRequestCounts = Object.fromEntries(
+    ['week', 'personal', 'busy'].map((kind) => [
+      kind,
+      harness.weekRequests.filter((request) => request === kind).length,
+    ]),
+  );
+  const heldRefresh = harness.holdNextTaskRequest();
+  await simulateTabReturn(page);
+  await heldRefresh.started;
+  await expect
+    .poll(() =>
+      ['week', 'personal', 'busy'].every(
+        (kind) =>
+          harness.weekRequests.filter((request) => request === kind).length >
+          (weekRequestCounts[kind] ?? 0),
+      ),
+    )
+    .toBe(true);
+  await expect(personalEvent).toBeVisible();
+  await expect(earlyDeadline).toBeVisible();
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 4 件',
+  );
+  expect((await compactDay.boundingBox())?.height).toBe(compactHeight);
+  expect((await expandedCard.boundingBox())?.height).toBe(expandedHeight);
+
+  heldRefresh.release();
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toContainText(
+    '更新後の朝の締切',
+  );
+  await harness.waitForTaskResponse(1);
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 3 件',
+  );
+});
+
+test('shows cached task markers immediately when returning from tasks during a refresh', async ({
+  page,
+}) => {
+  const harness = await installHarness(page);
+  await page.goto(`/?week=${BASE_WEEK}`);
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toBeVisible();
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 4 件',
+  );
+  await harness.waitForTaskResponse(0);
+
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: 'やること', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await expect.poll(() => harness.taskResponses.length).toBeGreaterThan(1);
+  await harness.waitForTaskResponse(1);
+
+  const refreshedTasks = taskFixture();
+  const refreshedEarlyTask = refreshedTasks.find((task) => task.id === 'task_tue_early');
+  const refreshedWednesdayTask = refreshedTasks.find((task) => task.id === 'task_wed');
+  expect(refreshedEarlyTask).toBeDefined();
+  expect(refreshedWednesdayTask).toBeDefined();
+  if (refreshedEarlyTask) refreshedEarlyTask.title = '更新後の朝の締切';
+  if (refreshedWednesdayTask) refreshedWednesdayTask.doneAt = 1_791_290_000;
+  harness.setTasks(refreshedTasks);
+  const heldRefresh = harness.holdNextTaskRequest();
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`\\?week=${BASE_WEEK}$`));
+  await heldRefresh.started;
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toBeVisible();
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 4 件',
+  );
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).not.toContainText(
+    '更新後の朝の締切',
+  );
+
+  heldRefresh.release();
+  await expect(page.getByTestId('week-deadline-2026-10-06-task_tue_early')).toContainText(
+    '更新後の朝の締切',
+  );
+  await harness.waitForTaskResponse(2);
+  await expect(page.getByTestId('week-event-task-count-evt_weekday')).toHaveText(
+    'やること 残り 3 件',
+  );
 });
 
 test('reflects task completion from the tasks page and keeps long labels inside the viewport', async ({

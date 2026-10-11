@@ -224,7 +224,7 @@ function DeadlineLinks({
             key={task.id}
             to="/tasks"
             data-testid={`week-deadline-${date}-${task.id}`}
-            aria-label={`${date}が期限: ${label}`}
+            aria-label={`${formatFullDateLabel(date)}が期限: ${label}`}
             title={label}
             className="inline-flex min-h-[var(--tap-target-min)] min-w-0 max-w-full items-center rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           >
@@ -239,7 +239,7 @@ function DeadlineLinks({
         <Link
           to="/tasks"
           data-testid={`week-deadlines-more-${date}`}
-          aria-label={`${date}が期限のやることをすべて表示（ほか${extraCount}件）`}
+          aria-label={`${formatFullDateLabel(date)}が期限のやることをすべて表示（ほか${extraCount}件）`}
           className="inline-flex min-h-[var(--tap-target-min)] shrink-0 items-center rounded-[var(--radius-sm)] px-[var(--spacing-sm)] text-xs text-deadline underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         >
           ほか {extraCount} 件
@@ -1006,13 +1006,13 @@ export default function WeekPage({
     isCurrentSession ? familyId : undefined,
   );
   const taskQueryKey = [...TASKS_QUERY_KEY, userId, familyId] as const;
-  const taskQueryState = queryClient.getQueryState<Task[]>(taskQueryKey);
+  const taskQueryState = queryClient
+    .getQueryCache()
+    .find({ queryKey: taskQueryKey, exact: true })?.state;
   const taskDataIsCurrent = Boolean(
     isCurrentSession &&
-      taskQueryState?.status === 'success' &&
-      taskQueryState.data === tasksQuery.data &&
-      tasksQuery.status === 'success' &&
-      !tasksQuery.isFetching,
+      taskQueryState?.data !== undefined &&
+      taskQueryState.data === tasksQuery.data,
   );
   const weekTaskPresentation = taskDataIsCurrent
     ? buildWeekTaskPresentation(tasksQuery.data ?? [])
