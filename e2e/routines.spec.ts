@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { getRoutineInstanceStatus } from '../src/shared/domain/routineInstances';
 import type { FamilyPublic } from '../src/shared/schemas/family';
 import type {
   Routine,
@@ -154,6 +155,12 @@ async function mockRoutineApis(
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   let signalInstanceMutationStarted: () => void = () => {};
   let releaseInstanceMutation: () => void = () => {};
+  const instanceMutationBarriers: Array<{
+    started: Promise<void>;
+    release: () => void;
+    startedResolve: () => void;
+    gate: Promise<void>;
+  }> = [];
   const instanceMutationStarted = new Promise<void>((resolve) => {
     signalInstanceMutationStarted = resolve;
   });
@@ -229,6 +236,12 @@ async function mockRoutineApis(
           signalInstanceMutationStarted();
           await instanceMutationGate;
         }
+        const nextMutationBarrier = instanceMutationBarriers.shift();
+        if (nextMutationBarrier) {
+          nextMutationBarrier.startedResolve();
+          await nextMutationBarrier.gate;
+          await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+        }
         if (failNextInstanceMutation) {
           failNextInstanceMutation = false;
           await route.fulfill(
@@ -250,15 +263,29 @@ async function mockRoutineApis(
             ...current,
             start: current.originalStart,
             end: current.originalEnd,
-            status: 'normal',
+            status: getRoutineInstanceStatus({
+              originalStart: current.originalStart,
+              originalEnd: current.originalEnd,
+              start: current.originalStart,
+              end: current.originalEnd,
+            }),
+            autoSkipReason: null,
           };
         } else {
           const move = body as { date: string; startTime: string; endTime: string };
+          const start = `${move.date}T${move.startTime}:00+09:00`;
+          const end = `${move.date}T${move.endTime}:00+09:00`;
           updated = {
             ...current,
-            start: `${move.date}T${move.startTime}:00+09:00`,
-            end: `${move.date}T${move.endTime}:00+09:00`,
-            status: 'moved',
+            start,
+            end,
+            status: getRoutineInstanceStatus({
+              originalStart: current.originalStart,
+              originalEnd: current.originalEnd,
+              start,
+              end,
+            }),
+            autoSkipReason: null,
           };
         }
         routines = routines.map((candidate) =>
@@ -343,6 +370,18 @@ async function mockRoutineApis(
         release = resolve;
       });
       heldListResponse = { started, release, startedResolve, gate };
+      return { started, release };
+    },
+    holdNextInstanceMutation: () => {
+      let startedResolve!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        startedResolve = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      instanceMutationBarriers.push({ started, release, startedResolve, gate });
       return { started, release };
     },
     setFailNextInstanceMutation: () => {
@@ -826,6 +865,219 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
   });
 
+  test('shows an optimistic skip while saving, locks its series, and keeps another series usable', async ({
+    page,
+  }) => {
+    const conflictEvent = {
+      id: 'event-instant-skip',
+      title: '運動会',
+      time: {
+        kind: 'timed' as const,
+        start: '2026-10-13T17:00:00+09:00',
+        endExclusive: '2026-10-13T18:00:00+09:00',
+      },
+    };
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-instant-skip',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [
+              { ...instance('instant-skip', '2026-10-13'), conflicts: [conflictEvent] },
+              instance('instant-skip-next', '2026-10-20'),
+            ],
+          },
+        }),
+        routine({ id: 'routine-other-series', title: '水泳' }),
+      ],
+    });
+    await openRoutinePage(page);
+    const piano = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const swim = page.getByTestId('routine-card').filter({ hasText: '水泳' });
+    const chip = piano.getByTestId('routine-instance-chip-instant-skip');
+    await expect(piano.getByTestId('routine-conflicts-instant-skip')).toBeVisible();
+    await chip.click();
+    const actions = piano.getByTestId('routine-instance-actions-instant-skip');
+    const mutation = api.holdNextInstanceMutation();
+    await actions.getByTestId('routine-instance-skip').evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await mutation.started;
+
+    await expect(chip).toContainText('お休み');
+    await expect(chip).toContainText('保存中');
+    await expect(chip).toHaveAccessibleName(/保存中/);
+    await expect(piano.getByTestId('routine-conflicts-instant-skip')).toHaveCount(0);
+    await expect(piano.getByTestId('routine-skip-holidays-routine-instant-skip')).toBeDisabled();
+    await expect(piano.getByTestId('routine-instance-chip-instant-skip-next')).toBeDisabled();
+    await expect(swim.getByTestId('routine-skip-holidays-routine-other-series')).toBeEnabled();
+    const otherChip = swim.getByTestId('routine-instance-chip-instance-routine-other-series-1');
+    await expect(otherChip).toBeEnabled();
+    expect(api.instanceMutations).toHaveLength(1);
+
+    await otherChip.click();
+    await swim
+      .getByTestId('routine-instance-actions-instance-routine-other-series-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(otherChip).toContainText('お休み');
+    await expect.poll(() => api.instanceMutations).toHaveLength(2);
+    await expect(chip).toContainText('お休み');
+    await expect(chip).toContainText('保存中');
+    await expect(piano.getByTestId('routine-conflicts-instant-skip')).toHaveCount(0);
+
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expectNoHorizontalOverflow(page);
+      await expect(chip).toContainText('保存中');
+    }
+    mutation.release();
+    await expect(chip).not.toContainText('保存中');
+    await expect(chip).toContainText('お休み');
+  });
+
+  test('restores an automatic skip immediately and keeps its conflict until the refreshed list arrives', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-instant-restore',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [
+              {
+                ...instance(
+                  'instant-restore',
+                  '2026-10-13',
+                  'skipped',
+                  null,
+                  '17:00',
+                  '18:00',
+                  'holiday',
+                ),
+                conflicts: [
+                  {
+                    id: 'restore-conflict',
+                    title: '運動会',
+                    time: {
+                      kind: 'timed',
+                      start: '2026-10-13T17:00:00+09:00',
+                      endExclusive: '2026-10-13T18:00:00+09:00',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const chip = card.getByTestId('routine-instance-chip-instant-restore');
+    await chip.click();
+    const actions = card.getByTestId('routine-instance-actions-instant-restore');
+    const mutation = api.holdNextInstanceMutation();
+    await actions.getByTestId('routine-instance-restore').click();
+    await mutation.started;
+
+    await expect(chip).toContainText('10/13');
+    await expect(chip).not.toContainText('お休み');
+    await expect(chip).not.toContainText('祝日');
+    await expect(chip).toContainText('保存中');
+    await expect(card.getByTestId('routine-conflicts-instant-restore')).toBeVisible();
+    await expect(card.getByTestId('routine-instance-actions-instant-restore')).toHaveCount(0);
+    mutation.release();
+    await expect(chip).not.toContainText('保存中');
+    expect(api.instanceMutations).toMatchObject([
+      { routineId: 'routine-instant-restore', instanceId: 'instant-restore', action: 'restore' },
+    ]);
+  });
+
+  test('closes the move form immediately and shows the requested time before the API response', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-instant-move',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [
+              {
+                ...instance('instant-move', '2026-10-13'),
+                conflicts: [
+                  {
+                    id: 'move-conflict',
+                    title: '運動会',
+                    time: {
+                      kind: 'timed',
+                      start: '2026-10-13T17:00:00+09:00',
+                      endExclusive: '2026-10-13T18:00:00+09:00',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const chip = card.getByTestId('routine-instance-chip-instant-move');
+    const conflictPanel = card.getByTestId('routine-conflicts-instant-move');
+    await conflictPanel.getByTestId('routine-conflict-move-instant-move').click();
+    const actions = card.getByTestId('routine-instance-actions-instant-move');
+    await actions.getByTestId('routine-instance-move-date').fill('2026-10-24');
+    await actions.getByTestId('routine-instance-move-start').fill('19:15');
+    await actions.getByTestId('routine-instance-move-end').fill('20:15');
+    const mutation = api.holdNextInstanceMutation();
+    await actions.getByTestId('routine-instance-move-save').click();
+    await mutation.started;
+
+    await expect(card.getByTestId('routine-instance-actions-instant-move')).toHaveCount(0);
+    await expect(chip).toContainText('10/24');
+    await expect(chip).toContainText('保存中');
+    await expect(conflictPanel).toBeVisible();
+    expect(api.instanceMutations).toMatchObject([
+      {
+        routineId: 'routine-instant-move',
+        instanceId: 'instant-move',
+        action: 'move',
+        body: { date: '2026-10-24', startTime: '19:15', endTime: '20:15' },
+      },
+    ]);
+    mutation.release();
+    await expect(chip).not.toContainText('保存中');
+    await expect(conflictPanel).toHaveCount(0);
+
+    await chip.click();
+    const movedActions = card.getByTestId('routine-instance-actions-instant-move');
+    await movedActions.getByTestId('routine-instance-change-move').click();
+    await expect(movedActions.getByTestId('routine-instance-move-date')).toHaveValue('2026-10-13');
+    await expect(movedActions.getByTestId('routine-instance-move-start')).toHaveValue('17:00');
+    await expect(movedActions.getByTestId('routine-instance-move-end')).toHaveValue('18:00');
+    const restoreDateMutation = api.holdNextInstanceMutation();
+    await movedActions.getByTestId('routine-instance-move-save').click();
+    await restoreDateMutation.started;
+    await expect(chip).toContainText('10/13');
+    await expect(chip).not.toContainText('振替');
+    await expect(chip).toContainText('保存中');
+    restoreDateMutation.release();
+    await expect(chip).not.toContainText('保存中');
+    await expect(chip).not.toContainText('振替');
+  });
+
   test('keeps the updated chip and exact list DOM while the post-mutation list refetch is pending', async ({
     page,
   }) => {
@@ -1076,7 +1328,9 @@ test.describe('Task 3-1: recurring routines', () => {
     });
   });
 
-  test('keeps move save and cancel readable while saving', async ({ page }) => {
+  test('keeps move controls readable before saving and exposes pending state on the chip', async ({
+    page,
+  }) => {
     const api = await mockRoutineApis(page, {
       holdInstanceMutation: true,
       routines: [
@@ -1105,13 +1359,14 @@ test.describe('Task 3-1: recurring routines', () => {
 
     const saveRequest = save.click();
     await api.instanceMutationStarted;
-    await expect(save).toHaveText('保存中...');
-    await expect(save).toBeDisabled();
-    await expectButtonPalette(save, 'accent', 'surface');
-    await expect(cancel).toBeDisabled();
-    await expectButtonPalette(cancel, 'surface', 'ink');
+    await expect(actions).toHaveCount(0);
+    const chip = card.getByTestId('routine-instance-chip-instance-move-colors');
+    await expect(chip).toContainText('保存中');
+    await expect(chip).toHaveAccessibleName(/保存中/);
+    await expect(chip).toBeDisabled();
     api.releaseInstanceMutation();
     await saveRequest;
+    await expect(chip).not.toContainText('保存中');
     expect(api.instanceMutations).toHaveLength(1);
   });
 
@@ -1182,13 +1437,19 @@ test.describe('Task 3-1: recurring routines', () => {
     const chip = errorCard.getByTestId('routine-instance-chip-instance-error');
     await expect(chip).toContainText('10/13');
     await expect(errorCard.getByTestId('routine-conflicts-instance-error')).toBeVisible();
+    const mutation = api.holdNextInstanceMutation();
     await errorCard.getByTestId('routine-conflict-skip-instance-error').click();
-    const actions = errorCard.getByTestId('routine-instance-actions-instance-error');
-    await expect(actions.getByRole('alert')).toHaveText(
+    await mutation.started;
+    await expect(chip).toContainText('お休み');
+    await expect(chip).toContainText('保存中');
+    await expect(errorCard.getByTestId('routine-conflicts-instance-error')).toHaveCount(0);
+    mutation.release();
+    await expect(errorCard.getByRole('alert')).toHaveText(
       '変更を保存できませんでした。時間をおいて再度お試しください。',
     );
     await expect(chip).toContainText('10/13');
     await expect(chip).not.toContainText('お休み');
+    await expect(errorCard.getByTestId('routine-conflicts-instance-error')).toBeVisible();
     expect(api.instanceMutations).toHaveLength(1);
 
     const unavailableCard = page.getByTestId('routine-card').filter({ hasText: '水泳' });
@@ -1206,6 +1467,88 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(
       unknownCard.getByTestId('routine-conflicts-unknown-conflict-instance'),
     ).toHaveCount(0);
+  });
+
+  test('rolls back a failed move and reopens the form with its draft intact', async ({ page }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({
+          id: 'routine-failed-move',
+          title: 'ピアノ',
+          upcoming: {
+            status: 'ready',
+            conflictsStatus: 'ready',
+            instances: [instance('failed-move', '2026-10-13')],
+          },
+        }),
+      ],
+      failNextInstanceMutation: true,
+    });
+    await openRoutinePage(page);
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const chip = card.getByTestId('routine-instance-chip-failed-move');
+    await chip.click();
+    const actions = card.getByTestId('routine-instance-actions-failed-move');
+    await actions.getByTestId('routine-instance-set-move').click();
+    await actions.getByTestId('routine-instance-move-date').fill('2026-10-30');
+    await actions.getByTestId('routine-instance-move-start').fill('19:00');
+    await actions.getByTestId('routine-instance-move-end').fill('20:15');
+    const mutation = api.holdNextInstanceMutation();
+    await actions.getByTestId('routine-instance-move-save').click();
+    await mutation.started;
+    await expect(card.getByTestId('routine-instance-actions-failed-move')).toHaveCount(0);
+    await expect(chip).toContainText('10/30');
+    await expect(chip).toContainText('保存中');
+    mutation.release();
+
+    await expect(chip).toContainText('10/13');
+    await expect(chip).not.toContainText('10/30');
+    await expect(card.getByRole('alert')).toHaveText(
+      '変更を保存できませんでした。時間をおいて再度お試しください。',
+    );
+    const reopenedActions = card.getByTestId('routine-instance-actions-failed-move');
+    await expect(reopenedActions.getByTestId('routine-instance-move-date')).toHaveValue(
+      '2026-10-30',
+    );
+    await expect(reopenedActions.getByTestId('routine-instance-move-start')).toHaveValue('19:00');
+    await expect(reopenedActions.getByTestId('routine-instance-move-end')).toHaveValue('20:15');
+  });
+
+  test('ignores a held instance result after the signed-in account changes', async ({ page }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-account-pending', title: 'アカウントAの予定' })],
+    });
+    await openRoutinePage(page);
+    const accountACard = page.getByTestId('routine-card').filter({ hasText: 'アカウントAの予定' });
+    const chip = accountACard.getByTestId(
+      'routine-instance-chip-instance-routine-account-pending-1',
+    );
+    await chip.click();
+    const mutation = api.holdNextInstanceMutation();
+    await accountACard
+      .getByTestId('routine-instance-actions-instance-routine-account-pending-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await mutation.started;
+    await expect(chip).toContainText('お休み');
+
+    api.setRoutines([routine({ id: 'routine-account-b-pending', title: 'アカウントBの予定' })]);
+    api.setAccountUserId('usr_routine_partner');
+    const delayedList = api.holdNextListResponse();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().includes('/api/auth/me') && response.status() === 200,
+      ),
+      triggerVisibilityCycle(page),
+    ]);
+    await delayedList.started;
+    await expect(page.getByText('アカウントAの予定')).toHaveCount(0);
+    delayedList.release();
+    await expect(page.getByTestId('routine-card')).toContainText('アカウントBの予定');
+
+    mutation.release();
+    await expect(page.getByTestId('routine-card')).toContainText('アカウントBの予定');
+    await expect(page.getByText('アカウントAの予定')).toHaveCount(0);
   });
 
   test('saves holiday settings and continues 20-item batches while locking the routine card', async ({

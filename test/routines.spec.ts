@@ -46,6 +46,13 @@ describe('Task 3-1 routine API', () => {
   let conflictPagination = false;
   let eventGetCount = 0;
   let eventGetUnauthorizedOnce = false;
+  let eventGetBarrier: {
+    startedIds: string[];
+    gate: Promise<void>;
+    started: Promise<void>;
+    release: () => void;
+    signalStarted: () => void;
+  } | null = null;
   let instancePageItems = new Map<string, Record<string, unknown>[][]>();
   let deleteStatus = 204;
   let refreshTokenValues: string[] = [];
@@ -64,6 +71,7 @@ describe('Task 3-1 routine API', () => {
     conflictPagination = false;
     eventGetCount = 0;
     eventGetUnauthorizedOnce = false;
+    eventGetBarrier = null;
     instancePageItems = new Map();
     deleteStatus = 204;
     refreshTokenValues = [];
@@ -154,6 +162,12 @@ describe('Task 3-1 routine API', () => {
       }
       if (request.method === 'GET' && url.pathname.includes('/events/')) {
         eventGetCount += 1;
+        const barrier = eventGetBarrier;
+        if (barrier !== null) {
+          barrier.startedIds.push(eventId);
+          if (barrier.startedIds.length === 2) barrier.signalStarted();
+          await barrier.gate;
+        }
         if (eventGetUnauthorizedOnce) {
           eventGetUnauthorizedOnce = false;
           return Response.json(
@@ -1106,6 +1120,43 @@ describe('Task 3-1 routine API', () => {
       private: { opaque: 'keep-me' },
     });
     expect(patchBodies.every((body) => !('extendedProperties' in body))).toBe(true);
+  });
+
+  it('starts the instance and master reads together and shares one access-token request', async () => {
+    const cookie = await makeCaller();
+    const created = await request('POST', '/api/families/routine_family/routines', cookie, payload);
+    const { routineId, eventId } = (await created.json()) as { routineId: string; eventId: string };
+    addInstance('instance_parallel', eventId, '2026-10-13');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    eventGetBarrier = {
+      startedIds: [],
+      gate,
+      started,
+      release,
+      signalStarted,
+    };
+
+    const refreshCountBeforeAction = refreshTokenValues.length;
+    const responsePromise = request(
+      'POST',
+      `/api/families/routine_family/routines/${routineId}/instances/instance_parallel/skip`,
+      cookie,
+    );
+    await eventGetBarrier.started;
+    expect(eventGetBarrier.startedIds.sort()).toEqual(['instance_parallel', eventId].sort());
+
+    eventGetBarrier.release();
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(refreshTokenValues).toHaveLength(refreshCountBeforeAction + 1);
   });
 
   it('rejects foreign, other-series, single, and missing instance IDs before patching', async () => {

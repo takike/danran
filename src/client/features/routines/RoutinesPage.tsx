@@ -17,12 +17,13 @@ import { formatRoutineRule } from '@shared/domain/routines';
 import {
   type Routine,
   type RoutineInput,
-  type RoutineInstance,
   type RoutineSettingsInput,
+  type RoutineUpcomingInstance,
   type WeekdayCode,
   createRoutineInputSchema,
 } from '@shared/schemas/routines';
 import { getTodayDateKey, getWeekday } from '@shared/time';
+import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, RefreshCw, Repeat, Trash2, X } from 'lucide-react';
 import type React from 'react';
@@ -602,6 +603,18 @@ export default function RoutinesPage(): React.ReactElement {
   const currentIdentity = user && family ? `${user.id}:${family.id}` : '';
   const identityRef = useRef('');
   const mountedRef = useRef(false);
+  const pendingInstanceUpdatesRef = useRef(
+    new Map<
+      string,
+      {
+        operationId: string;
+        routineId: string;
+        instance: RoutineUpcomingInstance;
+        confirmed: boolean;
+        needsReconcile: boolean;
+      }
+    >(),
+  );
   const previousIdentityRef = useRef(currentIdentity);
   identityRef.current = currentIdentity;
   useEffect(() => {
@@ -612,8 +625,111 @@ export default function RoutinesPage(): React.ReactElement {
   }, []);
   const routinesQuery = useQuery({
     queryKey: [...ROUTINE_QUERY_KEY, user?.id, family?.id] as const,
-    queryFn: ({ signal }) =>
-      family ? fetchRoutines(family.id, signal) : Promise.reject(new Error('Family is required')),
+    queryFn: async ({ signal }) => {
+      if (!family) throw new Error('Family is required');
+      const response = await fetchRoutines(family.id, signal);
+      if (!user) return response;
+      const prefix = `${user.id}:${family.id}:`;
+      const cachedRoutines =
+        queryClient.getQueryData<{ routines: Routine[] }>([
+          ...ROUTINE_QUERY_KEY,
+          user.id,
+          family.id,
+        ])?.routines ?? [];
+      const activeUpdates = [...pendingInstanceUpdatesRef.current.entries()].filter(([key]) =>
+        key.startsWith(prefix),
+      );
+      const mergePendingInstances = (
+        routineId: string,
+        instances: RoutineUpcomingInstance[],
+      ): RoutineUpcomingInstance[] => {
+        const updates = activeUpdates
+          .filter(([, update]) => update.routineId === routineId)
+          .map(([, update]) => update);
+        const merged = instances.map((instance) => {
+          const update = updates.find((item) => item.instance.id === instance.id);
+          return update
+            ? {
+                ...instance,
+                ...update.instance,
+                conflicts: update.confirmed ? instance.conflicts : update.instance.conflicts,
+              }
+            : instance;
+        });
+        for (const update of updates) {
+          if (!update.confirmed && !merged.some((instance) => instance.id === update.instance.id)) {
+            merged.push(update.instance);
+          }
+        }
+        const pendingIds = new Set(updates.map((update) => update.instance.id));
+        const pendingRows = merged.filter((instance) => pendingIds.has(instance.id));
+        const otherRows = merged
+          .filter((instance) => !pendingIds.has(instance.id))
+          .sort(
+            (left, right) =>
+              parseIsoInstantMilliseconds(left.originalStart) -
+              parseIsoInstantMilliseconds(right.originalStart),
+          );
+        return [...otherRows.slice(0, Math.max(0, 4 - pendingRows.length)), ...pendingRows].sort(
+          (left, right) =>
+            parseIsoInstantMilliseconds(left.originalStart) -
+            parseIsoInstantMilliseconds(right.originalStart),
+        );
+      };
+      const routines = response.routines.map((routine) => {
+        const hasPendingUpdate = activeUpdates.some(([key]) =>
+          key.startsWith(`${prefix}${routine.id}:`),
+        );
+        if (!hasPendingUpdate) return routine;
+        const cached = cachedRoutines.find((item) => item.id === routine.id);
+        if (routine.status !== 'ready' && cached?.status === 'ready') {
+          for (const [key, update] of activeUpdates) {
+            if (update.routineId === routine.id) {
+              pendingInstanceUpdatesRef.current.set(key, { ...update, needsReconcile: true });
+            }
+          }
+          return {
+            ...cached,
+            upcoming: {
+              ...routine.upcoming,
+              status: 'unavailable' as const,
+              instances: mergePendingInstances(routine.id, cached.upcoming.instances),
+            },
+          };
+        }
+        const baseInstances =
+          routine.upcoming.status === 'ready'
+            ? routine.upcoming.instances
+            : cached?.upcoming.status === 'ready'
+              ? cached.upcoming.instances
+              : [];
+        return {
+          ...routine,
+          upcoming: {
+            ...routine.upcoming,
+            instances: mergePendingInstances(routine.id, baseInstances),
+          },
+        };
+      });
+      for (const [pendingKey, update] of activeUpdates) {
+        const routineId = update.routineId;
+        if (routines.some((item) => item.id === routineId)) continue;
+        const cached = cachedRoutines.find((item) => item.id === routineId);
+        if (!cached || cached.status !== 'ready') continue;
+        pendingInstanceUpdatesRef.current.set(pendingKey, { ...update, needsReconcile: true });
+        routines.push({
+          ...cached,
+          upcoming: {
+            ...cached.upcoming,
+            instances: mergePendingInstances(routineId, cached.upcoming.instances),
+          },
+        });
+      }
+      return {
+        ...response,
+        routines,
+      };
+    },
     enabled: Boolean(user?.id && family?.id),
     staleTime: 0,
     retry: false,
@@ -650,6 +766,7 @@ export default function RoutinesPage(): React.ReactElement {
   useEffect(() => {
     if (previousIdentityRef.current === currentIdentity) return;
     previousIdentityRef.current = currentIdentity;
+    pendingInstanceUpdatesRef.current.clear();
     setDialogEverOpened(false);
     setDialogOpen(false);
     setDeletingId(null);
@@ -1227,15 +1344,52 @@ export default function RoutinesPage(): React.ReactElement {
                     onPendingChange={(pending) => {
                       setRoutineBusy(routine.id, pending);
                     }}
-                    onChanged={(instance: RoutineInstance) => {
+                    onChanged={(instance, keepOptimistic = false, operationId = '') => {
                       const queryKey = [...ROUTINE_QUERY_KEY, user.id, family.id] as const;
+                      const pendingKey = `${user.id}:${family.id}:${routine.id}:${instance.id}`;
+                      if (keepOptimistic && operationId) {
+                        const current = queryClient.getQueryData<{ routines: Routine[] }>(queryKey);
+                        const existing = current?.routines.find(
+                          (item) => item.id === routine.id,
+                        )?.upcoming;
+                        const existingInstance = existing?.instances.find(
+                          (row) => row.id === instance.id,
+                        );
+                        const conflicts =
+                          'conflicts' in instance
+                            ? instance.conflicts
+                            : instance.status === 'skipped'
+                              ? []
+                              : (existingInstance?.conflicts ?? []);
+                        const needsReconcile =
+                          pendingInstanceUpdatesRef.current.get(pendingKey)?.operationId ===
+                          operationId
+                            ? (pendingInstanceUpdatesRef.current.get(pendingKey)?.needsReconcile ??
+                              false)
+                            : false;
+                        pendingInstanceUpdatesRef.current.set(pendingKey, {
+                          operationId,
+                          routineId: routine.id,
+                          instance: {
+                            ...existingInstance,
+                            ...instance,
+                            conflicts,
+                          },
+                          confirmed: !('conflicts' in instance),
+                          needsReconcile,
+                        });
+                      } else if (
+                        pendingInstanceUpdatesRef.current.get(pendingKey)?.operationId ===
+                        operationId
+                      ) {
+                        pendingInstanceUpdatesRef.current.delete(pendingKey);
+                      }
                       queryClient.setQueryData<{ routines: Routine[] }>(queryKey, (current) => {
                         if (!current) return current;
                         return {
                           ...current,
                           routines: current.routines.map((item) => {
-                            if (item.id !== routine.id || item.upcoming.status !== 'ready')
-                              return item;
+                            if (item.id !== routine.id) return item;
                             const hasInstance = item.upcoming.instances.some(
                               (row) => row.id === instance.id,
                             );
@@ -1246,7 +1400,16 @@ export default function RoutinesPage(): React.ReactElement {
                                 instances: hasInstance
                                   ? item.upcoming.instances.map((row) =>
                                       row.id === instance.id
-                                        ? { ...row, ...instance, conflicts: row.conflicts }
+                                        ? {
+                                            ...row,
+                                            ...instance,
+                                            conflicts:
+                                              'conflicts' in instance
+                                                ? instance.conflicts
+                                                : instance.status === 'skipped'
+                                                  ? []
+                                                  : row.conflicts,
+                                          }
                                         : row,
                                     )
                                   : [
@@ -1258,6 +1421,23 @@ export default function RoutinesPage(): React.ReactElement {
                           }),
                         };
                       });
+                    }}
+                    onMutationSettled={(instanceId, operationId) => {
+                      const pendingKey = `${user.id}:${family.id}:${routine.id}:${instanceId}`;
+                      if (
+                        pendingInstanceUpdatesRef.current.get(pendingKey)?.operationId ===
+                        operationId
+                      ) {
+                        const needsReconcile =
+                          pendingInstanceUpdatesRef.current.get(pendingKey)?.needsReconcile ??
+                          false;
+                        pendingInstanceUpdatesRef.current.delete(pendingKey);
+                        if (needsReconcile) {
+                          void queryClient.invalidateQueries({
+                            queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id],
+                          });
+                        }
+                      }
                     }}
                   />
                 )}
