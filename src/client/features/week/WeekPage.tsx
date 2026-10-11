@@ -11,6 +11,7 @@ import {
   PERSONAL_WEEK_QUERY_KEY,
   usePersonalWeekQuery,
 } from '@client/features/settings/usePersonalEvents';
+import { TASKS_QUERY_KEY, useTasksQuery } from '@client/features/tasks/useTasks';
 import { BusyTimeline } from '@client/features/week/BusyTimeline';
 import { EventDialog } from '@client/features/week/EventDialog';
 import { BUSY_WEEK_QUERY_KEY, useBusyWeekQuery } from '@client/features/week/useBusyWeek';
@@ -27,9 +28,11 @@ import {
   getVisibleDayEvents,
   getVisibleDayLayout,
 } from '@shared/domain/weekPresentation';
+import { buildWeekTaskPresentation } from '@shared/domain/weekTasks';
 import { type BusyTimelineData, buildDayBusyTimeline } from '@shared/domain/weekendTimeline';
 import type { AuthUser } from '@shared/schemas/auth';
 import { type DateKey, dateKeySchema } from '@shared/schemas/date';
+import type { Task } from '@shared/schemas/tasks';
 import type { WeekDay, WeekEvent, WeekResponse } from '@shared/schemas/week';
 import { addCalendarWeeks, getMondayAnchor, getTodayDateKey } from '@shared/time';
 import {
@@ -46,7 +49,9 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
+  Check,
   CircleAlert,
+  Flag,
   LockKeyhole,
   Plus,
   RefreshCw,
@@ -75,6 +80,7 @@ interface EventEditorState {
 
 const memberColor = (member?: WeekMember): string =>
   member ? `var(--member-${member.color})` : 'var(--muted)';
+const EMPTY_TASK_COUNTS: ReadonlyMap<string, number> = new Map();
 
 function parseWeekAnchor(value: string | null): DateKey | undefined {
   if (!value) return undefined;
@@ -193,6 +199,76 @@ function ConflictBadge({ eventId }: { eventId: string }): React.ReactElement {
       重複
     </span>
   );
+}
+
+function DeadlineLinks({
+  date,
+  tasks,
+}: {
+  date: DateKey;
+  tasks: Task[];
+}): React.ReactElement | null {
+  if (tasks.length === 0) return null;
+  const visibleTasks = tasks.slice(0, 2);
+  const extraCount = tasks.length - visibleTasks.length;
+  return (
+    <div
+      data-testid={`week-deadlines-${date}`}
+      className="flex min-w-0 max-w-full flex-wrap items-center gap-[var(--spacing-xs)]"
+    >
+      {visibleTasks.map((task) => {
+        const eventTitle = task.linkedEvent.state === 'ready' ? task.linkedEvent.title : undefined;
+        const label = `締切 ${task.title}${eventTitle ? `（${eventTitle}）` : ''}`;
+        return (
+          <Link
+            key={task.id}
+            to="/tasks"
+            data-testid={`week-deadline-${date}-${task.id}`}
+            aria-label={`${formatFullDateLabel(date)}が期限: ${label}`}
+            title={label}
+            className="inline-flex min-h-[var(--tap-target-min)] min-w-0 max-w-full items-center rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            <span className="inline-flex min-h-[var(--tap-target-min)] min-w-0 max-w-full items-center gap-[var(--spacing-xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] text-xs font-medium text-deadline">
+              <Flag size={14} aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0 truncate">{label}</span>
+            </span>
+          </Link>
+        );
+      })}
+      {extraCount > 0 && (
+        <Link
+          to="/tasks"
+          data-testid={`week-deadlines-more-${date}`}
+          aria-label={`${formatFullDateLabel(date)}が期限のやることをすべて表示（ほか${extraCount}件）`}
+          className="inline-flex min-h-[var(--tap-target-min)] shrink-0 items-center rounded-[var(--radius-sm)] px-[var(--spacing-sm)] text-xs text-deadline underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        >
+          ほか {extraCount} 件
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function RemainingTaskCount({
+  eventId,
+  count,
+}: { eventId: string; count: number }): React.ReactElement | null {
+  if (count <= 0) return null;
+  return (
+    <span
+      data-testid={`week-event-task-count-${eventId}`}
+      aria-hidden="true"
+      className="inline-flex min-h-[var(--week-chip-min-height)] items-center gap-[var(--spacing-2xs)] rounded-[var(--radius-sm)] bg-deadline-tint px-[var(--spacing-sm)] text-xs font-medium text-deadline"
+    >
+      <Check size={14} aria-hidden="true" className="shrink-0" />
+      やること 残り {count} 件
+    </span>
+  );
+}
+
+function getRemainingTaskCount(event: WeekEvent, remainingByEventId: ReadonlyMap<string, number>) {
+  if (event.isRecurring) return 0;
+  return remainingByEventId.get(event.id) ?? 0;
 }
 
 function DateLabel({
@@ -387,6 +463,7 @@ function AddDayButton({
 function EventEditButton({
   event,
   isConflicted = false,
+  taskCount = 0,
   onEdit,
   disabled,
   children,
@@ -395,6 +472,7 @@ function EventEditButton({
 }: EventActions & {
   event: WeekEvent;
   isConflicted?: boolean;
+  taskCount?: number;
   children: React.ReactNode;
   className?: string;
   ariaDescribedBy?: string;
@@ -403,7 +481,7 @@ function EventEditButton({
     <button
       type="button"
       data-testid={`edit-event-${event.id}`}
-      aria-label={`予定を編集: ${event.title}${isConflicted ? '、重複' : ''}`}
+      aria-label={`予定を編集: ${event.title}${isConflicted ? '、重複' : ''}${taskCount > 0 ? `、やること 残り ${taskCount} 件` : ''}`}
       aria-describedby={ariaDescribedBy}
       disabled={disabled}
       onClick={(clickEvent) => onEdit(event, clickEvent.currentTarget)}
@@ -417,6 +495,7 @@ function EventEditButton({
 function CompactDay({
   day,
   events,
+  deadlines,
   conflictEventIds,
   personalEvents,
   members,
@@ -429,6 +508,7 @@ function CompactDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  deadlines: Task[];
   conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
@@ -447,12 +527,12 @@ function CompactDay({
       data-testid="week-day"
       data-date={day.date}
       data-layout="compact"
-      aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 && personalEvents.length === 0 ? '、予定なし' : ''}`}
+      aria-label={`${formatFullDateLabel(day.date)}${events.length === 0 && personalEvents.length === 0 && deadlines.length === 0 ? '、予定なし' : ''}`}
       className="relative grid min-h-[var(--tap-target-min)] grid-cols-[var(--week-date-column)_minmax(0,1fr)] items-center gap-[var(--spacing-sm)] border-b border-line py-[var(--spacing-xs)] last:border-0"
     >
       <DateLabel day={day} isToday={isToday} />
       <div
-        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] pr-[var(--tap-target-min)] ${events.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
+        className={`flex min-w-0 flex-wrap content-center items-center gap-[var(--spacing-xs)] pr-[var(--tap-target-min)] ${events.length > 0 || deadlines.length > 0 ? 'min-h-[var(--tap-target-min)] py-[var(--spacing-2xs)]' : ''}`}
       >
         {routineEvents.map((event) => (
           <EventEditButton
@@ -509,9 +589,10 @@ function CompactDay({
             ほか {personalEvents.length - 2} 件
           </button>
         )}
-        {events.length === 0 && personalEvents.length === 0 && (
+        {events.length === 0 && personalEvents.length === 0 && deadlines.length === 0 && (
           <span className="sr-only">予定なし</span>
         )}
+        <DeadlineLinks date={day.date} tasks={deadlines} />
       </div>
       <AddDayButton
         date={day.date}
@@ -526,6 +607,8 @@ function CompactDay({
 function ExpandedDay({
   day,
   events,
+  deadlines,
+  remainingByEventId,
   conflictEventIds,
   personalEvents,
   members,
@@ -537,6 +620,8 @@ function ExpandedDay({
 }: {
   day: WeekDay;
   events: WeekEvent[];
+  deadlines: Task[];
+  remainingByEventId: ReadonlyMap<string, number>;
   conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
@@ -576,11 +661,13 @@ function ExpandedDay({
               );
             }
             const event = entry.event;
+            const taskCount = getRemainingTaskCount(event, remainingByEventId);
             return (
               <li key={event.id} className="flex min-w-0 flex-col">
                 <EventEditButton
                   event={event}
                   isConflicted={conflictEventIds.has(event.id)}
+                  taskCount={taskCount}
                   onAdd={onAdd}
                   onEdit={onEdit}
                   disabled={disabled}
@@ -630,10 +717,16 @@ function ExpandedDay({
                     ))}
                   </div>
                 )}
+                {taskCount > 0 && (
+                  <div className="mt-[var(--spacing-xs)]">
+                    <RemainingTaskCount eventId={event.id} count={taskCount} />
+                  </div>
+                )}
               </li>
             );
           })}
         </ul>
+        <DeadlineLinks date={day.date} tasks={deadlines} />
       </Card>
       <AddDayButton date={day.date} onAdd={onAdd} disabled={disabled} />
     </li>
@@ -643,6 +736,7 @@ function ExpandedDay({
 function WeekendEvent({
   event,
   day,
+  remainingTaskCount,
   members,
   isConflicted,
   onAdd,
@@ -651,6 +745,7 @@ function WeekendEvent({
 }: {
   event: WeekEvent;
   day: WeekDay;
+  remainingTaskCount: number;
   members: WeekMember[];
   isConflicted: boolean;
 } & EventActions): React.ReactElement {
@@ -665,6 +760,7 @@ function WeekendEvent({
         <EventEditButton
           event={event}
           isConflicted={isConflicted}
+          taskCount={remainingTaskCount}
           onAdd={onAdd}
           onEdit={onEdit}
           disabled={disabled}
@@ -710,6 +806,9 @@ function WeekendEvent({
               </span>
             </span>
           ))}
+          {remainingTaskCount > 0 && (
+            <RemainingTaskCount eventId={event.id} count={remainingTaskCount} />
+          )}
         </div>
       </div>
     </li>
@@ -722,6 +821,8 @@ function WeekendDay({
   availability,
   selfMemberId,
   events,
+  deadlines,
+  remainingByEventId,
   conflictEventIds,
   personalEvents,
   members,
@@ -737,6 +838,8 @@ function WeekendDay({
   availability: BusyTimelineData;
   selfMemberId?: string;
   events: WeekEvent[];
+  deadlines: Task[];
+  remainingByEventId: ReadonlyMap<string, number>;
   conflictEventIds: ReadonlySet<string>;
   personalEvents: PersonalCalendarEvent[];
   members: WeekMember[];
@@ -806,6 +909,7 @@ function WeekendDay({
                 key={entry.event.id}
                 event={entry.event}
                 day={day}
+                remainingTaskCount={getRemainingTaskCount(entry.event, remainingByEventId)}
                 members={members}
                 isConflicted={conflictEventIds.has(entry.event.id)}
                 onAdd={onAdd}
@@ -818,6 +922,7 @@ function WeekendDay({
       ) : (
         <p className="mt-[var(--spacing-md)] mb-0 text-sm text-muted">予定なし</p>
       )}
+      <DeadlineLinks date={day.date} tasks={deadlines} />
       <BusyTimeline date={day.date} data={availability} selfMemberId={selfMemberId} />
       <div className="mt-[var(--spacing-xs)] flex justify-end">
         <Link
@@ -894,6 +999,25 @@ export default function WeekPage({
 
   const weekQuery = useWeekQuery(userId, invalidUrlWeek ? undefined : familyId, requestStart);
   const data = weekQuery.isError ? undefined : weekQuery.data;
+  const currentSession = queryClient.getQueryData<AuthUser | null>(['session']);
+  const isCurrentSession = currentSession?.id === userId;
+  const tasksQuery = useTasksQuery(
+    isCurrentSession ? userId : undefined,
+    isCurrentSession ? familyId : undefined,
+  );
+  const taskQueryKey = [...TASKS_QUERY_KEY, userId, familyId] as const;
+  const taskQueryState = queryClient
+    .getQueryCache()
+    .find({ queryKey: taskQueryKey, exact: true })?.state;
+  const taskDataIsCurrent = Boolean(
+    isCurrentSession &&
+      taskQueryState?.data !== undefined &&
+      taskQueryState.data === tasksQuery.data,
+  );
+  const weekTaskPresentation = taskDataIsCurrent
+    ? buildWeekTaskPresentation(tasksQuery.data ?? [])
+    : undefined;
+  const remainingByEventId = weekTaskPresentation?.remainingByEventId ?? EMPTY_TASK_COUNTS;
   const personalIdentity = `${userId}:${familyId}:${requestStart ?? ''}`;
   const personalWeekQuery = usePersonalWeekQuery(
     userId,
@@ -1056,11 +1180,13 @@ export default function WeekPage({
     await queryClient.cancelQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
     await queryClient.cancelQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
     await queryClient.cancelQueries({ queryKey: [...BUSY_WEEK_QUERY_KEY, userId] });
+    await queryClient.cancelQueries({ queryKey: [...TASKS_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: ['week', userId] });
     queryClient.removeQueries({ queryKey: ['families', userId] });
     queryClient.removeQueries({ queryKey: [...PERSONAL_WEEK_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: [...PERSONAL_CALENDARS_QUERY_KEY, userId] });
     queryClient.removeQueries({ queryKey: [...BUSY_WEEK_QUERY_KEY, userId] });
+    queryClient.removeQueries({ queryKey: [...TASKS_QUERY_KEY, userId] });
   }, [queryClient, userId]);
 
   useEffect(() => {
@@ -1392,6 +1518,8 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      deadlines={weekTaskPresentation?.deadlinesByDate.get(day.date) ?? []}
+                      remainingByEventId={remainingByEventId}
                       conflictEventIds={conflictEventIds}
                       personalEvents={getPersonalEventsForDate(
                         day.date,
@@ -1410,6 +1538,7 @@ export default function WeekPage({
                       key={day.date}
                       day={day}
                       events={events}
+                      deadlines={weekTaskPresentation?.deadlinesByDate.get(day.date) ?? []}
                       conflictEventIds={conflictEventIds}
                       personalEvents={getPersonalEventsForDate(
                         day.date,
@@ -1448,6 +1577,8 @@ export default function WeekPage({
                   availability={timelineForDay(day.date)}
                   selfMemberId={selfMemberId}
                   events={getVisibleEvents(day, data, hideRoutines)}
+                  deadlines={weekTaskPresentation?.deadlinesByDate.get(day.date) ?? []}
+                  remainingByEventId={remainingByEventId}
                   conflictEventIds={conflictEventIds}
                   personalEvents={getPersonalEventsForDate(day.date, personalEvents, hideRoutines)}
                   members={data.members}

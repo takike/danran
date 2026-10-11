@@ -2,6 +2,7 @@ import { type Page, expect, test } from '@playwright/test';
 import type { DateKey } from '../src/shared/schemas/date';
 import type { FamilyPublic } from '../src/shared/schemas/family';
 import type { PersonalWeekResponse } from '../src/shared/schemas/personal';
+import type { Task } from '../src/shared/schemas/tasks';
 import type { WeekEvent, WeekResponse } from '../src/shared/schemas/week';
 import type { BusyWeekResponse } from '../src/shared/schemas/week-busy';
 import { addCalendarDays, getWeekday } from '../src/shared/time/date';
@@ -36,6 +37,30 @@ interface MockOptions {
   longNames?: boolean;
   conflictFixture?: boolean;
   unusualDay?: 'one-event' | 'two-events' | 'dense-event';
+  tasks?: Task[];
+}
+
+function screenshotTasks(): Task[] {
+  return ['締切サンプル 1', '締切サンプル 2', '締切サンプル 3'].map((title, index) => ({
+    id: `task-week-screenshot-${index + 1}`,
+    title,
+    due: { kind: 'date', dueAt: '2026-10-06' },
+    doneAt: null,
+    assigneeMemberId: null,
+    source: 'manual',
+    linkedEvent: {
+      state: 'ready',
+      eventId: 'evt-weekday-oneoff',
+      title: '保護者会',
+      time: {
+        kind: 'timed',
+        start: '2026-10-07T18:30:00+09:00',
+        endExclusive: '2026-10-07T19:00:00+09:00',
+      },
+      memberIds: [CHILD],
+      items: [],
+    },
+  }));
 }
 
 function familyId(account: Account): string {
@@ -425,6 +450,13 @@ async function mockWeekApis(page: Page, options: MockOptions = {}): Promise<Mock
       body: JSON.stringify(makeWeek(anchor, family, options.unusualDay, options.conflictFixture)),
     });
   });
+  await page.route('**/api/families/*/tasks', async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ tasks: options.tasks ?? [] }),
+    }),
+  );
   await page.route('**/api/families/*/events', async (route) => {
     if (route.request().method() === 'POST') {
       createdEventCount++;
@@ -629,7 +661,10 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     page,
   }) => {
     const writeScreenshot = process.env.DANRAN_SCREENSHOTS === '1';
-    await mockWeekApis(page, { conflictFixture: writeScreenshot });
+    await mockWeekApis(page, {
+      conflictFixture: writeScreenshot,
+      tasks: screenshotTasks(),
+    });
     await page.goto(`/?week=${BASE_WEEK}`);
 
     await expect(page.getByTestId(`busy-timeline-${SATURDAY}`)).toBeVisible();
@@ -657,6 +692,11 @@ test.describe('Task 2-5: weekend busy timeline', () => {
     await expect(page.getByText('空き判定しない家事代行', { exact: true })).toBeVisible();
     await expect(page.getByText('家族の合成予定', { exact: true })).toBeVisible();
     await expect(page.getByText('本人だけの合成予定', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('week-deadline-2026-10-06-task-week-screenshot-1')).toBeVisible();
+    await expect(page.getByTestId('week-deadlines-more-2026-10-06')).toHaveText('ほか 1 件');
+    await expect(page.getByTestId('week-event-task-count-evt-weekday-oneoff')).toHaveText(
+      'やること 残り 3 件',
+    );
     if (writeScreenshot) {
       await expect(page.getByTestId('week-event-conflict-evt-weekday-exception')).toBeVisible();
       await expect(page.getByTestId('week-event-conflict-evt-weekday-oneoff')).toBeVisible();
