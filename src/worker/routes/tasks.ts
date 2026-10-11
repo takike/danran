@@ -8,12 +8,20 @@ import {
   manualTaskCreateSchema,
   taskDeleteResponseSchema,
   taskErrorResponseSchema,
+  taskEventCandidatesResponseSchema,
   taskListResponseSchema,
   taskMutationResponseSchema,
   taskPatchSchema,
 } from '@shared/schemas/tasks';
 import { type WeekEvent, eventItemsSchema, weekEventTimeSchema } from '@shared/schemas/week';
-import { toTokyoIsoString } from '@shared/time/date';
+import {
+  addCalendarDays,
+  getDayBounds,
+  getTodayDateKey,
+  toTokyoDateKey,
+  toTokyoIsoString,
+} from '@shared/time/date';
+import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
@@ -64,6 +72,7 @@ const ERROR_TEXT: Record<ErrorCode, string> = {
 const MAX_LINKED_EVENTS = 200;
 const EVENT_PAGE_SIZE = 2500;
 const MAX_EVENT_PAGES = 4;
+const EVENT_CANDIDATE_MAX_PAGES = 2;
 const DONE_WINDOW_SECONDS = 14 * 24 * 60 * 60;
 
 function errorResponse(c: RouteContext, status: ErrorStatus, code: ErrorCode) {
@@ -182,6 +191,12 @@ function eventTime(event: GoogleEvent): WeekEvent['time'] | null {
     }
   }
   return null;
+}
+
+function eventStartMilliseconds(time: WeekEvent['time']): number {
+  return time.kind === 'all-day'
+    ? parseIsoInstantMilliseconds(getDayBounds(time.start).startIso)
+    : parseIsoInstantMilliseconds(time.start);
 }
 
 function mapTask(
@@ -398,6 +413,84 @@ tasksRoute.use(
       ),
   }),
 );
+
+tasksRoute.get('/:id/tasks/event-candidates', async (c) => {
+  const access = await authorizeFamily(c);
+  if ('response' in access) return access.response;
+
+  try {
+    const today = getTodayDateKey();
+    const endDate = addCalendarDays(today, 60);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const events: GoogleEvent[] = [];
+    const seenTokens = new Set<string>();
+    let pageToken: string | undefined;
+    let hasMore = false;
+
+    for (let pageNo = 0; pageNo < EVENT_CANDIDATE_MAX_PAGES; pageNo += 1) {
+      const page = await client.events.list(access.calendarId, {
+        timeMin: getDayBounds(today).startIso,
+        timeMax: getDayBounds(endDate).startIso,
+        singleEvents: true,
+        orderBy: 'startTime',
+        timeZone: 'Asia/Tokyo',
+        showDeleted: false,
+        maxResults: EVENT_PAGE_SIZE,
+        pageToken,
+      });
+      events.push(...page.items);
+      const nextPageToken = page.nextPageToken;
+      if (nextPageToken === undefined) {
+        hasMore = false;
+        break;
+      }
+      hasMore = true;
+      if (!nextPageToken.trim() || seenTokens.has(nextPageToken)) break;
+      seenTokens.add(nextPageToken);
+      if (pageNo === EVENT_CANDIDATE_MAX_PAGES - 1) break;
+      pageToken = nextPageToken;
+    }
+
+    const activeMemberIds = new Set(access.activeMembers.map((member) => member.id));
+    const seenEventIds = new Set<string>();
+    const candidates = events.flatMap((event) => {
+      if (seenEventIds.has(event.id)) return [];
+      seenEventIds.add(event.id);
+      if (
+        event.status === 'cancelled' ||
+        event.recurringEventId !== undefined ||
+        event.recurrence !== undefined
+      ) {
+        return [];
+      }
+      const time = eventTime(event);
+      if (!time) return [];
+      const startDate = time.kind === 'all-day' ? time.start : toTokyoDateKey(time.start);
+      if (startDate < today || startDate >= endDate) return [];
+      return [
+        taskEventCandidatesResponseSchema.shape.events.element.parse({
+          eventId: event.id,
+          title: event.summary ?? '',
+          time,
+          memberIds: safeMemberIds(event, activeMemberIds),
+        }),
+      ];
+    });
+    candidates.sort((left, right) => {
+      const byStart = eventStartMilliseconds(left.time) - eventStartMilliseconds(right.time);
+      if (byStart !== 0) return byStart;
+      return left.eventId < right.eventId ? -1 : left.eventId > right.eventId ? 1 : 0;
+    });
+
+    return c.json(taskEventCandidatesResponseSchema.parse({ events: candidates, hasMore }));
+  } catch (err) {
+    if (err instanceof GoogleCalendarError || err instanceof ReauthNeededError) {
+      const failure = googleFailure(err);
+      return errorResponse(c, failure.status, failure.code);
+    }
+    return errorResponse(c, 500, 'INTERNAL_ERROR');
+  }
+});
 
 tasksRoute.get('/:id/tasks', async (c) => {
   const access = await authorizeFamily(c);

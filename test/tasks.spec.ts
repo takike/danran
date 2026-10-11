@@ -1,5 +1,9 @@
 import { env } from 'cloudflare:test';
-import { taskListResponseSchema, taskMutationResponseSchema } from '@shared/schemas/tasks';
+import {
+  taskEventCandidatesResponseSchema,
+  taskListResponseSchema,
+  taskMutationResponseSchema,
+} from '@shared/schemas/tasks';
 import { SESSION_COOKIE_NAME } from '@worker/auth/config';
 import { encryptAesGcm } from '@worker/auth/crypto';
 import { createSession } from '@worker/auth/session';
@@ -38,17 +42,24 @@ describe('Task 5-1 task API', () => {
   const db = createDb(env.DB);
   const storedEvents = new Map<string, Record<string, unknown>>();
   const googleRequests: string[] = [];
+  const googleMethods: string[] = [];
   const refreshTokens: string[] = [];
   let failList = false;
+  let failSecondPage = false;
   let repeatedPageToken = false;
+  let candidatePages: Array<{ items: Record<string, unknown>[]; nextPageToken?: string }> | null =
+    null;
   let cookie = '';
 
   beforeEach(async () => {
     storedEvents.clear();
     googleRequests.length = 0;
+    googleMethods.length = 0;
     refreshTokens.length = 0;
     failList = false;
+    failSecondPage = false;
     repeatedPageToken = false;
+    candidatePages = null;
     await db.delete(tasks);
     await db.delete(eventMeta);
     await db.delete(members);
@@ -175,6 +186,7 @@ describe('Task 5-1 task API', () => {
       }
       const url = new URL(request.url);
       googleRequests.push(url.href);
+      googleMethods.push(request.method);
       const eventMatch = url.pathname.match(
         new RegExp(`/calendar/v3/calendars/${CALENDAR_ID}/events/([^/]+)$`),
       );
@@ -192,11 +204,16 @@ describe('Task 5-1 task API', () => {
         url.pathname === `/calendar/v3/calendars/${CALENDAR_ID}/events` &&
         request.method === 'GET'
       ) {
-        if (failList)
+        if (failList || (failSecondPage && url.searchParams.has('pageToken')))
           return Response.json(
             { error: { code: 403, message: 'unavailable', errors: [{ reason: 'forbidden' }] } },
             { status: 403 },
           );
+        if (candidatePages) {
+          const pageToken = url.searchParams.get('pageToken');
+          const pageNo = pageToken ? Number(pageToken.replace('page-', '')) : 0;
+          return Response.json(candidatePages[pageNo] ?? { items: [] });
+        }
         return Response.json({
           items: [...storedEvents.values()],
           ...(repeatedPageToken ? { nextPageToken: 'repeat-token' } : {}),
@@ -240,6 +257,281 @@ describe('Task 5-1 task API', () => {
       TEST_ENV,
     );
   }
+
+  it('returns only valid, non-recurring family event candidates within the Tokyo date range', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T15:00:00.000Z'));
+    await db.insert(members).values({
+      id: 'mem_task_inactive',
+      familyId: 'fam_tasks',
+      userId: null,
+      kind: 'child',
+      name: '休止中',
+      color: 'green',
+      sortOrder: 2,
+      status: 'pending',
+    });
+    const event = (
+      id: string,
+      start: Record<string, unknown>,
+      end: Record<string, unknown>,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      id,
+      status: 'confirmed',
+      summary: `title-${id}`,
+      description: 'must not leak',
+      location: 'must not leak',
+      attendees: [{ email: 'must-not-leak@example.test' }],
+      start,
+      end,
+      extendedProperties: {
+        private: {
+          danran: '1',
+          members: 'mem_task_child,mem_task_inactive,foreign-member',
+          secret: 'must-not-leak',
+        },
+      },
+      ...extra,
+    });
+    candidatePages = [
+      {
+        items: [
+          event(
+            'candidate_timed',
+            { dateTime: '2026-10-11T00:30:00+09:00' },
+            { dateTime: '2026-10-11T01:30:00+09:00' },
+            { status: 'tentative' },
+          ),
+          event('candidate_all_day', { date: '2026-10-11' }, { date: '2026-10-12' }),
+          event(
+            'before_today',
+            { dateTime: '2026-10-10T14:59:00Z' },
+            { dateTime: '2026-10-10T15:30:00Z' },
+          ),
+          event(
+            'at_today_start',
+            { dateTime: '2026-10-10T15:00:00Z' },
+            { dateTime: '2026-10-10T16:00:00Z' },
+          ),
+          event('at_end_boundary', { date: '2026-12-10' }, { date: '2026-12-11' }),
+          event(
+            'cancelled_event',
+            { date: '2026-10-12' },
+            { date: '2026-10-13' },
+            { status: 'cancelled' },
+          ),
+          event(
+            'recurring_instance',
+            { date: '2026-10-12' },
+            { date: '2026-10-13' },
+            { recurringEventId: 'recurring_master' },
+          ),
+          event(
+            'recurring_master',
+            { date: '2026-10-12' },
+            { date: '2026-10-13' },
+            { recurrence: ['RRULE:FREQ=WEEKLY'] },
+          ),
+        ],
+      },
+    ];
+
+    const beforeTasks = await db.select().from(tasks);
+    const beforeMetadata = await db.select().from(eventMeta);
+    const response = await request('GET', '/api/families/fam_tasks/tasks/event-candidates');
+    expect(response.status, await response.clone().text()).toBe(200);
+    const result = taskEventCandidatesResponseSchema.parse(await response.json());
+    expect(result.hasMore).toBe(false);
+    expect(result.events.map((candidate) => candidate.eventId)).toEqual([
+      'at_today_start',
+      'candidate_all_day',
+      'candidate_timed',
+    ]);
+    expect(result.events[2]).toMatchObject({
+      title: 'title-candidate_timed',
+      time: { kind: 'timed', start: '2026-10-11T00:30:00+09:00' },
+      memberIds: ['mem_task_child'],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/description|location|attendees|email|secret/);
+    expect(googleRequests).toHaveLength(1);
+    const listUrl = new URL(googleRequests[0] ?? '');
+    expect(listUrl.pathname).toBe(`/calendar/v3/calendars/${CALENDAR_ID}/events`);
+    expect(listUrl.searchParams.get('timeMin')).toBe('2026-10-11T00:00:00+09:00');
+    expect(listUrl.searchParams.get('timeMax')).toBe('2026-12-10T00:00:00+09:00');
+    expect(listUrl.searchParams.get('singleEvents')).toBe('true');
+    expect(listUrl.searchParams.get('orderBy')).toBe('startTime');
+    expect(listUrl.searchParams.get('timeZone')).toBe('Asia/Tokyo');
+    expect(listUrl.searchParams.get('showDeleted')).toBe('false');
+    expect(listUrl.searchParams.get('maxResults')).toBe('2500');
+    expect(googleMethods).toEqual(['GET']);
+    expect(refreshTokens).toEqual(['task-caller-refresh-token']);
+    expect(await db.select().from(tasks)).toEqual(beforeTasks);
+    expect(await db.select().from(eventMeta)).toEqual(beforeMetadata);
+  });
+
+  it('stops after two pages and reports whether Google has another page', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T00:00:00+09:00'));
+    candidatePages = [
+      {
+        items: [
+          { id: 'candidate_page_one', start: { date: '2026-10-12' }, end: { date: '2026-10-13' } },
+        ],
+        nextPageToken: 'page-1',
+      },
+      {
+        items: [
+          { id: 'candidate_page_one', start: { date: '2026-10-12' }, end: { date: '2026-10-13' } },
+          { id: 'candidate_page_two', start: { date: '2026-10-14' }, end: { date: '2026-10-15' } },
+        ],
+        nextPageToken: 'page-2',
+      },
+    ];
+    const response = await request('GET', '/api/families/fam_tasks/tasks/event-candidates');
+    expect(response.status).toBe(200);
+    const result = taskEventCandidatesResponseSchema.parse(await response.json());
+    expect(result.events.map((candidate) => candidate.eventId)).toEqual([
+      'candidate_page_one',
+      'candidate_page_two',
+    ]);
+    expect(result.hasMore).toBe(true);
+    expect(googleRequests).toHaveLength(2);
+    expect(new URL(googleRequests[1] ?? '').searchParams.get('pageToken')).toBe('page-1');
+    expect(googleMethods).toEqual(['GET', 'GET']);
+  });
+
+  it('does not return partial candidates when a later Google page fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T00:00:00+09:00'));
+    candidatePages = [
+      {
+        items: [
+          { id: 'candidate_page_one', start: { date: '2026-10-12' }, end: { date: '2026-10-13' } },
+        ],
+        nextPageToken: 'page-1',
+      },
+    ];
+    failSecondPage = true;
+    const response = await request('GET', '/api/families/fam_tasks/tasks/event-candidates');
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'Family calendar access denied',
+      code: 'CALENDAR_ACCESS_DENIED',
+    });
+    expect(googleRequests).toHaveLength(2);
+  });
+
+  it('returns a fixed Google error when the page contains an invalid event time', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T00:00:00+09:00'));
+    candidatePages = [
+      {
+        items: [
+          {
+            id: 'malformed_candidate',
+            start: { date: '2026-10-12' },
+            end: { dateTime: '2026-10-13T01:00:00Z' },
+          },
+        ],
+      },
+    ];
+    const response = await request('GET', '/api/families/fam_tasks/tasks/event-candidates');
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'Google Calendar request failed',
+      code: 'GOOGLE_ERROR',
+    });
+  });
+
+  it('uses existing family authorization and returns the fixed Google failure response', async () => {
+    const unauthenticated = await app.request(
+      `${ORIGIN}/api/families/fam_tasks/tasks/event-candidates`,
+      {},
+      TEST_ENV,
+    );
+    expect(unauthenticated.status).toBe(401);
+    await db.insert(users).values([
+      {
+        id: 'usr_task_external_1',
+        googleSub: 'sub-task-external-1',
+        email: 'external-1@example.test',
+        displayName: 'External one',
+      },
+      {
+        id: 'usr_task_external_2',
+        googleSub: 'sub-task-external-2',
+        email: 'external-2@example.test',
+        displayName: 'External two',
+      },
+    ]);
+    await db.insert(families).values({
+      id: 'fam_other',
+      name: '他の家族',
+      ownerUserId: 'usr_task_external_1',
+      familyCalendarId: 'other_family_calendar',
+      creationStatus: 'ready',
+    });
+    await db.insert(members).values({
+      id: 'mem_task_caller_child',
+      familyId: 'fam_other',
+      userId: null,
+      kind: 'child',
+      name: '子ども',
+      color: 'green',
+      sortOrder: 0,
+      status: 'active',
+    });
+    storedEvents.set('other_family_event', {
+      id: 'other_family_event',
+      summary: '他の家族の予定',
+      start: { date: '2026-10-12' },
+      end: { date: '2026-10-13' },
+    });
+    await db.insert(families).values({
+      id: 'fam_nonmember',
+      name: '非メンバー',
+      ownerUserId: 'usr_task_external_2',
+      familyCalendarId: 'nonmember_family_calendar',
+      creationStatus: 'ready',
+    });
+    expect(
+      (await request('GET', '/api/families/fam_nonmember/tasks/event-candidates')).status,
+    ).toBe(404);
+    expect((await request('GET', '/api/families/fam_other/tasks/event-candidates')).status).toBe(
+      404,
+    );
+    expect(googleRequests).toHaveLength(0);
+
+    await db.update(members).set({ status: 'pending' }).where(eq(members.id, 'mem_task_adult'));
+    expect((await request('GET', '/api/families/fam_tasks/tasks/event-candidates')).status).toBe(
+      404,
+    );
+    await db.update(members).set({ status: 'active' }).where(eq(members.id, 'mem_task_adult'));
+
+    await db
+      .update(families)
+      .set({ familyCalendarId: null, creationStatus: 'creating' })
+      .where(eq(families.id, 'fam_tasks'));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T00:00:00+09:00'));
+    expect((await request('GET', '/api/families/fam_tasks/tasks/event-candidates')).status).toBe(
+      409,
+    );
+    await db
+      .update(families)
+      .set({ familyCalendarId: CALENDAR_ID, creationStatus: 'ready' })
+      .where(eq(families.id, 'fam_tasks'));
+    expect(googleRequests).toHaveLength(0);
+
+    failList = true;
+    const failed = await request('GET', '/api/families/fam_tasks/tasks/event-candidates');
+    expect(failed.status).toBe(403);
+    expect(await failed.json()).toEqual({
+      error: 'Family calendar access denied',
+      code: 'CALENDAR_ACCESS_DENIED',
+    });
+  });
 
   it('returns linked event allowlists in one list traversal and computes automatic due without D1 writes', async () => {
     await db.insert(tasks).values([

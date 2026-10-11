@@ -84,6 +84,21 @@ export const taskListResponseSchema = z.object({ tasks: z.array(taskSchema) }).s
 export const taskMutationResponseSchema = z.object({ task: taskSchema }).strict();
 export const taskDeleteResponseSchema = z.object({ ok: z.literal(true) }).strict();
 
+export const taskEventCandidateSchema = z
+  .object({
+    eventId: z.string().min(1),
+    title: z.string(),
+    time: weekEventTimeSchema,
+    memberIds: z.array(z.string().min(1)),
+  })
+  .strict();
+export type TaskEventCandidate = z.infer<typeof taskEventCandidateSchema>;
+
+export const taskEventCandidatesResponseSchema = z
+  .object({ events: z.array(taskEventCandidateSchema), hasMore: z.boolean() })
+  .strict();
+export type TaskEventCandidatesResponse = z.infer<typeof taskEventCandidatesResponseSchema>;
+
 export const taskErrorResponseSchema = z
   .object({
     error: z.string(),
