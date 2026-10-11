@@ -1,15 +1,22 @@
-import { TaskApiError, createTask, deleteTask, updateTask } from '@client/api/tasks';
+import {
+  TaskApiError,
+  createTask,
+  deleteTask,
+  fetchTaskEventCandidates,
+  updateTask,
+} from '@client/api/tasks';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
 import type { FamilyPublic } from '@shared/schemas/family';
 import {
   type ManualTaskCreate,
   type Task,
+  type TaskEventCandidate,
   manualTaskCreateSchema,
   taskPatchSchema,
 } from '@shared/schemas/tasks';
 import { getTodayDateKey, toTokyoDateKey, toTokyoIsoString } from '@shared/time/date';
-import { formatShortDate, formatWeekday } from '@shared/time/format';
-import { useQueryClient } from '@tanstack/react-query';
+import { formatEventTime, formatShortDate, formatWeekday } from '@shared/time/format';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -54,6 +61,32 @@ function linkedEventDate(task: Task | undefined) {
   return `${formatShortDate(date)}（${formatWeekday(date)}）`;
 }
 
+function linkedEventId(task: Task | undefined): string | null {
+  return task && task.linkedEvent.state !== 'none' ? task.linkedEvent.eventId : null;
+}
+
+function candidateLabel(candidate: TaskEventCandidate): string {
+  const date =
+    candidate.time.kind === 'all-day' ? candidate.time.start : toTokyoDateKey(candidate.time.start);
+  const time = candidate.time.kind === 'all-day' ? '' : ` ${formatEventTime(candidate.time)}`;
+  return `${formatShortDate(date)}（${formatWeekday(date)}）${candidate.title}${time}`;
+}
+
+function linkedEventFallbackLabel(task: Task): string {
+  if (task.linkedEvent.state === 'ready') {
+    const date =
+      task.linkedEvent.time.kind === 'all-day'
+        ? task.linkedEvent.time.start
+        : toTokyoDateKey(task.linkedEvent.time.start);
+    const time =
+      task.linkedEvent.time.kind === 'all-day' ? '' : ` ${formatEventTime(task.linkedEvent.time)}`;
+    return `${formatShortDate(date)}（${formatWeekday(date)}）${task.linkedEvent.title}${time}`;
+  }
+  return '現在の予定（取得できません）';
+}
+
+const EVENT_CANDIDATES_QUERY_KEY = ['task-event-candidates'] as const;
+
 export function TaskDialog({
   familyId,
   userId,
@@ -81,6 +114,7 @@ export function TaskDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const pendingRef = useRef(false);
+  const uncertainEventLinkRef = useRef(false);
   const historyMarkerRef = useRef<string | null>(null);
   const historyCleanupTimerRef = useRef<number | null>(null);
   const originalCreateRef = useRef<ManualTaskCreate | null>(null);
@@ -94,6 +128,9 @@ export function TaskDialog({
   const [dueDate, setDueDate] = useState(initialDue.dueDate);
   const [dueTime, setDueTime] = useState(initialDue.dueTime);
   const [assigneeMemberId, setAssigneeMemberId] = useState(task?.assigneeMemberId ?? '');
+  const [selectedEventId, setSelectedEventId] = useState(
+    linkedEventId(task) ?? event?.eventId ?? '',
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDirty, setIsDirty] = useState(Boolean(task));
@@ -101,6 +138,22 @@ export function TaskDialog({
   const [deleteConfirmation, setDeleteConfirmation] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const identity = `${userId}:${familyId}`;
+  const showEventPicker = !event && (!task || task.source === 'manual');
+  const originalLinkedEventId = linkedEventId(task);
+  const candidatesQuery = useQuery({
+    queryKey: [...EVENT_CANDIDATES_QUERY_KEY, userId, familyId],
+    queryFn: ({ signal }) => fetchTaskEventCandidates(familyId, signal),
+    enabled: false,
+    staleTime: 0,
+    retry: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    gcTime: 0,
+  });
+
+  useEffect(() => {
+    if (open && showEventPicker) void candidatesQuery.refetch();
+  }, [open, showEventPicker, candidatesQuery.refetch]);
 
   useReloadProtection(open && (isDirty || requestLocked), open && (isSaving || isDeleting));
 
@@ -166,6 +219,14 @@ export function TaskDialog({
     assigneeMemberId: assigneeMemberId || null,
   });
 
+  const patchWithEventChange = (
+    base: ReturnType<typeof buildPatch>,
+    baselineEventId: string | null,
+  ) =>
+    selectedEventId === (baselineEventId ?? '')
+      ? base
+      : { ...base, eventId: selectedEventId || null };
+
   const finishSuccess = (savedTask?: Task, deletedTaskId?: string) => {
     if (!isIdentityCurrent()) return;
     const queryKey = [...TASKS_QUERY_KEY, userId, familyId] as const;
@@ -188,7 +249,15 @@ export function TaskDialog({
   const handleSubmit = async (submitEvent: React.FormEvent<HTMLFormElement>) => {
     submitEvent.preventDefault();
     if (pendingRef.current) return;
-    const latest = taskPatchSchema.safeParse(buildPatch());
+    const latestBase = buildPatch();
+    const latestTaskPatch = task
+      ? patchWithEventChange(latestBase, originalLinkedEventId)
+      : latestBase;
+    const latest = taskPatchSchema.safeParse(
+      task && uncertainEventLinkRef.current && !('eventId' in latestTaskPatch)
+        ? { ...latestTaskPatch, eventId: selectedEventId || null }
+        : latestTaskPatch,
+    );
     if (!latest.success) {
       setErrorMessage('入力内容を確認してください。');
       return;
@@ -199,15 +268,28 @@ export function TaskDialog({
     try {
       let savedTask: Task;
       if (task) {
-        savedTask = await updateTask(familyId, task.id, latest.data);
+        try {
+          savedTask = await updateTask(familyId, task.id, latest.data);
+          uncertainEventLinkRef.current = false;
+        } catch (error: unknown) {
+          if (
+            'eventId' in latest.data &&
+            (!(error instanceof TaskApiError) || !error.status || error.status >= 500)
+          ) {
+            uncertainEventLinkRef.current = true;
+          }
+          throw error;
+        }
       } else if (createdTaskIdRef.current) {
-        savedTask = await updateTask(familyId, createdTaskIdRef.current, latest.data);
+        // Reassert the selected link because a prior PATCH response may have been lost.
+        const patch = taskPatchSchema.parse({ ...latestBase, eventId: selectedEventId || null });
+        savedTask = await updateTask(familyId, createdTaskIdRef.current, patch);
       } else {
         const original =
           originalCreateRef.current ??
           manualTaskCreateSchema.parse({
-            ...latest.data,
-            eventId: event?.eventId ?? null,
+            ...latestBase,
+            eventId: event?.eventId ?? (selectedEventId || null),
             clientRequestId: crypto.randomUUID(),
           });
         originalCreateRef.current = original;
@@ -219,9 +301,13 @@ export function TaskDialog({
             title: original.title,
             due: original.due,
             assigneeMemberId: original.assigneeMemberId,
-          }) !== JSON.stringify(latest.data)
+          }) !== JSON.stringify(latestBase) ||
+          selectedEventId !== (original.eventId ?? '')
         ) {
-          savedTask = await updateTask(familyId, created.id, latest.data);
+          const patch = taskPatchSchema.parse(
+            patchWithEventChange(latestBase, original.eventId ?? null),
+          );
+          savedTask = await updateTask(familyId, created.id, patch);
         } else {
           savedTask = created;
         }
@@ -279,6 +365,13 @@ export function TaskDialog({
       : null;
   const linkedTitle = task?.linkedEvent.state === 'ready' ? task.linkedEvent.title : event?.title;
   const disabled = isSaving || isDeleting;
+  const showLinkedSummary = !showEventPicker && Boolean(linkedTitle || dateLabel);
+  const candidates = candidatesQuery.data?.events ?? [];
+  const selectedCandidateMissing =
+    Boolean(originalLinkedEventId) &&
+    !candidates.some((candidate) => candidate.eventId === originalLinkedEventId);
+  const candidateLoading = candidatesQuery.isFetching || candidatesQuery.isPending;
+  const candidateError = candidatesQuery.isError;
 
   return (
     <dialog
@@ -326,7 +419,7 @@ export function TaskDialog({
               )}
             </p>
           )}
-          {(linkedTitle || dateLabel) && (
+          {showLinkedSummary && (
             <div className="rounded-[var(--radius-md)] border border-line bg-surface p-[var(--spacing-sm)] text-sm">
               <span className="block min-w-0 font-semibold [overflow-wrap:anywhere]">
                 {linkedTitle}
@@ -354,6 +447,75 @@ export function TaskDialog({
               className={fieldClass}
             />
           </div>
+          {showEventPicker && (
+            <div>
+              <label htmlFor="task-event" className="block text-sm font-semibold">
+                予定
+              </label>
+              <select
+                id="task-event"
+                data-testid="task-form-event"
+                value={selectedEventId}
+                disabled={candidateLoading || candidateError}
+                onChange={(changeEvent) => {
+                  setSelectedEventId(changeEvent.currentTarget.value);
+                  markChanged();
+                }}
+                className={`${fieldClass} max-w-full truncate`}
+              >
+                {candidateLoading ? (
+                  <option value={selectedEventId}>
+                    {selectedEventId ? '現在の予定を確認中...' : '読み込み中...'}
+                  </option>
+                ) : candidateError ? (
+                  <>
+                    <option value="">ひもづけない</option>
+                    {originalLinkedEventId && task && (
+                      <option value={originalLinkedEventId}>
+                        {linkedEventFallbackLabel(task)}
+                      </option>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <option value="">ひもづけない</option>
+                    {selectedCandidateMissing && originalLinkedEventId && task && (
+                      <option value={originalLinkedEventId}>
+                        {linkedEventFallbackLabel(task)}
+                      </option>
+                    )}
+                    {candidates.map((candidate) => (
+                      <option key={candidate.eventId} value={candidate.eventId}>
+                        {candidateLabel(candidate)}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+              {candidateError ? (
+                <div className="mt-[var(--spacing-xs)]">
+                  <p className="m-0 text-sm text-muted">
+                    予定の候補を読み込めませんでした。現在のひもづけはそのまま保存できます。
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void candidatesQuery.refetch()}
+                    className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
+                  >
+                    再試行
+                  </button>
+                </div>
+              ) : candidatesQuery.data?.hasMore ? (
+                <p className="mt-[var(--spacing-xs)] mb-0 text-sm text-muted">
+                  60 日以内の予定の一部を表示しています
+                </p>
+              ) : candidates.length === 0 && !candidateLoading ? (
+                <p className="mt-[var(--spacing-xs)] mb-0 text-sm text-muted">
+                  これからの予定がありません
+                </p>
+              ) : null}
+            </div>
+          )}
           <fieldset className="m-0 border-0 p-0">
             <legend className="sr-only">期限</legend>
             <label htmlFor="task-due-kind" className="block text-sm font-semibold">

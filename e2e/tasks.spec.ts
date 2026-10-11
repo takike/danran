@@ -52,6 +52,27 @@ const ready = {
   items: ['水筒', '敷物'],
 };
 
+const sportsDayCandidate = {
+  eventId: 'evt_sports_day',
+  title: '運動会',
+  time: {
+    kind: 'all-day' as const,
+    start: '2026-10-17',
+    endExclusive: '2026-10-18',
+  },
+  memberIds: ['mem_adult_a', 'mem_child'],
+};
+
+const eventCandidates = [
+  sportsDayCandidate,
+  {
+    eventId: 'evt_picnic',
+    title: ready.title,
+    time: ready.time,
+    memberIds: ready.memberIds,
+  },
+];
+
 function task(id: string, overrides: Partial<Task> = {}): Task {
   return {
     id,
@@ -85,15 +106,25 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
   let familyId = FAMILY_A;
   let tasks = [...initialTasks];
   let failNextPatch = false;
+  let failPatchAfterCommit = false;
   let failNextGet = false;
+  let failNextCandidates = false;
   let failNextDelete = false;
   let failCreateAfterCommit = false;
-  const createRequests: Array<{ clientRequestId: string; title: string }> = [];
+  let nextCreateError: { status: number; code: string } | undefined;
+  const createRequests: Array<{
+    clientRequestId: string;
+    title: string;
+    eventId?: string | null;
+  }> = [];
   const patchRequests: Array<Record<string, unknown>> = [];
   const createdByRequestId = new Map<string, Task>();
+  const taskRequestIdentities: string[] = [];
   let createdSequence = 0;
   let patchGate: ReturnType<typeof deferred> | undefined;
   let getGate: ReturnType<typeof deferred> | undefined;
+  let candidateGate: ReturnType<typeof deferred> | undefined;
+  let candidateResponse = { events: eventCandidates, hasMore: false };
   let createGate: ReturnType<typeof deferred> | undefined;
   let patchStarted: (() => void) | undefined;
   let getStarted: (() => void) | undefined;
@@ -104,6 +135,7 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
     getStarted = resolve;
   });
   let getCalls = 0;
+  let candidateCalls = 0;
 
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({
@@ -139,8 +171,38 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
     const pathParts = new URL(route.request().url()).pathname.split('/');
     const requestFamilyId = pathParts[3] ?? familyId;
     const method = route.request().method();
+    if (pathParts.at(-1) === 'event-candidates' && method === 'GET') {
+      candidateCalls += 1;
+      if (candidateGate) {
+        const gate = candidateGate;
+        candidateGate = undefined;
+        await gate.promise;
+      }
+      if (failNextCandidates) {
+        failNextCandidates = false;
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'failed', code: 'INTERNAL_ERROR' }),
+        });
+        return;
+      }
+      const events =
+        userId === USER_B
+          ? [{ ...sportsDayCandidate, eventId: 'evt_user_b', title: '別アカウントの予定' }]
+          : requestFamilyId === FAMILY_B
+            ? [{ ...sportsDayCandidate, eventId: 'evt_family_b', title: 'B家の予定' }]
+            : candidateResponse.events;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ events, hasMore: candidateResponse.hasMore }),
+      });
+      return;
+    }
     if (method === 'GET') {
       getCalls += 1;
+      taskRequestIdentities.push(`${userId}:${requestFamilyId}`);
       getStarted?.();
       if (getGate) {
         const gate = getGate;
@@ -182,6 +244,7 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
         due?: Task['due'];
         done?: boolean;
         assigneeMemberId?: string | null;
+        eventId?: string | null;
       };
       patchRequests.push(patch);
       const index = tasks.findIndex((item) => item.id === taskId);
@@ -203,7 +266,29 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
           ...(patch.assigneeMemberId === undefined
             ? {}
             : { assigneeMemberId: patch.assigneeMemberId }),
+          ...(patch.eventId === undefined
+            ? {}
+            : {
+                linkedEvent: patch.eventId
+                  ? {
+                      ...ready,
+                      eventId: patch.eventId,
+                      title:
+                        eventCandidates.find((candidate) => candidate.eventId === patch.eventId)
+                          ?.title ?? ready.title,
+                    }
+                  : { state: 'none' as const },
+              }),
         };
+        if (failPatchAfterCommit) {
+          failPatchAfterCommit = false;
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'failed', code: 'INTERNAL_ERROR' }),
+          });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -245,7 +330,21 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
         assigneeMemberId: string | null;
         eventId?: string | null;
       };
-      createRequests.push({ clientRequestId: body.clientRequestId, title: body.title });
+      createRequests.push({
+        clientRequestId: body.clientRequestId,
+        title: body.title,
+        ...(Object.hasOwn(body, 'eventId') ? { eventId: body.eventId ?? null } : {}),
+      });
+      if (nextCreateError) {
+        const error = nextCreateError;
+        nextCreateError = undefined;
+        await route.fulfill({
+          status: error.status,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'failed', code: error.code }),
+        });
+        return;
+      }
       if (createGate) {
         const gate = createGate;
         createGate = undefined;
@@ -258,7 +357,15 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
           title: body.title,
           due: body.due,
           assigneeMemberId: body.assigneeMemberId,
-          linkedEvent: body.eventId ? ready : { state: 'none' },
+          linkedEvent: body.eventId
+            ? {
+                ...ready,
+                eventId: body.eventId,
+                title:
+                  eventCandidates.find((candidate) => candidate.eventId === body.eventId)?.title ??
+                  ready.title,
+              }
+            : { state: 'none' },
         });
         createdByRequestId.set(body.clientRequestId, created);
         tasks = [...tasks, created];
@@ -288,20 +395,41 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
 
   return {
     getCalls: () => getCalls,
+    taskRequestIdentities: () => taskRequestIdentities,
     taskCount: () => tasks.length,
+    linkedEventId: (taskId: string) => {
+      const linkedEvent = tasks.find((item) => item.id === taskId)?.linkedEvent;
+      return linkedEvent && linkedEvent.state !== 'none' ? linkedEvent.eventId : null;
+    },
     patchStartedPromise,
     getStartedPromise,
     setFailNextPatch: () => {
       failNextPatch = true;
     },
+    setFailPatchAfterCommit: () => {
+      failPatchAfterCommit = true;
+    },
     setFailNextGet: () => {
       failNextGet = true;
     },
+    setFailNextCandidates: () => {
+      failNextCandidates = true;
+    },
+    setCandidateResponse: (events: typeof eventCandidates, hasMore: boolean) => {
+      candidateResponse = { events, hasMore };
+    },
+    setCandidateGate: (gate: ReturnType<typeof deferred>) => {
+      candidateGate = gate;
+    },
+    candidateCalls: () => candidateCalls,
     setFailNextDelete: () => {
       failNextDelete = true;
     },
     setFailCreateAfterCommit: () => {
       failCreateAfterCommit = true;
+    },
+    setNextCreateError: (code: string, status = 400) => {
+      nextCreateError = { status, code };
     },
     createRequests,
     patchRequests,
@@ -317,6 +445,12 @@ async function installTaskHarness(page: Page, initialTasks: Task[], members = ME
     switchAccount: () => {
       userId = USER_B;
       familyId = FAMILY_B;
+    },
+    switchFamily: () => {
+      familyId = FAMILY_B;
+    },
+    switchUserSameFamily: () => {
+      userId = USER_B;
     },
     patchGate: () => patchGate,
   };
@@ -378,21 +512,30 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
   await expect(page.getByTestId('task-edit-task-auto')).toHaveCount(0);
   await page.getByText(/予定に紐づかないやること/).click();
   await page.setViewportSize({ width: 390, height: 1100 });
-  await page.screenshot({ path: 'docs/screenshots/s5-tasks.png' });
+  if (process.env.DANRAN_SCREENSHOTS === '1') {
+    await page.screenshot({ path: 'docs/screenshots/s5-tasks.png' });
+  }
   await page.setViewportSize({ width: 390, height: 844 });
 
   await page.getByTestId('task-add-button').click();
   await expect(page.getByTestId('task-dialog')).toBeVisible();
+  await expect(page.getByTestId('task-form-event')).toBeEnabled();
+  await expect(page.getByRole('combobox', { name: '予定', exact: true })).toHaveValue('');
+  await expect(page.getByRole('option', { name: /運動会/ })).toBeAttached();
   await page.getByTestId('task-due-kind').selectOption('datetime');
   await page.getByTestId('task-form-title').fill('図書館へ返却');
   await expect(page.getByTestId('task-due-time')).toBeVisible();
-  await page.screenshot({ path: 'docs/screenshots/task-form.png' });
+  if (process.env.DANRAN_SCREENSHOTS === '1') {
+    await page.screenshot({ path: 'docs/screenshots/task-form.png' });
+  }
   await page.getByRole('button', { name: '閉じる' }).click();
 
   await page.getByTestId('task-assignee-task-auto').click();
   await expect(page.getByRole('group', { name: '担当を選択' })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 1100 });
-  await page.screenshot({ path: 'docs/screenshots/s5-tasks-assignee.png' });
+  if (process.env.DANRAN_SCREENSHOTS === '1') {
+    await page.screenshot({ path: 'docs/screenshots/s5-tasks-assignee.png' });
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   const buttons = await page.getByRole('group', { name: '担当を選択' }).getByRole('button').all();
   for (const button of buttons) {
@@ -632,16 +775,19 @@ test('creates linked and unlinked manual tasks, edits a task, and confirms delet
 
   await page.getByTestId('task-add-button').click();
   await page.getByTestId('task-form-title').fill('電池を買う');
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
   await page.getByTestId('task-due-kind').selectOption('date');
   await page.getByTestId('task-due-date').fill('2026-10-09');
   await page.getByTestId('task-form-assignee').selectOption('mem_adult_b');
   await page.getByTestId('task-save').click();
-  await page.getByText(/予定に紐づかないやること/).click();
-  await expect(page.getByRole('button', { name: '電池を買う' })).toBeVisible();
+  const sportsDayGroup = page.getByTestId('task-event-group').filter({ hasText: '運動会' });
+  await expect(sportsDayGroup.getByRole('button', { name: '電池を買う' })).toBeVisible();
   expect(harness.createRequests[0]?.title).toBe('電池を買う');
+  expect(harness.createRequests[0]?.eventId).toBe('evt_sports_day');
 
   await page.getByTestId('task-add-to-event-evt_picnic').click();
   await expect(page.getByTestId('task-dialog')).toContainText('公園ピクニック');
+  await expect(page.getByTestId('task-form-event')).toHaveCount(0);
   await page.getByTestId('task-form-title').fill('帽子を用意');
   await page.getByTestId('task-save').click();
   await expect(page.getByRole('button', { name: '帽子を用意' })).toBeVisible();
@@ -660,6 +806,218 @@ test('creates linked and unlinked manual tasks, edits a task, and confirms delet
   expect(harness.taskCount()).toBe(2);
 });
 
+test('edits a task link, leaves unchanged links out of PATCH, unlinks, and keeps a past link selectable', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const pastEvent = {
+    ...ready,
+    eventId: 'evt_past',
+    title: '過去の予定',
+    time: {
+      kind: 'timed' as const,
+      start: '2026-09-01T10:00:00+09:00',
+      endExclusive: '2026-09-01T11:00:00+09:00',
+    },
+  };
+  const harness = await installTaskHarness(page, [
+    task('task-linked-current', { title: '紐づき維持', linkedEvent: ready }),
+    task('task-linked-past', { title: '過去予定のタスク', linkedEvent: pastEvent }),
+  ]);
+  await page.goto('/tasks');
+
+  await page.getByTestId('task-edit-task-linked-current').click();
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_picnic');
+  await page.getByTestId('task-form-title').fill('タイトルだけ変更');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.at(-1)).not.toHaveProperty('eventId');
+
+  await page.getByTestId('task-edit-task-linked-current').click();
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.at(-1)).toEqual(
+    expect.objectContaining({ eventId: 'evt_sports_day' }),
+  );
+
+  await page.getByTestId('task-edit-task-linked-current').click();
+  await page.getByTestId('task-form-event').selectOption('');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.at(-1)).toEqual(expect.objectContaining({ eventId: null }));
+
+  await page.getByTestId('task-edit-task-linked-past').click();
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_past');
+  await expect(page.getByRole('option', { name: /過去の予定/ })).toBeAttached();
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
+  await expect(page.getByRole('option', { name: /過去の予定/ })).toBeAttached();
+  await page.getByTestId('task-form-event').selectOption('evt_past');
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_past');
+  await page.getByTestId('task-form-title').fill('過去リンクは維持');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.at(-1)).not.toHaveProperty('eventId');
+});
+
+test('retries an uncertain event change by restoring the newly selected original link', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, [
+    task('task-uncertain-link', { title: 'リンクの再試行', linkedEvent: ready }),
+  ]);
+  await page.goto('/tasks');
+  await page.getByTestId('task-edit-task-uncertain-link').click();
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
+  harness.setFailPatchAfterCommit();
+  await page.getByTestId('task-save').click();
+  await expect(page.getByRole('alert')).toContainText('やることを保存できませんでした');
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_sports_day');
+
+  await page.getByTestId('task-form-event').selectOption('evt_picnic');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.map((patch) => patch.eventId)).toEqual([
+    'evt_sports_day',
+    'evt_picnic',
+  ]);
+});
+
+test('shows candidate loading, retry, empty, and has-more states; saving unlinked works after failure', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, []);
+  const gate = deferred();
+  harness.setCandidateGate(gate);
+  await page.goto('/tasks');
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByTestId('task-form-event')).toBeDisabled();
+  await expect(page.getByRole('option', { name: '読み込み中...' })).toBeAttached();
+  gate.resolve();
+  await expect(page.getByTestId('task-form-event')).toBeEnabled();
+
+  await page.getByRole('button', { name: '閉じる' }).click();
+  harness.setFailNextCandidates();
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByText(/予定の候補を読み込めませんでした/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '再試行', exact: true })).toBeVisible();
+  await page.getByTestId('task-form-title').fill('予定なしで保存');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.createRequests.at(-1)?.eventId).toBeNull();
+
+  harness.setFailNextCandidates();
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByText(/予定の候補を読み込めませんでした/)).toBeVisible();
+  const callsBeforeRetry = harness.candidateCalls();
+  await page.getByRole('button', { name: '再試行', exact: true }).click();
+  await expect.poll(() => harness.candidateCalls()).toBeGreaterThan(callsBeforeRetry);
+  await expect(page.getByRole('option', { name: /運動会/ })).toBeAttached();
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  harness.setCandidateResponse([], false);
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByText('これからの予定がありません')).toBeVisible();
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  harness.setCandidateResponse(eventCandidates, true);
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByText('60 日以内の予定の一部を表示しています')).toBeVisible();
+});
+
+test('preserves a linked event when candidate loading fails during manual edit', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, [
+    task('task-edit-with-candidate-failure', {
+      title: '候補失敗中の編集',
+      linkedEvent: ready,
+    }),
+  ]);
+  harness.setFailNextCandidates();
+  await page.goto('/tasks');
+  await page.getByTestId('task-edit-task-edit-with-candidate-failure').click();
+  await expect(page.getByText(/現在のひもづけはそのまま保存できます/)).toBeVisible();
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_picnic');
+  await page.getByTestId('task-form-title').fill('候補失敗でもリンク維持');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.patchRequests.at(-1)).not.toHaveProperty('eventId');
+  expect(harness.linkedEventId('task-edit-with-candidate-failure')).toBe('evt_picnic');
+});
+
+test('keeps entered values when a selected event becomes invalid or recurring', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, []);
+  await page.goto('/tasks');
+  await page.getByTestId('task-add-button').click();
+  await page.getByTestId('task-form-title').fill('予定に紐づける入力');
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
+
+  harness.setNextCreateError('INVALID_INPUT');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByRole('alert')).toContainText('入力内容を確認してください');
+  await expect(page.getByTestId('task-form-title')).toHaveValue('予定に紐づける入力');
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_sports_day');
+
+  harness.setNextCreateError('RECURRING_EVENT_UNSUPPORTED', 409);
+  await page.getByTestId('task-save').click();
+  await expect(page.getByRole('alert')).toContainText('繰り返し予定の本体には紐づけられません');
+  await expect(page.getByTestId('task-form-title')).toHaveValue('予定に紐づける入力');
+  await expect(page.getByTestId('task-form-event')).toHaveValue('evt_sports_day');
+});
+
+test('does not show another family’s cached event candidates after switching families', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, []);
+  await page.goto('/tasks');
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByRole('option', { name: /運動会/ })).toBeAttached();
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  harness.switchFamily();
+  await simulateTabReturn(page);
+  await expect
+    .poll(() => harness.taskRequestIdentities().includes(`${USER_A}:${FAMILY_B}`))
+    .toBe(true);
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0);
+  await expect(page.getByText('家族のやることをまとめて管理')).toBeVisible();
+  await expect(page.getByTestId('task-add-button')).toBeEnabled();
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByRole('option', { name: /B家の予定/ })).toBeAttached();
+  await expect(page.getByRole('option', { name: /運動会/ })).toHaveCount(0);
+});
+
+test('does not show another account’s cached candidates when the family stays the same', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, []);
+  await page.goto('/tasks');
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByRole('option', { name: /運動会/ })).toBeAttached();
+  await page.getByRole('button', { name: '閉じる' }).click();
+
+  harness.switchUserSameFamily();
+  await simulateTabReturn(page);
+  await expect
+    .poll(() => harness.taskRequestIdentities().includes(`${USER_B}:${FAMILY_A}`))
+    .toBe(true);
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0);
+  await expect(page.getByText('家族のやることをまとめて管理')).toBeVisible();
+  await expect(page.getByTestId('task-add-button')).toBeEnabled();
+  await page.getByTestId('task-add-button').click();
+  await expect(page.getByRole('option', { name: /別アカウントの予定/ })).toBeAttached();
+  await expect(page.getByRole('option', { name: /運動会/ })).toHaveCount(0);
+});
+
 test('keeps form input after save failure, validates locally, and ignores a rapid duplicate submit', async ({
   page,
 }) => {
@@ -669,23 +1027,39 @@ test('keeps form input after save failure, validates locally, and ignores a rapi
   await page.goto('/tasks');
   await page.getByTestId('task-add-button').click();
   await page.getByTestId('task-form-title').fill('保存失敗の入力');
+  await page.getByTestId('task-form-event').selectOption('evt_sports_day');
   await page.getByTestId('task-save').click();
   await expect(page.getByRole('alert')).toContainText('やることを保存できませんでした');
   await expect(page.getByTestId('task-form-title')).toHaveValue('保存失敗の入力');
-  await page.getByRole('button', { name: '閉じる' }).click();
+  const originalRequestId = harness.createRequests[0]?.clientRequestId;
+  await page.getByTestId('task-form-event').selectOption('evt_picnic');
+  await page.getByTestId('task-save').click();
+  await expect(page.getByTestId('task-dialog')).toBeHidden();
+  expect(harness.createRequests).toHaveLength(2);
+  expect(harness.createRequests.map((request) => request.clientRequestId)).toEqual([
+    originalRequestId,
+    originalRequestId,
+  ]);
+  expect(harness.createRequests.map((request) => request.eventId)).toEqual([
+    'evt_sports_day',
+    'evt_sports_day',
+  ]);
+  expect(harness.patchRequests).toContainEqual(expect.objectContaining({ eventId: 'evt_picnic' }));
 
+  const requestsBeforeLocalValidation = harness.createRequests.length;
   await page.getByTestId('task-add-button').click();
   await page.getByTestId('task-form-title').fill('   ');
   await page.getByTestId('task-save').click();
   await expect(page.getByRole('alert')).toContainText('入力内容を確認してください');
-  expect(harness.createRequests).toHaveLength(1);
+  expect(harness.createRequests).toHaveLength(requestsBeforeLocalValidation);
   await page.getByTestId('task-form-title').fill('二重作成しない');
   const gate = deferred();
   harness.setCreateGate(gate);
   await page.getByTestId('task-save').click();
-  await expect.poll(() => harness.createRequests.length).toBe(2);
+  await expect.poll(() => harness.createRequests.length).toBe(requestsBeforeLocalValidation + 1);
   await page.getByTestId('task-save').click({ force: true });
-  expect(harness.createRequests).toHaveLength(2);
+  expect(harness.createRequests).toHaveLength(requestsBeforeLocalValidation + 1);
+  expect(harness.createRequests.at(-1)?.eventId).toBeNull();
   gate.resolve();
   await selectView(page, '期限順');
   await expect(page.getByRole('button', { name: '二重作成しない' })).toBeVisible();
@@ -824,6 +1198,8 @@ test('refreshes cached tasks when returning from another tab and fits at 390px a
     task('task-tab-return', { title: 'タブに戻る' }),
   ]);
   await page.goto('/tasks');
+  await selectView(page, '期限順');
+  await expect(page.getByText('タブに戻る')).toBeVisible();
   const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
   await navigation.getByRole('link', { name: '週', exact: true }).click();
   await expect(page).toHaveURL(/\/\?week=/);
@@ -862,7 +1238,7 @@ test('wraps long task, event, and member names at 390px and 445px', async ({ pag
     ...member,
     name: index === 0 ? `Member${'M'.repeat(70)}` : member.name,
   }));
-  await installTaskHarness(
+  const harness = await installTaskHarness(
     page,
     [
       task('task-long-title', {
@@ -873,6 +1249,15 @@ test('wraps long task, event, and member names at 390px and 445px', async ({ pag
     ],
     longMembers,
   );
+  harness.setCandidateResponse(
+    [
+      {
+        ...sportsDayCandidate,
+        title: `運動会${'予定'.repeat(40)}`,
+      },
+    ],
+    false,
+  );
   await page.goto('/tasks');
 
   for (const width of [390, 445]) {
@@ -880,6 +1265,14 @@ test('wraps long task, event, and member names at 390px and 445px', async ({ pag
     expect(
       await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
     ).toBe(true);
+    await page.getByTestId('task-add-button').click();
+    await expect(page.getByRole('option', { name: /運動会/ })).toBeAttached();
+    expect(
+      await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    const eventPickerBox = await page.getByTestId('task-form-event').boundingBox();
+    expect(eventPickerBox?.height).toBeGreaterThanOrEqual(44);
+    await page.getByRole('button', { name: '閉じる' }).click();
     await page.getByTestId('task-add-to-event-evt_picnic').click();
     await expect(page.getByTestId('task-dialog')).toContainText(longEvent.title);
     expect(

@@ -46,7 +46,7 @@ Danran は、小さな子どもがいる共働き家庭向けの予定共有ア�
 | [docs/18-personal-events.md](docs/18-personal-events.md) | 本人だけに表示する個人予定 API・段階的認可・プライバシー保証 |
 | [docs/19-busy-sharing.md](docs/19-busy-sharing.md) | free/busy 用カレンダー選択、家族 busy 週 API・プライバシー保証・staging 手順 |
 | [docs/20-routines.md](docs/20-routines.md) | 繰り返し予定と個別の回の作成・一覧・変更 API、Google Calendar との対応、再試行、staging 手順 |
-| [docs/21-tasks.md](docs/21-tasks.md) | やること API、持ち物からの自動生成、予定との同期、staging 手順 |
+| [docs/21-tasks.md](docs/21-tasks.md) | やること API、持ち物からの自動生成、予定候補とフォーム、staging 手順 |
 
 ## 前提条件
 
@@ -149,5 +149,6 @@ Phase 0 基盤（タスク 0-1 雛形、タスク 0-2 PWA・オフライン対�
   - **タスク 3-3（祝日・年末年始の自動スキップ）**: S4 の設定から本人の Google トークンで今後183日分を適用し、画面利用時に範囲を補完します。Cron は使わず、休園日は対象外です。API・保存仕様・staging 確認手順は [docs/20-routines.md](docs/20-routines.md)。自動テストの結果は PR の検証記録を参照してください。実 Google アカウントによる staging 確認は人間による実施待ちです。
   - **タスク 3-4（繰り返し回と単発予定の重複）**: 実装中です。`shared/domain/conflicts` で時刻指定の繰り返し回と確定済み単発家族予定を比較し、S4 に解決パネル、S1 に両予定の重複印を表示します。確認範囲・staging 手順は [docs/20-routines.md](docs/20-routines.md)。staging の実 Google カレンダー確認は人間による実施待ちです。
 - Phase 5：やること：
-  - **タスク 5-1（tasks API と持ち物からの自動生成）**: PR #36 で main にマージ済み。自動テスト済み、staging 確認待ちです。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。
-  - **タスク 5-2（S5 やること画面）**: `/tasks` の予定ごと・期限順・自分の担当、完了・担当変更、手動タスクの追加・編集・削除を実装。自動テストの検証結果は PR に記載します。staging の人間による確認は未実施です。画面仕様・手順は [docs/02-screens.md](docs/02-screens.md#s5-やること) と [docs/21-tasks.md](docs/21-tasks.md) を参照してください。週ビュー連携は Task 5-3 です。
+  - **タスク 5-1（tasks API と持ち物からの自動生成）**: PR #36 で main にマージ済み。自動テストと staging 実機確認済みです。API・保存範囲・予定への追従規則は [docs/21-tasks.md](docs/21-tasks.md)。
+  - **タスク 5-2（S5 やること画面）**: `/tasks` の予定ごと・期限順・自分の担当、完了・担当変更、手動タスクの追加・編集・削除を実装。Task 5-1 API を含めた staging 実機確認済みです。画面仕様・手順は [docs/02-screens.md](docs/02-screens.md#s5-やること) と [docs/21-tasks.md](docs/21-tasks.md) を参照してください。週ビュー連携は Task 5-3 です。
+  - **タスク 5-2 フォローアップ（S5 の予定選択）**: `/tasks` の手動タスク追加・編集から、60日以内の単発家族予定を選べます。合成データの自動テストを整備し、staging 確認手順は [docs/21-tasks.md](docs/21-tasks.md) に記載しています。フォローアップ機能の staging 実機確認は未実施です。

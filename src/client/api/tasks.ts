@@ -1,10 +1,12 @@
 import {
   type ManualTaskCreate,
   type Task,
+  type TaskEventCandidatesResponse,
   type TaskPatch,
   manualTaskCreateSchema,
   taskDeleteResponseSchema,
   taskErrorResponseSchema,
+  taskEventCandidatesResponseSchema,
   taskListResponseSchema,
   taskMutationResponseSchema,
   taskPatchSchema,
@@ -111,6 +113,37 @@ export async function fetchTasks(familyId: string, signal?: AbortSignal): Promis
     signal,
   );
   return result.tasks;
+}
+
+export async function fetchTaskEventCandidates(
+  familyId: string,
+  signal?: AbortSignal,
+): Promise<TaskEventCandidatesResponse> {
+  const path = `/api/families/${encodeURIComponent(familyId)}/tasks/event-candidates`;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+  } catch (error: unknown) {
+    if (signal?.aborted) throw error;
+    throw new TaskApiError('予定の候補を読み込めませんでした。通信状態を確認してください。');
+  }
+
+  if (!response.ok) throw await readError(response);
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new TaskApiError('予定の候補を確認できませんでした。');
+  }
+  const parsed = taskEventCandidatesResponseSchema.safeParse(json);
+  if (!parsed.success) throw new TaskApiError('予定の候補を確認できませんでした。');
+  return parsed.data;
 }
 
 export async function createTask(
