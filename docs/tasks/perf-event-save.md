@@ -1,6 +1,7 @@
 # タスク：予定の保存を速くし、失敗の原因を追えるようにする
 
 - ブランチ名: `perf/event-save`（最新の main から分岐）
+- **人間の確認が必要**（デプロイ設定 `wrangler.jsonc` を変える。2026-10-15 に人間が了承済み。マージは人間の判断を仰ぐ）
 - 作業前に読むもの: [AGENTS.md](../../AGENTS.md)、[docs/16-event-editing.md](../16-event-editing.md)、[docs/11-google-calendar-client.md](../11-google-calendar-client.md)、`src/worker/google/calendar.ts`（`createGoogleCalendarClient` の第3引数 `reuseAccessToken`）、`src/worker/routes/events.ts`、`src/worker/index.ts`（全体のエラー処理）、`src/client/features/week/EventDialog.tsx`、`src/client/api/events.ts`、`docs/tasks/perf-routines-responsiveness.md`（同じ考え方で「繰り返し」を直したときの指示書）
 
 ## 背景
@@ -35,11 +36,17 @@
 - `src/worker/index.ts` の全体のエラー処理で、**エラーの種類だけ**をログに出す：HTTP メソッド、ルートの型（`c.req.routePath`。例 `/api/families/:id/events`。実際の ID を含めない）、エラーの名前（`err.name`。例 `TypeError`）、Google のエラーなら Google の HTTP ステータスと、このプロジェクトのエラーコード。**エラーのメッセージ、スタック、リクエストの本文、ヘッダー、URL の実際の値、トークン、予定の内容は出さない。** 応答の形は変えない。
 - `events.ts` の中で、500 を返している箇所（`INTERNAL_ERROR`）も、同じ形でエラーの種類だけをログに出す。
 
+### ログの保存（staging だけ。2026-10-15 に人間が了承）
+
+- `wrangler.jsonc` の `env.staging` に、Workers Logs を有効にする設定（`"observability": { "enabled": true }`）を足す。**production とローカルは変えない。** 標本の割合（`head_sampling_rate`）は 1（すべて）。
+- これで保存されるのは、`console` に出したものと、リクエストの基本情報（Cloudflare が自動で記録する、メソッド・パス・ステータスなど）。**パスには家族 ID・予定 ID が含まれる**ので、docs に「staging のログには ID が残る。予定の内容・トークンは残らない」と書く。アプリのコードから、ID・内容を `console` に出さない決まりは、そのまま。
+- ほかのデプロイ設定（バインディング、ルート、Cron、vars）は変えない。CI のワークフローも変えない。
+
 ## 変えないもの
 
 - 予定の API の入出力、検証、Google への呼び出しの順序と数、やることへの追従。
 - ほかのルートのトークンの扱い（週、個人予定、空き状況、家族、やること）。
-- D1 のスキーマ、マイグレーション、スコープ、デプロイ設定（`wrangler.jsonc`。ログの保存の設定は、人間が判断する）。
+- D1 のスキーマ、マイグレーション、スコープ。`wrangler.jsonc` は、上の staging のログの設定だけを足す。
 
 ## テスト
 
@@ -63,7 +70,7 @@
 
 - 予定を保存すると、週の取り直しを待たずにダイアログが閉じる。
 - 予定の API で、トークンの取得が1回のリクエストにつき1回になる。
-- 予期しない例外の種類がログに残り、ログに予定の内容・ID・トークンが出ない。
+- 予期しない例外の種類がログに残り、アプリが出すログに予定の内容・ID・トークンが出ない。staging で Workers Logs が有効になる（production は変わらない）。
 - `pnpm typecheck` / `lint` / `test` / `e2e` が通る。`pnpm db:generate` で差分が出ない。
 
 PR を作成したらマージせずに止まること。
