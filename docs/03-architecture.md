@@ -324,6 +324,7 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 - すべての `/api/families/:id/*` でメンバー所属をチェックするミドルウェアを通す。
 - リフレッシュトークンは AES-GCM で暗号化する（鍵は secret の `TOKEN_ENC_KEY`）。
 - R2 の写真は公開しない。Worker 経由で認可したうえで配信する。
+- アプリが出すエラーログは `console.error('worker_error', { method, routePath, errorName, googleStatus?, errorCode? })` とし、メソッドは許可リスト外なら `UNKNOWN`、routePath は `c.req.routePath` が安全なルート型でなければ `unknown`、エラー名は許可リスト外なら `Error` とする。Google Calendar エラーだけ、明示された有効な HTTP ステータスと許可リスト内のプロジェクトエラーコードを記録してよい。メッセージ、スタック、本文、ヘッダー、実値を含む URL、ID、予定内容、トークンはアプリログに出さない。Cloudflare の自動 invocation logs は別の記録で、メソッド・URL/パス・ステータスなどを含み、パスに家族 ID・予定 ID が残り得る。これはアプリログの保証対象外であり、予定の内容やトークンがアプリの `console` ログに出ることはない。Workers Logs は staging だけ有効にし、標本率を1にする。production/local のログ設定は変更しない。詳細は [Cloudflare Workers Logs: invocation logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs) を参照。
 - Secrets：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`SESSION_SECRET`、`TOKEN_ENC_KEY`、`ANTHROPIC_API_KEY`、`VAPID_PUBLIC_KEY`、`VAPID_PRIVATE_KEY`、`LLM_MODEL`（var）
 
 ## 環境

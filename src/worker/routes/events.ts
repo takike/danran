@@ -25,6 +25,7 @@ import {
   validatePathSegment,
 } from '@worker/google/calendar';
 import { ReauthNeededError } from '@worker/google/oauth';
+import { logSafeError } from '@worker/logging/safeError';
 import { and, eq } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -272,7 +273,9 @@ eventsRoute.post('/:id/events', async (c) => {
       access.session.user.id,
       input.clientRequestId,
     );
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+    });
     let event: GoogleEvent;
     const properties = buildDanranPrivateProperties(input);
     try {
@@ -299,7 +302,8 @@ eventsRoute.post('/:id/events', async (c) => {
     }
     try {
       await saveMetadata(access.db, access.family.id, access.calendarId, event.id, input, 'ignore');
-    } catch {
+    } catch (err) {
+      logSafeError(c, err);
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }
     try {
@@ -323,9 +327,9 @@ eventsRoute.post('/:id/events', async (c) => {
     }
     return c.json(eventMutationResponseSchema.parse({ eventId: event.id }), 200);
   } catch (err) {
-    return err instanceof GoogleCalendarError
-      ? responseForGoogleFailure(c, err)
-      : errorResponse(c, 500, 'INTERNAL_ERROR');
+    if (err instanceof GoogleCalendarError) return responseForGoogleFailure(c, err);
+    logSafeError(c, err);
+    return errorResponse(c, 500, 'INTERNAL_ERROR');
   }
 });
 
@@ -341,7 +345,9 @@ eventsRoute.patch('/:id/events/:eventId', async (c) => {
     const invalidMembers = validateMembers(c, input, access.activeMembers);
     if (invalidMembers) return invalidMembers;
 
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+    });
     let existing: GoogleEvent;
     try {
       existing = await client.events.get(access.calendarId, parsedEventId);
@@ -379,7 +385,8 @@ eventsRoute.patch('/:id/events/:eventId', async (c) => {
     }
     try {
       await saveMetadata(access.db, access.family.id, access.calendarId, updated.id, input);
-    } catch {
+    } catch (err) {
+      logSafeError(c, err);
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }
     try {
@@ -403,9 +410,9 @@ eventsRoute.patch('/:id/events/:eventId', async (c) => {
     }
     return c.json(eventMutationResponseSchema.parse({ eventId: updated.id }), 200);
   } catch (err) {
-    return err instanceof GoogleCalendarError
-      ? responseForGoogleFailure(c, err)
-      : errorResponse(c, 500, 'INTERNAL_ERROR');
+    if (err instanceof GoogleCalendarError) return responseForGoogleFailure(c, err);
+    logSafeError(c, err);
+    return errorResponse(c, 500, 'INTERNAL_ERROR');
   }
 });
 
@@ -416,7 +423,9 @@ eventsRoute.delete('/:id/events/:eventId', async (c) => {
     const rawEventId = c.req.param('eventId');
     const eventId = validateEventId(c, rawEventId);
     if (eventId instanceof Response) return eventId;
-    const client = createGoogleCalendarClient(c.env, access.session.user.id);
+    const client = createGoogleCalendarClient(c.env, access.session.user.id, {
+      reuseAccessToken: true,
+    });
     try {
       const existing = await client.events.get(access.calendarId, eventId);
       if (hasRecurrence(existing)) return errorResponse(c, 409, 'RECURRING_EVENT_UNSUPPORTED');
@@ -434,13 +443,14 @@ eventsRoute.delete('/:id/events/:eventId', async (c) => {
         calendarId: access.calendarId,
         eventId,
       });
-    } catch {
+    } catch (err) {
+      logSafeError(c, err);
       return errorResponse(c, 500, 'INTERNAL_ERROR');
     }
     return c.json(eventDeleteResponseSchema.parse({ ok: true }), 200);
   } catch (err) {
-    return err instanceof GoogleCalendarError
-      ? responseForGoogleFailure(c, err)
-      : errorResponse(c, 500, 'INTERNAL_ERROR');
+    if (err instanceof GoogleCalendarError) return responseForGoogleFailure(c, err);
+    logSafeError(c, err);
+    return errorResponse(c, 500, 'INTERNAL_ERROR');
   }
 });

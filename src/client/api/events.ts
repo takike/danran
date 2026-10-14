@@ -33,14 +33,15 @@ const EVENT_ERROR_MESSAGES: Record<string, string> = {
   RECURRING_EVENT_UNSUPPORTED: '繰り返し予定の変更は準備中です。',
   INTERNAL_ERROR: '予定を保存できませんでした。しばらく経ってから再度お試しください。',
 };
+const UNEXPECTED_EVENT_ERROR_MESSAGE =
+  '予定を保存できませんでした。保存されているか週の表示で確かめてから、もう一度お試しください。';
 
 async function getError(response: Response): Promise<EventApiError> {
   try {
     const parsed = eventErrorResponseSchema.safeParse(await response.json());
     if (parsed.success) {
       return new EventApiError(
-        EVENT_ERROR_MESSAGES[parsed.data.code] ??
-          '予定を保存できませんでした。時間をおいて再度お試しください。',
+        EVENT_ERROR_MESSAGES[parsed.data.code] ?? UNEXPECTED_EVENT_ERROR_MESSAGE,
         parsed.data.code,
         response.status,
       );
@@ -48,11 +49,7 @@ async function getError(response: Response): Promise<EventApiError> {
   } catch {
     // Do not expose arbitrary response bodies or transport details.
   }
-  return new EventApiError(
-    '予定を保存できませんでした。時間をおいて再度お試しください。',
-    undefined,
-    response.status,
-  );
+  return new EventApiError(UNEXPECTED_EVENT_ERROR_MESSAGE, undefined, response.status);
 }
 
 async function sendEventRequest<T>(

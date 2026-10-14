@@ -61,6 +61,7 @@ describe('Task 1-8 event API', () => {
   let insertCount = 0;
   let deleteStatus = 204;
   let forcedCalendarStatus: number | null = null;
+  let rejectNextCalendar401 = false;
 
   beforeEach(async () => {
     requests.length = 0;
@@ -69,6 +70,7 @@ describe('Task 1-8 event API', () => {
     insertCount = 0;
     deleteStatus = 204;
     forcedCalendarStatus = null;
+    rejectNextCalendar401 = false;
     await db.delete(tasks);
     await db.delete(eventMeta);
     await db.delete(members);
@@ -99,6 +101,13 @@ describe('Task 1-8 event API', () => {
         body,
         authorization: request.headers.get('Authorization'),
       });
+      if (rejectNextCalendar401) {
+        rejectNextCalendar401 = false;
+        return Response.json(
+          { error: { code: 401, message: 'private upstream detail' } },
+          { status: 401 },
+        );
+      }
       if (forcedCalendarStatus !== null && url.pathname.includes('/events')) {
         return Response.json(
           {
@@ -343,19 +352,76 @@ describe('Task 1-8 event API', () => {
 
   it('completes D1 persistence on retry without inserting a duplicate Google event', async () => {
     const cookie = await createCaller();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await env.DB.prepare(
       "CREATE TRIGGER fail_event_meta_insert BEFORE INSERT ON event_meta BEGIN SELECT RAISE(ABORT, 'test failure'); END",
     ).run();
     const payload = { ...input, clientRequestId: '123e4567-e89b-42d3-a456-426614174001' };
-    expect((await request('POST', '/api/families/fam_events/events', cookie, payload)).status).toBe(
-      500,
-    );
+    const failed = await request('POST', '/api/families/fam_events/events', cookie, payload);
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+    const logged = errorLog.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(logged).toEqual({
+      method: 'POST',
+      routePath: '/api/families/:id/events',
+      errorName: 'Error',
+    });
+    expect(JSON.stringify(logged)).not.toContain('fam_events');
+    expect(JSON.stringify(logged)).not.toContain('private upstream detail');
+    expect(JSON.stringify(logged)).not.toContain('caller-refresh-token');
+    expect(JSON.stringify(logged)).not.toContain('運動会');
+    errorLog.mockRestore();
     await env.DB.prepare('DROP TRIGGER fail_event_meta_insert').run();
+    const refreshTokensBeforeRetry = refreshTokens.length;
     const retry = await request('POST', '/api/families/fam_events/events', cookie, payload);
     expect(retry.status).toBe(200);
+    expect(refreshTokens).toHaveLength(refreshTokensBeforeRetry + 1); // insert conflict recovery stays on one token
     expect(insertCount).toBe(2); // second attempt gets 409, then fetches the same deterministic event
     expect(storedGoogleEvents.size).toBe(1);
     expect((await db.select().from(eventMeta)).length).toBe(1);
+  });
+
+  it('reuses one access token per mutation request, refreshes once after 401, and fetches again next request', async () => {
+    const cookie = await createCaller();
+    const first = await request('POST', '/api/families/fam_events/events', cookie, {
+      ...input,
+      clientRequestId: '123e4567-e89b-42d3-a456-426614174030',
+    });
+    expect(first.status).toBe(200);
+    const eventId = ((await first.json()) as { eventId: string }).eventId;
+    expect(refreshTokens).toHaveLength(1);
+
+    const requestCountBeforeNormalPatch = requests.length;
+    const refreshCountBeforeNormalPatch = refreshTokens.length;
+    const normalPatch = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      input,
+    );
+    expect(normalPatch.status).toBe(200);
+    expect(refreshTokens).toHaveLength(refreshCountBeforeNormalPatch + 1);
+    expect(requests).toHaveLength(requestCountBeforeNormalPatch + 2); // GET then PATCH
+    expect(requests.filter(({ method }) => method === 'PATCH')).toHaveLength(1);
+
+    const requestCountBeforePatch = requests.length;
+    const refreshCountBeforePatch = refreshTokens.length;
+    rejectNextCalendar401 = true;
+    const patch = await request(
+      'PATCH',
+      `/api/families/fam_events/events/${eventId}`,
+      cookie,
+      input,
+    );
+    expect(patch.status).toBe(200);
+    expect(refreshTokens).toHaveLength(refreshCountBeforePatch + 2); // initial token plus one 401 refresh
+    expect(requests).toHaveLength(requestCountBeforePatch + 3); // 401 GET, retry GET, then PATCH
+    expect(requests.filter(({ method }) => method === 'PATCH')).toHaveLength(2);
+
+    const afterPatchTokenCount = refreshTokens.length;
+    const deletion = await request('DELETE', `/api/families/fam_events/events/${eventId}`, cookie);
+    expect(deletion.status).toBe(200);
+    expect(refreshTokens).toHaveLength(afterPatchTokenCount + 1);
   });
 
   it('does not let a delayed POST replay overwrite metadata saved by a later edit', async () => {

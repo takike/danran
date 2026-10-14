@@ -33,6 +33,10 @@
   "env": {
     "staging": {
       "name": "danran-staging",
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
       "vars": {
         "APP_ORIGIN": "https://danran-staging.tak-ikemachi.workers.dev"
       },
