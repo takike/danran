@@ -92,6 +92,8 @@ function TaskGroup({
   onEdit,
   children,
   testId,
+  completedCount: completedCountOverride,
+  totalCount: totalCountOverride,
 }: {
   title: string;
   header?: React.ReactNode;
@@ -105,8 +107,12 @@ function TaskGroup({
   onEdit: (task: Task) => void;
   children?: React.ReactNode;
   testId?: string;
+  completedCount?: number;
+  totalCount?: number;
 }): React.ReactElement {
-  const completedCount = tasks.filter((task) => task.doneAt !== null).length;
+  const completedCount =
+    completedCountOverride ?? tasks.filter((task) => task.doneAt !== null).length;
+  const totalCount = totalCountOverride ?? tasks.length;
   const taskLabel = tasks.map((task) => task.id).join(',');
   return (
     <section
@@ -123,11 +129,11 @@ function TaskGroup({
         >
           <div
             className="h-full rounded-[var(--radius-full)] bg-member-teal"
-            style={{ width: `${taskGroupProgress(completedCount, tasks.length)}%` }}
+            style={{ width: `${taskGroupProgress(completedCount, totalCount)}%` }}
           />
         </div>
         <span className="shrink-0 text-xs text-muted">
-          {completedCount}/{tasks.length} 完了
+          {completedCount}/{totalCount} 完了
         </span>
       </div>
       <ul data-task-group={taskLabel} className="mt-[var(--spacing-xs)] m-0 list-none p-0">
@@ -161,7 +167,6 @@ function TaskCards({
   onAssignee,
   onEdit,
   showLinked = false,
-  emptyMessage,
 }: {
   tasks: Task[];
   members: Member[];
@@ -172,19 +177,10 @@ function TaskCards({
   onAssignee: (taskId: string, assigneeMemberId: string | null) => Promise<boolean>;
   onEdit: (task: Task) => void;
   showLinked?: boolean;
-  emptyMessage?: string;
 }): React.ReactElement {
-  if (tasks.length === 0)
-    return (
-      <p className="m-0 rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-md)] text-sm text-muted">
-        {emptyMessage ?? '表示するやることはありません。'}
-      </p>
-    );
-  const openTasks = tasks.filter((task) => task.doneAt === null);
-  const doneTasks = tasks.filter((task) => task.doneAt !== null);
-  const renderList = (rows: Task[]) => (
+  return (
     <ul className="m-0 list-none rounded-[var(--radius-lg)] border border-line bg-surface px-[var(--spacing-sm)] py-[var(--spacing-xs)]">
-      {rows.map((task) => (
+      {tasks.map((task) => (
         <TaskRow
           key={task.id}
           task={task}
@@ -201,18 +197,57 @@ function TaskCards({
       ))}
     </ul>
   );
+}
+
+function CompletedTasks({
+  identity,
+  view,
+  retentionEpoch,
+  tasks,
+  members,
+  now,
+  busyTaskIds,
+  mutationErrors,
+  onToggleDone,
+  onAssignee,
+  onEdit,
+}: {
+  identity: string;
+  view: View;
+  retentionEpoch: number;
+  tasks: Task[];
+  members: Member[];
+  now: Date | number;
+  busyTaskIds: Set<string>;
+  mutationErrors: Record<string, string>;
+  onToggleDone: (taskId: string, done: boolean) => Promise<boolean>;
+  onAssignee: (taskId: string, assigneeMemberId: string | null) => Promise<boolean>;
+  onEdit: (task: Task) => void;
+}): React.ReactElement | null {
+  if (tasks.length === 0) return null;
   return (
-    <div className="space-y-[var(--spacing-md)]">
-      {openTasks.length > 0 && renderList(openTasks)}
-      {doneTasks.length > 0 && (
-        <section aria-labelledby="completed-tasks-heading" className="space-y-[var(--spacing-xs)]">
-          <h2 id="completed-tasks-heading" className="m-0 text-sm font-semibold text-muted">
-            完了
-          </h2>
-          {renderList(doneTasks)}
-        </section>
-      )}
-    </div>
+    <details
+      key={`${identity}:${view}:${retentionEpoch}`}
+      data-testid="completed-tasks"
+      className="rounded-[var(--radius-lg)] border border-line bg-surface px-[var(--spacing-md)]"
+    >
+      <summary className="flex min-h-[var(--tap-target-min)] cursor-pointer items-center text-sm font-medium">
+        完了したやること（{tasks.length}件）
+      </summary>
+      <div className="pb-[var(--spacing-sm)]">
+        <TaskCards
+          tasks={tasks}
+          members={members}
+          now={now}
+          busyTaskIds={busyTaskIds}
+          mutationErrors={mutationErrors}
+          onToggleDone={onToggleDone}
+          onAssignee={onAssignee}
+          onEdit={onEdit}
+          showLinked
+        />
+      </div>
+    </details>
   );
 }
 
@@ -258,6 +293,17 @@ export default function TasksPage(): React.ReactElement {
   });
   const taskQueryKey = family && user ? ([...TASKS_QUERY_KEY, user.id, family.id] as const) : null;
   const [view, setView] = useState<View>('event');
+  const [retentionEpoch, setRetentionEpoch] = useState(0);
+  const retentionEpochRef = useRef(0);
+  const [retainedDone, setRetainedDone] = useState<{ scope: string; ids: Set<string> }>(() => ({
+    scope: '',
+    ids: new Set(),
+  }));
+  const retentionScope = `${identity}:${view}:${retentionEpoch}`;
+  const retentionScopeRef = useRef(retentionScope);
+  retentionScopeRef.current = retentionScope;
+  const retainedDoneIds =
+    retainedDone.scope === retentionScope ? retainedDone.ids : new Set<string>();
   const [busyTaskIds, setBusyTaskIds] = useState<Set<string>>(() => new Set());
   const [mutationErrors, setMutationErrors] = useState<Record<string, string>>({});
   const busyTaskIdsRef = useRef(new Set<string>());
@@ -276,8 +322,9 @@ export default function TasksPage(): React.ReactElement {
       buildTaskPresentation(tasksQuery.data ?? [], {
         now,
         currentMemberId: family?.members.find((member) => member.userId === user?.id)?.id ?? '',
+        retainedDoneIds,
       }),
-    [family?.members, now, tasksQuery.data, user?.id],
+    [family?.members, now, retainedDoneIds, tasksQuery.data, user?.id],
   );
   const members = family?.members ?? [];
 
@@ -302,6 +349,9 @@ export default function TasksPage(): React.ReactElement {
         queryClient.removeQueries({ queryKey: oldKey });
       })();
     }
+    retentionEpochRef.current += 1;
+    setRetentionEpoch(retentionEpochRef.current);
+    setRetainedDone({ scope: '', ids: new Set() });
     setView('event');
     setDialogEverOpened(false);
     setDialogOpen(false);
@@ -347,6 +397,16 @@ export default function TasksPage(): React.ReactElement {
     setBusyTaskIds(next);
   };
 
+  const changeView = (nextView: View) => {
+    if (nextView === view) return;
+    const nextEpoch = retentionEpochRef.current + 1;
+    retentionEpochRef.current = nextEpoch;
+    retentionScopeRef.current = `${identity}:${nextView}:${nextEpoch}`;
+    setRetentionEpoch(nextEpoch);
+    setRetainedDone({ scope: '', ids: new Set() });
+    setView(nextView);
+  };
+
   const mutateTask = async (
     taskId: string,
     patch: { done?: boolean; assigneeMemberId?: string | null },
@@ -362,6 +422,7 @@ export default function TasksPage(): React.ReactElement {
       return false;
     const mutationIdentity = identity;
     const key = taskQueryKey;
+    const mutationRetentionScope = retentionScope;
     setTaskBusy(taskId, true);
     setMutationErrors((current) => {
       const next = { ...current };
@@ -378,6 +439,16 @@ export default function TasksPage(): React.ReactElement {
       const current = queryClient.getQueryData<Task[]>(key) ?? [];
       previousTask = current.find((task) => task.id === taskId);
       if (!previousTask) return false;
+      if (patch.done === true && retentionScopeRef.current === mutationRetentionScope) {
+        setRetainedDone((currentRetained) => {
+          const ids =
+            currentRetained.scope === mutationRetentionScope
+              ? new Set(currentRetained.ids)
+              : new Set<string>();
+          ids.add(taskId);
+          return { scope: mutationRetentionScope, ids };
+        });
+      }
       const optimistic: Task = {
         ...previousTask,
         ...(patch.done === undefined
@@ -410,6 +481,14 @@ export default function TasksPage(): React.ReactElement {
           key,
           currentRows.map((task) => (task.id === taskId ? rollbackTask : task)),
         );
+      if (patch.done === true && retentionScopeRef.current === mutationRetentionScope) {
+        setRetainedDone((currentRetained) => {
+          if (currentRetained.scope !== mutationRetentionScope) return currentRetained;
+          const ids = new Set(currentRetained.ids);
+          ids.delete(taskId);
+          return { scope: mutationRetentionScope, ids };
+        });
+      }
       setMutationErrors((current) => ({
         ...current,
         [taskId]:
@@ -453,7 +532,17 @@ export default function TasksPage(): React.ReactElement {
   const isTaskAccessLost =
     tasksQuery.error instanceof TaskApiError &&
     [401, 403, 404].includes(tasksQuery.error.status ?? 0);
-  const taskRows = tasksQuery.data ?? [];
+  const completedTasks =
+    view === 'mine' ? presentation.mineCompletedTasks : presentation.completedTasks;
+  const visibleTaskCount =
+    view === 'event'
+      ? presentation.readyGroups.length +
+        presentation.missingTasks.length +
+        presentation.unavailableTasks.length +
+        presentation.unlinkedTasks.length
+      : view === 'due'
+        ? presentation.orderedTasks.length
+        : presentation.mineTasks.length;
 
   if (
     session.isLoading ||
@@ -567,7 +656,7 @@ export default function TasksPage(): React.ReactElement {
               label="やることの表示"
               options={[...VIEW_OPTIONS]}
               value={view}
-              onChange={setView}
+              onChange={changeView}
               className="w-full"
             />
           </div>
@@ -593,39 +682,54 @@ export default function TasksPage(): React.ReactElement {
             </section>
           ) : tasksQuery.isLoading ? (
             <TasksPlaceholder />
-          ) : taskRows.length === 0 ? (
-            <section className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-lg)] text-center">
-              {tasksQuery.isError && !isTaskAccessLost && (
-                <div className="mb-[var(--spacing-md)]">
-                  <output className="block text-sm text-muted">
-                    最新の一覧を取得できませんでした。表示中の内容を続けています。
-                  </output>
-                  <button
-                    type="button"
-                    onClick={() => void tasksQuery.refetch()}
-                    className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
-                  >
-                    <RefreshCw size={16} aria-hidden="true" />
-                    再試行
-                  </button>
+          ) : visibleTaskCount === 0 ? (
+            <>
+              <section className="rounded-[var(--radius-lg)] border border-line bg-surface p-[var(--spacing-lg)] text-center">
+                {tasksQuery.isError && !isTaskAccessLost && (
+                  <div className="mb-[var(--spacing-md)]">
+                    <output className="block text-sm text-muted">
+                      最新の一覧を取得できませんでした。表示中の内容を続けています。
+                    </output>
+                    <button
+                      type="button"
+                      onClick={() => void tasksQuery.refetch()}
+                      className={`${buttonClass} mt-[var(--spacing-xs)] w-full border border-line bg-surface`}
+                    >
+                      <RefreshCw size={16} aria-hidden="true" />
+                      再試行
+                    </button>
+                  </div>
+                )}
+                <div className="mx-auto mb-[var(--spacing-md)] flex h-[var(--icon-size-lg)] w-[var(--icon-size-lg)] items-center justify-center rounded-[var(--radius-full)] bg-chip text-muted">
+                  <CheckSquare size={24} aria-hidden="true" />
                 </div>
-              )}
-              <div className="mx-auto mb-[var(--spacing-md)] flex h-[var(--icon-size-lg)] w-[var(--icon-size-lg)] items-center justify-center rounded-[var(--radius-full)] bg-chip text-muted">
-                <CheckSquare size={24} aria-hidden="true" />
-              </div>
-              <h2 className="m-0 text-base font-semibold">家族のやることをまとめて管理</h2>
-              <p className="mt-[var(--spacing-sm)] mb-0 text-sm leading-relaxed text-muted">
-                予定に紐づく準備や、手動のやることをここで確認できます。
-              </p>
-              <button
-                type="button"
-                onClick={() => openCreate()}
-                className={`${buttonClass} mt-[var(--spacing-md)] w-full bg-accent text-surface`}
-              >
-                <Plus size={18} aria-hidden="true" />
-                やることを追加
-              </button>
-            </section>
+                <h2 className="m-0 text-base font-semibold">家族のやることをまとめて管理</h2>
+                <p className="mt-[var(--spacing-sm)] mb-0 text-sm leading-relaxed text-muted">
+                  予定に紐づく準備や、手動のやることをここで確認できます。
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openCreate()}
+                  className={`${buttonClass} mt-[var(--spacing-md)] w-full bg-accent text-surface`}
+                >
+                  <Plus size={18} aria-hidden="true" />
+                  やることを追加
+                </button>
+              </section>
+              <CompletedTasks
+                identity={identity}
+                view={view}
+                retentionEpoch={retentionEpoch}
+                tasks={completedTasks}
+                members={members}
+                now={now}
+                busyTaskIds={busyTaskIds}
+                mutationErrors={mutationErrors}
+                onToggleDone={(id, done) => mutateTask(id, { done })}
+                onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
+                onEdit={openEdit}
+              />
+            </>
           ) : (
             <>
               {tasksQuery.isError && !isTaskAccessLost && (
@@ -699,6 +803,8 @@ export default function TasksPage(): React.ReactElement {
                         onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
                         onEdit={openEdit}
                         testId="task-event-group"
+                        completedCount={group.completedCount}
+                        totalCount={group.totalCount}
                       >
                         <button
                           type="button"
@@ -724,6 +830,8 @@ export default function TasksPage(): React.ReactElement {
                       onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
                       onEdit={openEdit}
                       testId="task-missing-group"
+                      completedCount={presentation.missingCompletedCount}
+                      totalCount={presentation.missingTotalCount}
                     />
                   )}
                   {presentation.unavailableTasks.length > 0 && (
@@ -738,6 +846,8 @@ export default function TasksPage(): React.ReactElement {
                       onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
                       onEdit={openEdit}
                       testId="task-unavailable-group"
+                      completedCount={presentation.unavailableCompletedCount}
+                      totalCount={presentation.unavailableTotalCount}
                     >
                       <button
                         type="button"
@@ -783,7 +893,6 @@ export default function TasksPage(): React.ReactElement {
                     onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
                     onEdit={openEdit}
                     showLinked
-                    emptyMessage="やることはありません。"
                   />
                 </div>
               ) : (
@@ -798,10 +907,22 @@ export default function TasksPage(): React.ReactElement {
                     onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
                     onEdit={openEdit}
                     showLinked
-                    emptyMessage="あなたが担当のやることはありません。"
                   />
                 </div>
               )}
+              <CompletedTasks
+                identity={identity}
+                view={view}
+                retentionEpoch={retentionEpoch}
+                tasks={completedTasks}
+                members={members}
+                now={now}
+                busyTaskIds={busyTaskIds}
+                mutationErrors={mutationErrors}
+                onToggleDone={(id, done) => mutateTask(id, { done })}
+                onAssignee={(id, assigneeMemberId) => mutateTask(id, { assigneeMemberId })}
+                onEdit={openEdit}
+              />
             </>
           )}
         </>

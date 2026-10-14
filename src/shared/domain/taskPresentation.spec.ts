@@ -53,15 +53,16 @@ describe('task presentation', () => {
       'event-later',
     ]);
     expect(presentation.readyGroups[0]).toMatchObject({
-      tasks: [{ id: 'event-earlier-2' }, { id: 'event-earlier-1' }],
+      tasks: [{ id: 'event-earlier-2' }],
       completedCount: 1,
       totalCount: 2,
       countdown: { kind: 'today' },
     });
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual(['event-earlier-1']);
     expect(presentation.readyGroups[1]?.countdown).toEqual({ kind: 'days', days: 2 });
   });
 
-  it('orders unfinished rows by due date, puts none and unknown last, and completed rows last', () => {
+  it('orders visible unfinished rows by due date and hides completed rows', () => {
     const presentation = buildTaskPresentation(
       [
         makeTask('complete-earliest', {
@@ -87,7 +88,104 @@ describe('task presentation', () => {
       'same-day-date',
       'none',
       'unknown',
-      'complete-earliest',
+    ]);
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual(['complete-earliest']);
+  });
+
+  it('keeps retained completed tasks in their due order and excludes them from the completed list', () => {
+    const presentation = buildTaskPresentation(
+      [
+        makeTask('retained-earlier', {
+          due: { kind: 'date', dueAt: '2026-10-09' },
+          doneAt: 100,
+        }),
+        makeTask('unfinished-later', { due: { kind: 'date', dueAt: '2026-10-10' } }),
+        makeTask('completed-hidden', { doneAt: 300 }),
+      ],
+      {
+        now: new Date('2026-10-08T01:00:00Z'),
+        currentMemberId: 'member-self',
+        retainedDoneIds: new Set(['retained-earlier']),
+      },
+    );
+
+    expect(presentation.orderedTasks.map(({ id }) => id)).toEqual([
+      'retained-earlier',
+      'unfinished-later',
+    ]);
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual(['completed-hidden']);
+  });
+
+  it('hides ready event groups without visible tasks while retaining all task counts', () => {
+    const presentation = buildTaskPresentation(
+      [
+        makeTask('all-done', {
+          doneAt: 100,
+          linkedEvent: readyEvent('past-event', '2026-10-01', '2026-10-02'),
+        }),
+        makeTask('active', {
+          linkedEvent: readyEvent('active-event', '2026-10-10', '2026-10-11'),
+        }),
+      ],
+      { now: new Date('2026-10-08T01:00:00Z'), currentMemberId: 'member-self' },
+    );
+
+    expect(presentation.readyGroups.map(({ eventId }) => eventId)).toEqual(['active-event']);
+    expect(presentation.readyGroups[0]).toMatchObject({ completedCount: 0, totalCount: 1 });
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual(['all-done']);
+  });
+
+  it('keeps an event group for a retained last row, counts all its tasks, and hides it after release', () => {
+    const tasks = [
+      makeTask('retained-event-task', {
+        doneAt: 200,
+        linkedEvent: readyEvent('event', '2026-10-01', '2026-10-02'),
+      }),
+      makeTask('other-event-task', {
+        doneAt: 100,
+        linkedEvent: readyEvent('event', '2026-10-01', '2026-10-02'),
+      }),
+    ];
+    const retained = buildTaskPresentation(tasks, {
+      now: new Date('2026-10-08T01:00:00Z'),
+      currentMemberId: 'member-self',
+      retainedDoneIds: new Set(['retained-event-task']),
+    });
+    const released = buildTaskPresentation(tasks, {
+      now: new Date('2026-10-08T01:00:00Z'),
+      currentMemberId: 'member-self',
+    });
+
+    expect(retained.readyGroups).toMatchObject([
+      {
+        eventId: 'event',
+        tasks: [{ id: 'retained-event-task' }],
+        completedCount: 2,
+        totalCount: 2,
+      },
+    ]);
+    expect(retained.completedTasks.map(({ id }) => id)).toEqual(['other-event-task']);
+    expect(released.readyGroups).toEqual([]);
+  });
+
+  it('counts completed tasks only for the current member in mine view data', () => {
+    const presentation = buildTaskPresentation(
+      [
+        makeTask('self-old', { doneAt: 100, assigneeMemberId: 'member-self' }),
+        makeTask('other-newest', { doneAt: 300, assigneeMemberId: 'member-other' }),
+        makeTask('self-newest', { doneAt: 200, assigneeMemberId: 'member-self' }),
+      ],
+      { now: new Date('2026-10-08T01:00:00Z'), currentMemberId: 'member-self' },
+    );
+
+    expect(presentation.mineCompletedTasks.map(({ id }) => id)).toEqual([
+      'self-newest',
+      'self-old',
+    ]);
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual([
+      'other-newest',
+      'self-newest',
+      'self-old',
     ]);
   });
 
@@ -246,15 +344,33 @@ describe('task presentation', () => {
       [
         makeTask('unlinked'),
         makeTask('missing', { linkedEvent: { state: 'missing', eventId: 'gone' } }),
+        makeTask('missing-done', {
+          doneAt: 100,
+          linkedEvent: { state: 'missing', eventId: 'gone' },
+        }),
         makeTask('unavailable', {
           linkedEvent: { state: 'unavailable', eventId: 'unknown' },
         }),
+        makeTask('unavailable-done', {
+          doneAt: 200,
+          linkedEvent: { state: 'unavailable', eventId: 'unknown' },
+        }),
+        makeTask('unlinked-done', { doneAt: 300 }),
       ],
       { now: new Date('2026-10-08T03:00:00Z'), currentMemberId: 'member-self' },
     );
 
     expect(presentation.missingTasks.map(({ id }) => id)).toEqual(['missing']);
+    expect([presentation.missingCompletedCount, presentation.missingTotalCount]).toEqual([1, 2]);
     expect(presentation.unavailableTasks.map(({ id }) => id)).toEqual(['unavailable']);
+    expect([presentation.unavailableCompletedCount, presentation.unavailableTotalCount]).toEqual([
+      1, 2,
+    ]);
     expect(presentation.unlinkedTasks.map(({ id }) => id)).toEqual(['unlinked']);
+    expect(presentation.completedTasks.map(({ id }) => id)).toEqual([
+      'unlinked-done',
+      'unavailable-done',
+      'missing-done',
+    ]);
   });
 });
