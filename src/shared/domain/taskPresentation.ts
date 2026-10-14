@@ -38,8 +38,14 @@ export interface TaskPresentation {
   };
   readyGroups: ReadyTaskGroup[];
   missingTasks: Task[];
+  missingCompletedCount: number;
+  missingTotalCount: number;
   unavailableTasks: Task[];
+  unavailableCompletedCount: number;
+  unavailableTotalCount: number;
   unlinkedTasks: Task[];
+  completedTasks: Task[];
+  mineCompletedTasks: Task[];
   orderedTasks: Task[];
   mineTasks: Task[];
 }
@@ -62,9 +68,9 @@ function getTaskSortValue(task: Pick<Task, 'due'>): number | null {
   return null;
 }
 
-function compareTasks(left: Task, right: Task): number {
-  const leftDone = left.doneAt !== null;
-  const rightDone = right.doneAt !== null;
+function compareTasks(left: Task, right: Task, retainedDoneIds: ReadonlySet<string>): number {
+  const leftDone = left.doneAt !== null && !retainedDoneIds.has(left.id);
+  const rightDone = right.doneAt !== null && !retainedDoneIds.has(right.id);
   if (leftDone !== rightDone) return leftDone ? 1 : -1;
 
   const leftDue = getTaskSortValue(left);
@@ -124,8 +130,13 @@ export function getTaskDueLabel(task: Pick<Task, 'due'>, now: number | Date): Ta
 /** Builds the S5 groups, due ordering, countdowns, and summaries without mutating API data. */
 export function buildTaskPresentation(
   tasks: readonly Task[],
-  input: { now: number | Date; currentMemberId: string },
+  input: {
+    now: number | Date;
+    currentMemberId: string;
+    retainedDoneIds?: ReadonlySet<string>;
+  },
 ): TaskPresentation {
+  const retainedDoneIds = input.retainedDoneIds ?? new Set<string>();
   const today = getTodayDateKey(input.now);
   const week = getCalendarWeekBounds(today);
   let dueTodayOrEarlier = 0;
@@ -135,8 +146,12 @@ export function buildTaskPresentation(
   const missingTasks: Task[] = [];
   const unavailableTasks: Task[] = [];
   const unlinkedTasks: Task[] = [];
+  const completedTasks: Task[] = [];
 
   for (const task of tasks) {
+    if (task.doneAt !== null) {
+      if (!retainedDoneIds.has(task.id)) completedTasks.push(task);
+    }
     if (task.doneAt === null) {
       const dueDate = getTaskDate(task);
       if (dueDate !== null) {
@@ -162,7 +177,14 @@ export function buildTaskPresentation(
 
   const readyGroups = [...readyByEvent.entries()]
     .map(([eventId, group]) => {
-      const sortedTasks = [...group.tasks].sort(compareTasks);
+      const allTasks = group.tasks;
+      const visibleTasks = allTasks.filter(
+        (task) => task.doneAt === null || retainedDoneIds.has(task.id),
+      );
+      if (visibleTasks.length === 0) return null;
+      const sortedTasks = [...visibleTasks].sort((left, right) =>
+        compareTasks(left, right, retainedDoneIds),
+      );
       return {
         eventId,
         title: group.event.title,
@@ -170,25 +192,47 @@ export function buildTaskPresentation(
         memberIds: group.event.memberIds,
         items: group.event.items,
         tasks: sortedTasks,
-        completedCount: sortedTasks.filter((task) => task.doneAt !== null).length,
-        totalCount: sortedTasks.length,
+        completedCount: allTasks.filter((task) => task.doneAt !== null).length,
+        totalCount: allTasks.length,
         countdown: getEventCountdown(group.event.time, today),
       };
     })
+    .filter((group): group is ReadyTaskGroup => group !== null)
     .sort((left, right) => {
       const byTime = compareEventTimes(left.time, right.time);
       return byTime || left.eventId.localeCompare(right.eventId);
     });
 
-  const orderedTasks = [...tasks].sort(compareTasks);
+  const visibleTasks = tasks.filter((task) => task.doneAt === null || retainedDoneIds.has(task.id));
+  const orderedTasks = [...visibleTasks].sort((left, right) =>
+    compareTasks(left, right, retainedDoneIds),
+  );
+  const sortCompleted = (left: Task, right: Task) => {
+    const byDoneAt = (right.doneAt ?? 0) - (left.doneAt ?? 0);
+    return byDoneAt || left.id.localeCompare(right.id);
+  };
   return {
     today,
     week,
     summary: { dueTodayOrEarlier, dueThisWeek, unassigned },
     readyGroups,
-    missingTasks: missingTasks.sort(compareTasks),
-    unavailableTasks: unavailableTasks.sort(compareTasks),
-    unlinkedTasks: unlinkedTasks.sort(compareTasks),
+    missingCompletedCount: missingTasks.filter((task) => task.doneAt !== null).length,
+    missingTotalCount: missingTasks.length,
+    missingTasks: missingTasks
+      .filter((task) => task.doneAt === null || retainedDoneIds.has(task.id))
+      .sort((left, right) => compareTasks(left, right, retainedDoneIds)),
+    unavailableCompletedCount: unavailableTasks.filter((task) => task.doneAt !== null).length,
+    unavailableTotalCount: unavailableTasks.length,
+    unavailableTasks: unavailableTasks
+      .filter((task) => task.doneAt === null || retainedDoneIds.has(task.id))
+      .sort((left, right) => compareTasks(left, right, retainedDoneIds)),
+    unlinkedTasks: unlinkedTasks
+      .filter((task) => task.doneAt === null || retainedDoneIds.has(task.id))
+      .sort((left, right) => compareTasks(left, right, retainedDoneIds)),
+    completedTasks: completedTasks.sort(sortCompleted),
+    mineCompletedTasks: completedTasks
+      .filter((task) => task.assigneeMemberId === input.currentMemberId)
+      .sort(sortCompleted),
     orderedTasks,
     mineTasks: orderedTasks.filter((task) => task.assigneeMemberId === input.currentMemberId),
   };

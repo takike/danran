@@ -515,14 +515,24 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
   await expect(page.getByText('持ち物から自動')).toBeVisible();
   await expect(page.getByText('水筒、敷物', { exact: true })).toBeVisible();
   await expect(page.getByTestId('task-edit-task-auto')).toHaveCount(0);
-  await page.getByText(/予定に紐づかないやること/).click();
-  await expect(page.getByText('お休みから自動')).toBeVisible();
-  await expect(page.getByText('「ピアノ」（10/17（土））に欠席を連絡')).toBeVisible();
+  const completedFold = page.getByTestId('completed-tasks');
+  await expect(completedFold).toBeVisible();
+  await expect(completedFold).toContainText('完了したやること（1件）');
+  expect(await completedFold.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+    false,
+  );
+  await expect(completedFold).toContainText('前日に確認');
+  const eventGroup = page.getByTestId('task-event-group').filter({ hasText: '公園ピクニック' });
+  await expect(eventGroup).toContainText('1/3 完了');
+  await expect(eventGroup.getByText('前日に確認')).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 1100 });
   if (process.env.DANRAN_SCREENSHOTS === '1') {
     await page.screenshot({ path: 'docs/screenshots/s5-tasks.png' });
   }
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByText(/予定に紐づかないやること/).click();
+  await expect(page.getByText('お休みから自動')).toBeVisible();
+  await expect(page.getByText('「ピアノ」（10/17（土））に欠席を連絡')).toBeVisible();
 
   await page.getByTestId('task-add-button').click();
   await expect(page.getByTestId('task-dialog')).toBeVisible();
@@ -706,6 +716,8 @@ test('shows summaries and sorts each view in event, due, and assigned order', as
   const eventGroups = page.getByTestId('task-event-group');
   await expect(eventGroups.nth(0)).toContainText('先の予定');
   await expect(eventGroups.nth(1)).toContainText('公園ピクニック');
+  await expect(eventGroups.nth(0)).toContainText('0/2 完了');
+  await expect(eventGroups).toHaveCount(2);
   await selectView(page, '期限順');
   const dueView = page.getByTestId('tasks-due-view');
   await expect(dueView.getByRole('button', { name: '過ぎた' })).toBeVisible();
@@ -715,11 +727,13 @@ test('shows summaries and sorts each view in event, due, and assigned order', as
     .locator('button[data-testid^="task-edit-"]')
     .allTextContents();
   expect(openTitles).toEqual(['過ぎた', '今日', '週内', '期限なし', '期限不明']);
-  await expect(dueView.getByRole('heading', { name: '完了', exact: true })).toBeVisible();
+  await expect(dueView.getByRole('button', { name: '完了済み' })).toHaveCount(0);
+  await expect(page.getByTestId('completed-tasks')).toContainText('完了したやること（1件）');
   await selectView(page, '自分の担当');
   const mineView = page.getByTestId('tasks-mine-view');
   const mineTitles = await mineView.locator('button[data-testid^="task-edit-"]').allTextContents();
   expect(mineTitles).toEqual(['週内', '期限不明']);
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
 });
 
 test('optimistic completion and assignee removal roll back and keep errors on the row', async ({
@@ -749,6 +763,7 @@ test('optimistic completion and assignee removal roll back and keep errors on th
       .filter({ hasText: '完了状態を保存できませんでした。もう一度お試しください。' }),
   ).toBeVisible();
   await expect(page.getByRole('checkbox', { name: '期限順で完了を完了にする' })).not.toBeChecked();
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
 
   await selectView(page, '自分の担当');
   const assigneeGate = deferred();
@@ -816,6 +831,176 @@ test('saves completion and assignee changes immediately while refreshing cached 
     'aria-label',
     '担当を決める',
   );
+});
+
+test('hides completed tasks by default and restores only the current member tasks from the fold', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const completedOnlyEvent = {
+    ...ready,
+    eventId: 'evt_all_done',
+    title: '完了だけの予定',
+    time: {
+      kind: 'timed' as const,
+      start: '2026-10-12T10:00:00+09:00',
+      endExclusive: '2026-10-12T11:00:00+09:00',
+    },
+  };
+  await installTaskHarness(page, [
+    task('task-open-a', { title: '未完了の準備A', linkedEvent: ready }),
+    task('task-open-b', { title: '未完了の準備B', linkedEvent: ready }),
+    task('task-done-mine', {
+      title: '完了・本人担当',
+      doneAt: 1_797_000_200,
+      assigneeMemberId: 'mem_adult_a',
+      linkedEvent: ready,
+    }),
+    task('task-done-other', {
+      title: '完了・別担当',
+      doneAt: 1_797_000_300,
+      assigneeMemberId: 'mem_adult_b',
+      linkedEvent: ready,
+    }),
+    task('task-done-card-only', {
+      title: '完了・カードのみ',
+      doneAt: 1_797_000_100,
+      linkedEvent: completedOnlyEvent,
+    }),
+  ]);
+  await page.goto('/tasks');
+  const groups = page.getByTestId('task-event-group');
+  await expect(groups).toHaveCount(1);
+  await expect(groups.first()).toContainText('公園ピクニック');
+  await expect(groups.first()).toContainText('2/4 完了');
+  const eventView = page.getByTestId('tasks-event-view');
+  await expect(eventView.getByText('完了だけの予定')).toHaveCount(0);
+  await expect(eventView.getByText('完了・本人担当')).toHaveCount(0);
+
+  const fold = page.getByTestId('completed-tasks');
+  await expect(fold).toContainText('完了したやること（3件）');
+  expect(await fold.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  await fold.locator('summary').click();
+  const foldedRows = fold.locator('button[data-testid^="task-edit-"]');
+  await expect(foldedRows).toHaveText(['完了・別担当', '完了・本人担当', '完了・カードのみ']);
+  await expect(fold).toContainText('公園ピクニック');
+  await expect(fold).toContainText('10/10');
+
+  await selectView(page, '自分の担当');
+  const mineFold = page.getByTestId('completed-tasks');
+  await expect(mineFold).toContainText('完了したやること（1件）');
+  await expect(mineFold).not.toContainText('完了・別担当');
+  await expect(mineFold).not.toContainText('完了・カードのみ');
+  await mineFold.locator('summary').click();
+  await mineFold.getByRole('checkbox', { name: '完了・本人担当を未完了に戻す' }).click();
+  await expect(page.getByTestId('tasks-mine-view').getByText('完了・本人担当')).toBeVisible();
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
+  await selectView(page, '予定ごと');
+  const restoredGroup = page.getByTestId('task-event-group').filter({ hasText: '公園ピクニック' });
+  await expect(restoredGroup.getByText('完了・本人担当')).toBeVisible();
+  await expect(restoredGroup).toContainText('1/4 完了');
+});
+
+test('keeps a newly completed row in place through mutation and refetch without shifting following rows', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, [
+    task('task-before', { title: '前の準備' }),
+    task('task-retained', { title: '今完了にする準備' }),
+    task('task-after', { title: '後ろの準備' }),
+  ]);
+  await page.goto('/tasks');
+  await selectView(page, '期限順');
+  const followingRow = page.getByTestId('task-edit-task-after');
+  const beforeY = (await followingRow.boundingBox())?.y;
+
+  const patchGate = deferred();
+  harness.setPatchGate(patchGate);
+  const patchStarted = harness.patchStartedPromise;
+  const refetchGate = deferred();
+  harness.setGetGate(refetchGate);
+  const initialGetCalls = harness.getCalls();
+  await page.getByRole('checkbox', { name: '今完了にする準備を完了にする' }).click();
+  await patchStarted;
+  await expect(
+    page.getByRole('checkbox', { name: '今完了にする準備を未完了に戻す' }),
+  ).toBeChecked();
+  expect((await followingRow.boundingBox())?.y).toBe(beforeY);
+  patchGate.resolve();
+  await expect.poll(() => harness.getCalls()).toBeGreaterThan(initialGetCalls);
+  await expect(
+    page.getByRole('checkbox', { name: '今完了にする準備を未完了に戻す' }),
+  ).toBeChecked();
+  expect((await followingRow.boundingBox())?.y).toBe(beforeY);
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
+  refetchGate.resolve();
+  await expect(
+    page.getByRole('checkbox', { name: '今完了にする準備を未完了に戻す' }),
+  ).toBeEnabled();
+  expect((await followingRow.boundingBox())?.y).toBe(beforeY);
+
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: '週', exact: true })
+    .click();
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: /やること/ })
+    .click();
+  await expect(page.getByTestId('tasks-event-view')).toBeVisible();
+  await expect(
+    page.getByTestId('tasks-event-view').getByTestId('task-edit-task-retained'),
+  ).toHaveCount(0);
+  const fold = page.getByTestId('completed-tasks');
+  await expect(fold).toContainText('完了したやること（1件）');
+  expect(await fold.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+});
+
+test('completion finishing after a view switch goes to the closed fold and route return resets retention', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const harness = await installTaskHarness(page, [
+    task('task-switch-retention', { title: '切替中の完了' }),
+  ]);
+  await page.goto('/tasks');
+  await page.getByText(/予定に紐づかないやること/).click();
+  const patchGate = deferred();
+  harness.setPatchGate(patchGate);
+  const patchStarted = harness.patchStartedPromise;
+  await page.getByRole('checkbox', { name: '切替中の完了を完了にする' }).click();
+  await patchStarted;
+  await selectView(page, '期限順');
+  patchGate.resolve();
+  const dueView = page.getByTestId('tasks-due-view');
+  await expect(dueView.getByRole('button', { name: '切替中の完了' })).toHaveCount(0);
+  const fold = page.getByTestId('completed-tasks');
+  await expect(fold).toContainText('完了したやること（1件）');
+  expect(await fold.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: '週', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/\?week=/);
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: /やること/ })
+    .click();
+  await expect(page.getByText('家族のやることをまとめて管理')).toBeVisible();
+  const emptyState = page
+    .getByRole('heading', { name: '家族のやることをまとめて管理' })
+    .locator('xpath=..');
+  await expect(
+    emptyState.getByRole('button', { name: 'やることを追加', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId('completed-tasks')).toContainText('完了したやること（1件）');
+  expect(
+    await page
+      .getByTestId('completed-tasks')
+      .evaluate((element) => (element as HTMLDetailsElement).open),
+  ).toBe(false);
 });
 
 test('creates linked and unlinked manual tasks, edits a task, and confirms deletion inline', async ({
@@ -1218,9 +1403,38 @@ test('explains the empty state and offers a manual task action', async ({ page }
   const harness = await installTaskHarness(page, []);
   await page.goto('/tasks');
   await expect(page.getByText('家族のやることをまとめて管理')).toBeVisible();
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
   await page.getByRole('button', { name: 'やることを追加', exact: true }).last().click();
   await expect(page.getByTestId('task-dialog')).toBeVisible();
   expect(harness.taskCount()).toBe(0);
+});
+
+test('shows the empty explanation and add action when only completed tasks remain', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  await installTaskHarness(page, [
+    task('task-only-done', {
+      title: '完了だけの準備',
+      doneAt: 1_797_000_100,
+      linkedEvent: ready,
+    }),
+  ]);
+  await page.goto('/tasks');
+  await expect(page.getByText('家族のやることをまとめて管理')).toBeVisible();
+  const emptyState = page
+    .getByRole('heading', { name: '家族のやることをまとめて管理' })
+    .locator('xpath=..');
+  await expect(
+    emptyState.getByRole('button', { name: 'やることを追加', exact: true }),
+  ).toBeVisible();
+  const fold = page.getByTestId('completed-tasks');
+  await expect(fold).toContainText('完了したやること（1件）');
+  expect(await fold.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(false);
+  await fold.locator('summary').click();
+  await fold.getByRole('checkbox', { name: '完了だけの準備を未完了に戻す' }).click();
+  await expect(page.getByTestId('task-event-group')).toContainText('完了だけの準備');
+  await expect(page.getByTestId('completed-tasks')).toHaveCount(0);
 });
 
 test('shows initial loading and retry after a failed list request', async ({ page }) => {
@@ -1250,6 +1464,7 @@ test('refreshes cached tasks when returning from another tab and fits at 390px a
   await freezeClock(page);
   const harness = await installTaskHarness(page, [
     task('task-tab-return', { title: 'タブに戻る' }),
+    task('task-tab-return-done', { title: '折りたたみ確認', doneAt: 1_797_000_000 }),
   ]);
   await page.goto('/tasks');
   await selectView(page, '期限順');
@@ -1264,6 +1479,9 @@ test('refreshes cached tasks when returning from another tab and fits at 390px a
   await expect(page.getByText('タブに戻る')).toBeVisible();
   await expect.poll(() => harness.getCalls()).toBeGreaterThan(1);
   await expect(page.getByTestId('task-list-placeholder')).toHaveCount(0);
+  const completedSummary = page.getByTestId('completed-tasks').locator('summary');
+  await expect(completedSummary).toBeVisible();
+  expect((await completedSummary.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   gate.resolve();
 
   for (const width of [390, 445]) {
