@@ -752,18 +752,16 @@ async function mutateRoutineInstance(c: RouteContext, action: InstanceMutation):
     instance: { id: rawInstanceId, ...original, ...resulting, autoSkipReason: null },
   });
   if (!parsedResponse.success) return errorResponse(c, 502, 'GOOGLE_ERROR');
-  if (action !== 'skip' || row.category === 'lesson') {
-    try {
-      await reconcileAbsenceTask(access.db, {
-        familyId: access.family.id,
-        routineSettingsId: row.id,
-        originalStart: original.originalStart,
-        action,
-      });
-    } catch {
-      // Google is the source of truth; the next operation on this occurrence repairs the task.
-      console.error('Absence task reconciliation failed');
-    }
+  try {
+    await reconcileAbsenceTask(access.db, {
+      familyId: access.family.id,
+      routineSettingsId: row.id,
+      originalStart: original.originalStart,
+      action,
+    });
+  } catch {
+    // Google is the source of truth; the next operation on this occurrence repairs the task.
+    console.error('Absence task reconciliation failed');
   }
   return c.json(parsedResponse.data, 200);
 }
@@ -1711,7 +1709,6 @@ routinesRoute.delete('/:id/routines/:routineId', async (c) => {
       });
     } catch {
       console.error('Absence task reconciliation failed');
-      return c.json(routineDeleteResponseSchema.parse({ ok: true }), 200);
     }
     try {
       await access.db

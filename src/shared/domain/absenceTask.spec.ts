@@ -36,7 +36,7 @@ describe('absence task helpers', () => {
     expect(getAbsenceTaskDueDate('2026-10-11T23:00:00+09:00', '2026-10-12')).toBe('2026-10-11');
   });
 
-  it('formats the routine title and date, with a title-free fallback', () => {
+  it('formats lesson and other routine titles with type-specific title-free fallbacks', () => {
     expect(
       getAbsenceTaskDisplayTitle({
         routineTitle: 'ピアノ',
@@ -46,5 +46,44 @@ describe('absence task helpers', () => {
     expect(getAbsenceTaskDisplayTitle({ originalStart: '2026-10-17T10:30:00+09:00' })).toBe(
       '10/17（土）の欠席を連絡',
     );
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'lesson',
+        routineTitle: 'ピアノ',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('「ピアノ」（10/17（土））に欠席を連絡');
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'lesson',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('10/17（土）の欠席を連絡');
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'housework',
+        routineTitle: '家事代行',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('「家事代行」（10/17（土））のお休みを連絡');
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'housework',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('10/17（土）のお休みを連絡');
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'other',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('10/17（土）のお休みを連絡');
+    expect(
+      getAbsenceTaskDisplayTitle({
+        category: 'other',
+        routineTitle: 'その他',
+        originalStart: '2026-10-17T10:30:00+09:00',
+      }),
+    ).toBe('「その他」（10/17（土））のお休みを連絡');
   });
 });

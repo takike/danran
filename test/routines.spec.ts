@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:test';
 import { createAbsenceTaskSourceRef, parseAbsenceTaskSourceRef } from '@shared/domain/absenceTask';
+import { taskListResponseSchema, taskMutationResponseSchema } from '@shared/schemas/tasks';
 import { SESSION_COOKIE_NAME } from '@worker/auth/config';
 import { encryptAesGcm } from '@worker/auth/crypto';
 import { createSession } from '@worker/auth/session';
@@ -377,7 +378,7 @@ describe('Task 3-1 routine API', () => {
   }
 
   function request(
-    method: 'POST' | 'GET' | 'DELETE',
+    method: 'POST' | 'GET' | 'DELETE' | 'PATCH',
     path: string,
     cookie: string,
     body?: unknown,
@@ -667,35 +668,46 @@ describe('Task 3-1 routine API', () => {
   });
 
   it('uses one token per list request across parallel routines and the single conflict scan', async () => {
-    const cookie = await makeCaller();
-    const firstResponse = await request(
-      'POST',
-      '/api/families/routine_family/routines',
-      cookie,
-      payload,
-    );
-    const first = (await firstResponse.json()) as { eventId: string };
-    const secondResponse = await request('POST', '/api/families/routine_family/routines', cookie, {
-      ...payload,
-      title: '英語',
-      clientRequestId: '123e4567-e89b-42d3-a456-426614174001',
-    });
-    const second = (await secondResponse.json()) as { eventId: string };
-    addInstance('routine_instance_first', first.eventId, '2026-10-13');
-    addInstance('routine_instance_second', second.eventId, '2026-10-13');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T03:00:00.000Z'));
+    try {
+      const cookie = await makeCaller();
+      const firstResponse = await request(
+        'POST',
+        '/api/families/routine_family/routines',
+        cookie,
+        payload,
+      );
+      const first = (await firstResponse.json()) as { eventId: string };
+      const secondResponse = await request(
+        'POST',
+        '/api/families/routine_family/routines',
+        cookie,
+        {
+          ...payload,
+          title: '英語',
+          clientRequestId: '123e4567-e89b-42d3-a456-426614174001',
+        },
+      );
+      const second = (await secondResponse.json()) as { eventId: string };
+      addInstance('routine_instance_first', first.eventId, '2026-10-13');
+      addInstance('routine_instance_second', second.eventId, '2026-10-13');
 
-    const tokenCountBeforeFirstList = refreshTokenValues.length;
-    const firstList = await request('GET', '/api/families/routine_family/routines', cookie);
-    expect(firstList.status).toBe(200);
-    expect(refreshTokenValues).toHaveLength(tokenCountBeforeFirstList + 1);
-    expect(instanceRequests).toHaveLength(2);
-    expect(conflictRequests).toHaveLength(1);
+      const tokenCountBeforeFirstList = refreshTokenValues.length;
+      const firstList = await request('GET', '/api/families/routine_family/routines', cookie);
+      expect(firstList.status).toBe(200);
+      expect(refreshTokenValues).toHaveLength(tokenCountBeforeFirstList + 1);
+      expect(instanceRequests).toHaveLength(2);
+      expect(conflictRequests).toHaveLength(1);
 
-    const tokenCountBeforeSecondList = refreshTokenValues.length;
-    const secondList = await request('GET', '/api/families/routine_family/routines', cookie);
-    expect(secondList.status).toBe(200);
-    expect(refreshTokenValues).toHaveLength(tokenCountBeforeSecondList + 1);
-    expect(conflictRequests).toHaveLength(2);
+      const tokenCountBeforeSecondList = refreshTokenValues.length;
+      const secondList = await request('GET', '/api/families/routine_family/routines', cookie);
+      expect(secondList.status).toBe(200);
+      expect(refreshTokenValues).toHaveLength(tokenCountBeforeSecondList + 1);
+      expect(conflictRequests).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes once and retries a routine list Calendar request after 401', async () => {
@@ -713,30 +725,36 @@ describe('Task 3-1 routine API', () => {
   });
 
   it('fits ten one-page routine series and one conflict scan inside the shared budget', async () => {
-    const cookie = await makeCaller();
-    for (let index = 0; index < 10; index += 1) {
-      await seedRoutineSeries(index, true);
-    }
-    const tokenCountBeforeList = refreshTokenValues.length;
-    const calendarCallCountBeforeList = calendarAuthorization.length;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T03:00:00.000Z'));
+    try {
+      const cookie = await makeCaller();
+      for (let index = 0; index < 10; index += 1) {
+        await seedRoutineSeries(index, true);
+      }
+      const tokenCountBeforeList = refreshTokenValues.length;
+      const calendarCallCountBeforeList = calendarAuthorization.length;
 
-    const response = await request('GET', '/api/families/routine_family/routines', cookie);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      routines: Array<{ status: string; upcoming: { status: string; conflictsStatus: string } }>;
-    };
-    expect(body.routines).toHaveLength(10);
-    expect(
-      body.routines.every(
-        (routine) =>
-          routine.status === 'ready' &&
-          routine.upcoming.status === 'ready' &&
-          routine.upcoming.conflictsStatus === 'ready',
-      ),
-    ).toBe(true);
-    expect(refreshTokenValues).toHaveLength(tokenCountBeforeList + 1);
-    expect(calendarAuthorization).toHaveLength(calendarCallCountBeforeList + 21);
-    expect(conflictRequests).toHaveLength(1);
+      const response = await request('GET', '/api/families/routine_family/routines', cookie);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        routines: Array<{ status: string; upcoming: { status: string; conflictsStatus: string } }>;
+      };
+      expect(body.routines).toHaveLength(10);
+      expect(
+        body.routines.every(
+          (routine) =>
+            routine.status === 'ready' &&
+            routine.upcoming.status === 'ready' &&
+            routine.upcoming.conflictsStatus === 'ready',
+        ),
+      ).toBe(true);
+      expect(refreshTokenValues).toHaveLength(tokenCountBeforeList + 1);
+      expect(calendarAuthorization).toHaveLength(calendarCallCountBeforeList + 21);
+      expect(conflictRequests).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not expose or delete another family routine', async () => {
@@ -1006,23 +1024,29 @@ describe('Task 3-1 routine API', () => {
   });
 
   it('keeps the list and marks conflict verification unavailable when its budget runs out', async () => {
-    const cookie = await makeCaller();
-    conflictPagination = true;
-    for (let index = 0; index < 22; index += 1) {
-      await seedRoutineSeries(index, true);
-    }
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T03:00:00.000Z'));
+    try {
+      const cookie = await makeCaller();
+      conflictPagination = true;
+      for (let index = 0; index < 22; index += 1) {
+        await seedRoutineSeries(index, true);
+      }
 
-    const response = await request('GET', '/api/families/routine_family/routines', cookie);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      routines: Array<{ upcoming: { status: string; conflictsStatus: string } }>;
-    };
-    expect(body.routines).toHaveLength(22);
-    expect(body.routines.every((routine) => routine.upcoming.status === 'ready')).toBe(true);
-    expect(
-      body.routines.every((routine) => routine.upcoming.conflictsStatus === 'unavailable'),
-    ).toBe(true);
-    expect(conflictRequests).toHaveLength(3);
+      const response = await request('GET', '/api/families/routine_family/routines', cookie);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        routines: Array<{ upcoming: { status: string; conflictsStatus: string } }>;
+      };
+      expect(body.routines).toHaveLength(22);
+      expect(body.routines.every((routine) => routine.upcoming.status === 'ready')).toBe(true);
+      expect(
+        body.routines.every((routine) => routine.upcoming.conflictsStatus === 'unavailable'),
+      ).toBe(true);
+      expect(conflictRequests).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sorts instances from every page by their original date even when actual dates reorder them', async () => {
@@ -1174,7 +1198,7 @@ describe('Task 3-1 routine API', () => {
     expect(patchBodies.every((body) => !('extendedProperties' in body))).toBe(true);
   });
 
-  it('creates absence tasks only for lesson skips and repairs after a D1 failure without changing Google success', async () => {
+  it('creates absence tasks after manual skips and repairs after D1 failure without changing Google success', async () => {
     const cookie = await makeCaller();
     const created = await request('POST', '/api/families/routine_family/routines', cookie, payload);
     const { routineId, eventId } = (await created.json()) as { routineId: string; eventId: string };
@@ -1210,25 +1234,56 @@ describe('Task 3-1 routine API', () => {
     expect(await db.select().from(tasks)).toHaveLength(0);
   }, 15000);
 
-  it('does not create absence tasks for non-lesson routine categories', async () => {
+  it('creates and removes category-specific absence tasks for every routine category', async () => {
     const cookie = await makeCaller();
-    const created = await request('POST', '/api/families/routine_family/routines', cookie, {
-      ...payload,
-      category: 'housework',
-      clientRequestId: '223e4567-e89b-42d3-a456-426614174000',
-    });
-    const { routineId, eventId } = (await created.json()) as { routineId: string; eventId: string };
-    addInstance('instance_housework', eventId, '2026-10-13');
-    const skipped = await request(
-      'POST',
-      `/api/families/routine_family/routines/${routineId}/instances/instance_housework/skip`,
-      cookie,
-    );
-    expect(skipped.status).toBe(200);
-    expect(await db.select().from(tasks)).toHaveLength(0);
+    for (const [index, category, title, expected] of [
+      [0, 'housework', '家事代行', '「家事代行」（10/13（火））のお休みを連絡'],
+      [1, 'other', 'その他', '「その他」（10/13（火））のお休みを連絡'],
+    ] as const) {
+      const created = await request('POST', '/api/families/routine_family/routines', cookie, {
+        ...payload,
+        category,
+        clientRequestId: `223e4567-e89b-42d3-a456-42661417400${index}`,
+      });
+      const { routineId, eventId } = (await created.json()) as {
+        routineId: string;
+        eventId: string;
+      };
+      const instanceId = `instance_category_${index}`;
+      addInstance(instanceId, eventId, '2026-10-13');
+      const instance = events.get(instanceId);
+      if (!instance) throw new Error('Routine test instance is missing');
+      events.set(instanceId, { ...instance, summary: title });
+      events.set(`title_${index}`, {
+        ...instance,
+        id: `title_${index}`,
+        status: 'confirmed',
+        summary: title,
+      });
+
+      const skipped = await request(
+        'POST',
+        `/api/families/routine_family/routines/${routineId}/instances/${instanceId}/skip`,
+        cookie,
+      );
+      expect(skipped.status).toBe(200);
+      expect(await db.select().from(tasks)).toHaveLength(1);
+      const list = taskListResponseSchema.parse(
+        await (await request('GET', '/api/families/routine_family/tasks', cookie)).json(),
+      );
+      expect(list.tasks[0]?.title).toBe(expected);
+
+      const restored = await request(
+        'POST',
+        `/api/families/routine_family/routines/${routineId}/instances/${instanceId}/restore`,
+        cookie,
+      );
+      expect(restored.status).toBe(200);
+      expect(await db.select().from(tasks)).toHaveLength(0);
+    }
   });
 
-  it('removes only absence tasks for a deleted series', async () => {
+  it('continues series deletion after task cleanup fails and exposes the orphan task', async () => {
     const cookie = await makeCaller();
     await db.insert(routineSettings).values([
       {
@@ -1318,19 +1373,39 @@ describe('Task 3-1 routine API', () => {
     expect(log.mock.calls).toEqual([['Absence task reconciliation failed']]);
     expect(
       (await db.select().from(routineSettings)).some((row) => row.id === 'routine_delete_target'),
-    ).toBe(true);
+    ).toBe(false);
     await env.DB.prepare('DROP TRIGGER fail_absence_task_delete').run();
     const response = await request(
       'DELETE',
-      '/api/families/routine_family/routines/routine_delete_target',
+      '/api/families/routine_family/routines/routine_delete_other',
       cookie,
     );
     expect(response.status).toBe(200);
     expect((await db.select().from(tasks)).map((task) => task.id).sort()).toEqual([
       'task_delete_items',
       'task_delete_manual',
-      'task_delete_other',
+      'task_delete_target',
     ]);
+    const listed = taskListResponseSchema.parse(
+      await (await request('GET', '/api/families/routine_family/tasks', cookie)).json(),
+    );
+    expect(listed.tasks.find((task) => task.id === 'task_delete_target')?.title).toBe(
+      '10/13（火）の欠席を連絡',
+    );
+    const completed = await request(
+      'PATCH',
+      '/api/families/routine_family/tasks/task_delete_target',
+      cookie,
+      { done: true },
+    );
+    expect(completed.status).toBe(200);
+    expect(taskMutationResponseSchema.parse(await completed.json()).task.doneAt).not.toBeNull();
+    const completedList = taskListResponseSchema.parse(
+      await (await request('GET', '/api/families/routine_family/tasks', cookie)).json(),
+    );
+    expect(completedList.tasks.find((task) => task.id === 'task_delete_target')).toEqual(
+      expect.objectContaining({ doneAt: expect.any(Number) }),
+    );
   });
 
   it('starts the instance and master reads together and shares one access-token request', async () => {

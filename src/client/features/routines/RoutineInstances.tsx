@@ -206,7 +206,7 @@ export function RoutineInstances({
       );
       if (!isIdentityCurrent() || identity !== `${userId}:${familyId}`) return;
       onChanged(response.instance, true, operationId);
-      if (action === 'skip' && category === 'lesson') setAbsenceTaskNotice(true);
+      if (action === 'skip') setAbsenceTaskNotice(true);
       setDirty(false);
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
@@ -350,13 +350,15 @@ export function RoutineInstances({
           {OPERATION_ERROR}
         </p>
       )}
-      {absenceTaskNotice && category === 'lesson' && (
+      {absenceTaskNotice && (
         <output
           aria-live="polite"
           data-testid="routine-absence-task-notice"
           className="mt-[var(--spacing-sm)] mb-0 flex min-h-[var(--tap-target-min)] flex-wrap items-center gap-x-[var(--spacing-xs)] text-sm text-muted"
         >
-          <span>「欠席を連絡」をやることに追加しました</span>
+          <span>
+            「{category === 'lesson' ? '欠席を連絡' : 'お休みを連絡'}」をやることに追加しました
+          </span>
           <Link
             to="/tasks"
             data-testid="routine-absence-task-link"

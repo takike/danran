@@ -546,11 +546,19 @@ tasksRoute.get('/:id/tasks', async (c) => {
     const routineIds = [
       ...new Set(absenceRows.map(({ sourceRef }) => sourceRef.routineSettingsId)),
     ];
-    const routines: { id: string; recurringEventId: string }[] = [];
+    const routines: {
+      id: string;
+      recurringEventId: string;
+      category: 'lesson' | 'housework' | 'other';
+    }[] = [];
     for (let offset = 0; offset < routineIds.length; offset += 80) {
       routines.push(
         ...(await access.db
-          .select({ id: routineSettings.id, recurringEventId: routineSettings.recurringEventId })
+          .select({
+            id: routineSettings.id,
+            recurringEventId: routineSettings.recurringEventId,
+            category: routineSettings.category,
+          })
           .from(routineSettings)
           .where(
             and(
@@ -632,6 +640,7 @@ tasksRoute.get('/:id/tasks', async (c) => {
             ? getAbsenceTaskDisplayTitle({
                 originalStart: absence.sourceRef.originalStart,
                 routineTitle: routine ? routineTitles.get(routine.recurringEventId) : undefined,
+                category: routine?.category,
               })
             : undefined;
           return mapTask(

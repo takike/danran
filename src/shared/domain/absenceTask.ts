@@ -1,4 +1,5 @@
 import type { DateKey } from '@shared/schemas/date';
+import type { RoutineInput } from '@shared/schemas/routines';
 import {
   addCalendarDays,
   formatShortDate,
@@ -46,10 +47,18 @@ export function getAbsenceTaskDueDate(originalStart: string, today: DateKey): Da
 export function getAbsenceTaskDisplayTitle(input: {
   originalStart: string;
   routineTitle?: string | null;
+  category?: RoutineInput['category'] | null;
 }): string {
   const date = toTokyoDateKey(input.originalStart);
   const dateLabel = `${formatShortDate(date)}（${formatWeekday(date)}）`;
+  const isLesson =
+    input.category === undefined || input.category === null || input.category === 'lesson';
+  if (isLesson) {
+    return input.routineTitle
+      ? `「${input.routineTitle}」（${dateLabel}）に欠席を連絡`
+      : `${dateLabel}の欠席を連絡`;
+  }
   return input.routineTitle
-    ? `「${input.routineTitle}」（${dateLabel}）に欠席を連絡`
-    : `${dateLabel}の欠席を連絡`;
+    ? `「${input.routineTitle}」（${dateLabel}）のお休みを連絡`
+    : `${dateLabel}のお休みを連絡`;
 }

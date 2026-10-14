@@ -955,13 +955,14 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
   });
 
-  test('does not show the absence task notice after a failed lesson skip or a non-lesson skip', async ({
+  test('shows the right notice for housework and other skips and clears both after restore', async ({
     page,
   }) => {
     const api = await mockRoutineApis(page, {
       routines: [
         routine({ id: 'routine-failed-lesson', title: '英会話' }),
         routine({ id: 'routine-housework', title: '掃除', category: 'housework' }),
+        routine({ id: 'routine-other', title: 'その他', category: 'other' }),
       ],
     });
     await openRoutinePage(page);
@@ -983,14 +984,43 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(lessonInstance).not.toContainText('お休み');
 
     const housework = page.getByTestId('routine-card').filter({ hasText: '掃除' });
-    await housework.getByTestId('routine-instance-chip-instance-routine-housework-1').click();
+    const houseworkInstance = housework.getByTestId(
+      'routine-instance-chip-instance-routine-housework-1',
+    );
+    await houseworkInstance.click();
     await housework
       .getByTestId('routine-instance-actions-instance-routine-housework-1')
       .getByTestId('routine-instance-skip')
       .click();
-    await expect(
-      housework.getByTestId('routine-instance-chip-instance-routine-housework-1'),
-    ).toContainText('お休み');
+    await expect(houseworkInstance).toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toContainText(
+      '「お休みを連絡」をやることに追加しました',
+    );
+    await houseworkInstance.click();
+    await housework
+      .getByTestId('routine-instance-actions-instance-routine-housework-1')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(houseworkInstance).not.toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+
+    const other = page.getByTestId('routine-card').filter({ hasText: 'その他' });
+    const otherInstance = other.getByTestId('routine-instance-chip-instance-routine-other-1');
+    await otherInstance.click();
+    await other
+      .getByTestId('routine-instance-actions-instance-routine-other-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(otherInstance).toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toContainText(
+      '「お休みを連絡」をやることに追加しました',
+    );
+    await otherInstance.click();
+    await other
+      .getByTestId('routine-instance-actions-instance-routine-other-1')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(otherInstance).not.toContainText('お休み');
     await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
   });
 
