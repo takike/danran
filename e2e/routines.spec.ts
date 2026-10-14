@@ -151,6 +151,7 @@ async function mockRoutineApis(
     release: () => void;
     startedResolve: () => void;
     gate: Promise<void>;
+    holdAllRequests: boolean;
   } | null = null;
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   let signalInstanceMutationStarted: () => void = () => {};
@@ -189,7 +190,7 @@ async function mockRoutineApis(
       }
       const held = heldListResponse;
       if (held) {
-        heldListResponse = null;
+        if (!held.holdAllRequests) heldListResponse = null;
         held.startedResolve();
         await held.gate;
       }
@@ -369,8 +370,31 @@ async function mockRoutineApis(
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      heldListResponse = { started, release, startedResolve, gate };
+      heldListResponse = { started, release, startedResolve, gate, holdAllRequests: false };
       return { started, release };
+    },
+    holdAllListResponses: () => {
+      let startedResolve!: () => void;
+      let releaseGate!: () => void;
+      const started = new Promise<void>((resolve) => {
+        startedResolve = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      // Keep both the old identity's refetch and the new identity's list pending through the switch.
+      const held = {
+        started,
+        release: () => {
+          if (heldListResponse === held) heldListResponse = null;
+          releaseGate();
+        },
+        startedResolve,
+        gate,
+        holdAllRequests: true,
+      };
+      heldListResponse = held;
+      return { started, release: held.release };
     },
     holdNextInstanceMutation: () => {
       let startedResolve!: () => void;
@@ -1371,7 +1395,7 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(page.getByTestId('routine-card')).toContainText('アカウントAの予定');
     api.setRoutines([routine({ id: 'routine-account-b', title: 'アカウントBの予定' })]);
     api.setAccountUserId('usr_routine_partner');
-    const delayedList = api.holdNextListResponse();
+    const delayedList = api.holdAllListResponses();
     await Promise.all([
       page.waitForResponse(
         (response) => response.url().includes('/api/auth/me') && response.status() === 200,
