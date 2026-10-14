@@ -240,6 +240,7 @@ function WeekendDayContent({
   const invokingControlRef = useRef<HTMLElement | null>(null);
   const firstFreeBandRef = useRef<HTMLButtonElement | null>(null);
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const focusAddButtonAfterDeleteRef = useRef(false);
   const hadEditorOpenRef = useRef(false);
   const focusRestoreTimerRef = useRef<number | undefined>(undefined);
 
@@ -437,7 +438,10 @@ function WeekendDayContent({
     focusRestoreTimerRef.current = window.setTimeout(() => {
       focusRestoreTimerRef.current = undefined;
       if (document.querySelector('dialog[open]')) return;
-      if (invokingControlRef.current?.isConnected) invokingControlRef.current.focus();
+      if (focusAddButtonAfterDeleteRef.current) {
+        focusAddButtonAfterDeleteRef.current = false;
+        addButtonRef.current?.focus();
+      } else if (invokingControlRef.current?.isConnected) invokingControlRef.current.focus();
       else addButtonRef.current?.focus();
       invokingControlRef.current = null;
     }, 0);
@@ -502,6 +506,13 @@ function WeekendDayContent({
     }
     closeEventEditor();
   }, [closeEventEditor, eventEditor?.clientRequestId]);
+  const handleEventSaved = useCallback(
+    (operation: 'save' | 'delete') => {
+      focusAddButtonAfterDeleteRef.current = operation === 'delete';
+      closeEventEditorFromHistory();
+    },
+    [closeEventEditorFromHistory],
+  );
 
   useEffect(() => {
     if (!familyAccessRevoked) return;
@@ -850,7 +861,7 @@ function WeekendDayContent({
           initialTime={eventEditor.initialTime}
           clientRequestId={eventEditor.clientRequestId}
           onClose={closeEventEditor}
-          onSaved={closeEventEditorFromHistory}
+          onSaved={handleEventSaved}
           onUnauthorized={() => void clearSessionAfterUnauthorized()}
         />
       )}

@@ -865,4 +865,209 @@ test.describe('Task 1-8: family event editing', () => {
     await expect(page).toHaveURL(/week=2026-10-05/);
     await expect(page.getByTestId('event-dialog')).toHaveCount(0);
   });
+
+  test('closes after create, edit, and delete while the delayed week refresh keeps the week visible', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const api = await mockEventApis(page);
+    await page.goto('/?week=2026-10-05');
+    await expect(page.getByText('公園ピクニック')).toBeVisible();
+
+    let refreshCount = 0;
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== `/api/families/${FAMILY_ID}/week`) {
+        await route.fallback();
+        return;
+      }
+      refreshCount++;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await route.fallback();
+    });
+
+    const documentTop = async (selector: string) =>
+      page
+        .locator(selector)
+        .first()
+        .evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.top + window.scrollY;
+        });
+
+    const expectBackgroundRefresh = async (
+      previousCount: number,
+      retainedTitle: string,
+      refreshedTitle: string | null,
+      headingTopBefore: number | undefined,
+      weekDayTopBefore: number | undefined,
+    ) => {
+      await expect.poll(() => refreshCount).toBe(previousCount + 1);
+      await expect(page.getByTestId('week-updating')).toHaveText('更新中...');
+      await expect(page.getByText(retainedTitle)).toBeVisible();
+      if (refreshedTitle) await expect(page.getByText(refreshedTitle)).toHaveCount(0);
+      expect(headingTopBefore).not.toBeUndefined();
+      expect(weekDayTopBefore).not.toBeUndefined();
+      expect(await documentTop('[data-testid="home-screen"] h1')).toBe(headingTopBefore);
+      expect(await documentTop('[data-testid="week-day"]')).toBe(weekDayTopBefore);
+      await expectNoHorizontalOverflow(page);
+      await expect(page.getByTestId('week-updating')).toHaveCount(0);
+      if (refreshedTitle) await expect(page.getByText(refreshedTitle)).toBeVisible();
+      else await expect(page.getByText(retainedTitle)).toHaveCount(0);
+      expect(await documentTop('[data-testid="home-screen"] h1')).toBe(headingTopBefore);
+      expect(await documentTop('[data-testid="week-day"]')).toBe(weekDayTopBefore);
+    };
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    let previousCount = refreshCount;
+    let headingTopBefore = await documentTop('[data-testid="home-screen"] h1');
+    let weekDayTopBefore = await documentTop('[data-testid="week-day"]');
+    await page.getByRole('button', { name: '予定を追加', exact: true }).click();
+    const createDialog = page.getByTestId('event-dialog');
+    await createDialog.getByLabel('タイトル').fill('応答後に表示する予定');
+    await createDialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(createDialog).toHaveCount(0);
+    await expectBackgroundRefresh(
+      previousCount,
+      '公園ピクニック',
+      '応答後に表示する予定',
+      headingTopBefore,
+      weekDayTopBefore,
+    );
+
+    await page.setViewportSize({ width: 445, height: 844 });
+    previousCount = refreshCount;
+    headingTopBefore = await documentTop('[data-testid="home-screen"] h1');
+    weekDayTopBefore = await documentTop('[data-testid="week-day"]');
+    await page.getByTestId('edit-event-evt_picnic').click();
+    const editDialog = page.getByTestId('event-dialog');
+    await editDialog.getByLabel('タイトル').fill('応答後に更新する予定');
+    await editDialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(editDialog).toHaveCount(0);
+    await expectBackgroundRefresh(
+      previousCount,
+      '公園ピクニック',
+      '応答後に更新する予定',
+      headingTopBefore,
+      weekDayTopBefore,
+    );
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    previousCount = refreshCount;
+    headingTopBefore = await documentTop('[data-testid="home-screen"] h1');
+    weekDayTopBefore = await documentTop('[data-testid="week-day"]');
+    await page.getByTestId('edit-event-evt_picnic').click();
+    const deleteDialog = page.getByTestId('event-dialog');
+    await deleteDialog.getByRole('button', { name: '削除', exact: true }).click();
+    await deleteDialog.getByTestId('confirm-delete-event').click();
+    await expect(deleteDialog).toHaveCount(0);
+    await expectBackgroundRefresh(
+      previousCount,
+      '応答後に更新する予定',
+      null,
+      headingTopBefore,
+      weekDayTopBefore,
+    );
+    expect(api.deleteCalls).toBe(1);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test('uses the recovery message and retries ambiguous 500 responses with the same create request ID', async ({
+    page,
+  }) => {
+    const api = await mockEventApis(page);
+    const submitted: ReturnType<typeof createEventInputSchema.parse>[] = [];
+    let requestNumber = 0;
+    await page.route(`**/api/families/${FAMILY_ID}/events`, async (route) => {
+      const body = createEventInputSchema.parse(route.request().postDataJSON());
+      submitted.push(body);
+      requestNumber++;
+      if (requestNumber === 1) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'synthetic private failure' }),
+        });
+        return;
+      }
+      if (requestNumber === 3) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'text/plain',
+          body: 'synthetic private response body',
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ eventId: `evt_ambiguous_${requestNumber}` }),
+      });
+    });
+
+    await page.goto('/?week=2026-10-05');
+    const recoveryMessage =
+      '予定を保存できませんでした。保存されているか週の表示で確かめてから、もう一度お試しください。';
+    for (const [index, titleText] of ['コードなしの500', 'JSON以外の500'].entries()) {
+      if (index > 0) await page.reload();
+      await page.getByRole('button', { name: '予定を追加', exact: true }).click();
+      const dialog = page.getByTestId('event-dialog');
+      await dialog.getByLabel('タイトル').fill(titleText);
+      await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      await expect(dialog.getByRole('alert')).toHaveText(recoveryMessage);
+      await expect(dialog.getByRole('alert')).not.toContainText('synthetic private');
+      await expect(dialog.getByLabel('タイトル')).toHaveValue(titleText);
+      const firstRequest = submitted.at(-1);
+      await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      expect(submitted.at(-1)?.clientRequestId).toBe(firstRequest?.clientRequestId);
+      expect(submitted.at(-1)?.title).toBe(titleText);
+    }
+    expect(api.createBodies).toHaveLength(0);
+  });
+
+  test('uses the existing week retry after a post-save refresh fails', async ({ page }) => {
+    await mockEventApis(page);
+    await page.goto('/?week=2026-10-05');
+    await expect(page.getByText('公園ピクニック')).toBeVisible();
+    await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeVisible();
+    let refreshCount = 0;
+    await page.route(`**/api/families/${FAMILY_ID}/week**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== `/api/families/${FAMILY_ID}/week`) {
+        await route.fallback();
+        return;
+      }
+      refreshCount++;
+      if (refreshCount === 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            code: 'GOOGLE_TEMPORARY_ERROR',
+            error: 'synthetic private week response',
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.getByRole('button', { name: '予定を追加', exact: true }).click();
+    const dialog = page.getByTestId('event-dialog');
+    await dialog.getByLabel('タイトル').fill('再取得後に出す予定');
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => refreshCount).toBe(1);
+    await expect(
+      page.getByRole('heading', { name: '週の予定を取得できませんでした' }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '再試行' })).toBeVisible();
+    await expect(page.getByText('synthetic private week response')).toHaveCount(0);
+
+    await page.getByRole('button', { name: '再試行' }).click();
+    await expect(page.getByText('再取得後に出す予定')).toBeVisible();
+    await expect(page.getByRole('button', { name: '再試行' })).toHaveCount(0);
+    expect(refreshCount).toBe(2);
+  });
 });

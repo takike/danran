@@ -1,6 +1,8 @@
 import { EventApiError, createEvent, deleteEvent, updateEvent } from '@client/api/events';
 import { MemberDot } from '@client/components/MemberDot';
 import { useReloadProtection } from '@client/features/pwa/useReloadProtection';
+import { TASKS_QUERY_KEY } from '@client/features/tasks/useTasks';
+import { BUSY_WEEK_QUERY_KEY } from '@client/features/week/useBusyWeek';
 import { dateKeySchema } from '@shared/schemas/date';
 import {
   type CreateEventInput,
@@ -38,7 +40,7 @@ interface EventDialogProps {
   initialTime?: Extract<EventInputTime, { kind: 'timed' }>;
   clientRequestId: string;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (operation: 'save' | 'delete') => void;
   onUnauthorized: () => void;
 }
 
@@ -224,6 +226,18 @@ export function EventDialog({
     setErrorMessage(fixedErrorMessage(error));
   };
 
+  const refreshEventRelatedQueries = () => {
+    try {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: [...BUSY_WEEK_QUERY_KEY, userId, familyId] }),
+        queryClient.invalidateQueries({ queryKey: [...TASKS_QUERY_KEY, userId, familyId] }),
+      ]).catch(() => undefined);
+    } catch {
+      // Refreshing cached views must not delay or change the saved mutation result.
+    }
+  };
+
   const handleSubmit = async (submitEvent: React.FormEvent<HTMLFormElement>) => {
     submitEvent.preventDefault();
     if (pendingRef.current) return;
@@ -250,14 +264,16 @@ export function EventDialog({
           await updateEvent(familyId, created.eventId, input);
         }
       }
-      await queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] });
       saved = true;
     } catch (error: unknown) {
       handleError(error);
     } finally {
       finishPending(true);
     }
-    if (saved) onSaved();
+    if (saved) {
+      refreshEventRelatedQueries();
+      onSaved('save');
+    }
   };
 
   const handleDelete = async () => {
@@ -266,14 +282,16 @@ export function EventDialog({
     let saved = false;
     try {
       await deleteEvent(familyId, event.id);
-      await queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] });
       saved = true;
     } catch (error: unknown) {
       handleError(error);
     } finally {
       finishPending(false);
     }
-    if (saved) onSaved();
+    if (saved) {
+      refreshEventRelatedQueries();
+      onSaved('delete');
+    }
   };
 
   const adultMembers = members.filter((member) => member.kind === 'adult');

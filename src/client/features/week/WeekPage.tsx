@@ -979,6 +979,7 @@ export default function WeekPage({
   const [revokedBusyIdentity, setRevokedBusyIdentity] = useState<string | null>(null);
   const invokingControlRef = useRef<HTMLElement | null>(null);
   const addEventButtonRef = useRef<HTMLButtonElement | null>(null);
+  const focusAddButtonAfterDeleteRef = useRef(false);
   const hadOpenEditorRef = useRef(false);
   const focusRestoreTimerRef = useRef<number | undefined>(undefined);
 
@@ -1163,7 +1164,10 @@ export default function WeekPage({
       focusRestoreTimerRef.current = window.setTimeout(() => {
         focusRestoreTimerRef.current = undefined;
         if (document.querySelector('dialog[open]')) return;
-        if (invokingControlRef.current?.isConnected) invokingControlRef.current.focus();
+        if (focusAddButtonAfterDeleteRef.current) {
+          focusAddButtonAfterDeleteRef.current = false;
+          addEventButtonRef.current?.focus();
+        } else if (invokingControlRef.current?.isConnected) invokingControlRef.current.focus();
         else addEventButtonRef.current?.focus();
         invokingControlRef.current = null;
       }, 0);
@@ -1266,6 +1270,13 @@ export default function WeekPage({
     }
     closeEventEditor();
   }, [closeEventEditor, eventEditor?.clientRequestId]);
+  const handleEventSaved = useCallback(
+    (operation: 'save' | 'delete') => {
+      focusAddButtonAfterDeleteRef.current = operation === 'delete';
+      closeEventEditorFromHistory();
+    },
+    [closeEventEditorFromHistory],
+  );
 
   useEffect(() => {
     if (
@@ -1307,11 +1318,13 @@ export default function WeekPage({
             ) : (
               <h1 className="m-0 text-2xl font-bold">週の予定</h1>
             )}
-            {weekQuery.isFetching && data && (
-              <p data-testid="week-updating" aria-live="polite" className="m-0 text-xs text-muted">
-                更新中...
-              </p>
-            )}
+            <div aria-live="polite" className="min-h-[var(--spacing-md)]">
+              {weekQuery.isFetching && data && (
+                <p data-testid="week-updating" className="m-0 text-xs text-muted">
+                  更新中...
+                </p>
+              )}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-[var(--spacing-xs)]">
             <button
@@ -1620,7 +1633,7 @@ export default function WeekPage({
           selectedDate={eventEditor.selectedDate}
           clientRequestId={eventEditor.clientRequestId}
           onClose={closeEventEditor}
-          onSaved={closeEventEditorFromHistory}
+          onSaved={handleEventSaved}
           onUnauthorized={() => void clearSessionAfterUnauthorized()}
         />
       )}
