@@ -1013,6 +1013,10 @@ export default function RoutinesPage(): React.ReactElement {
         queryClient.invalidateQueries({ queryKey: [...ROUTINE_QUERY_KEY, user.id, family.id] }),
         queryClient.invalidateQueries({ queryKey: ['week', user.id, family.id] }),
         queryClient.invalidateQueries({ queryKey: ['week-busy', user.id, family.id] }),
+        queryClient.invalidateQueries({
+          queryKey: ['tasks', user.id, family.id],
+          refetchType: 'all',
+        }),
       ]);
       if (identityRef.current !== mutationIdentity) return;
       setDeletingId(null);
@@ -1336,6 +1340,7 @@ export default function RoutinesPage(): React.ReactElement {
                     familyId={family.id}
                     userId={user.id}
                     routineId={routine.id}
+                    category={routine.category}
                     upcoming={routine.upcoming}
                     isSeriesDeleting={isDeleting}
                     isRoutineBusy={busyRoutineIds.has(routine.id)}

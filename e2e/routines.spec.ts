@@ -151,6 +151,7 @@ async function mockRoutineApis(
     release: () => void;
     startedResolve: () => void;
     gate: Promise<void>;
+    holdAllRequests: boolean;
   } | null = null;
   let failNextInstanceMutation = options.failNextInstanceMutation ?? false;
   let signalInstanceMutationStarted: () => void = () => {};
@@ -189,7 +190,7 @@ async function mockRoutineApis(
       }
       const held = heldListResponse;
       if (held) {
-        heldListResponse = null;
+        if (!held.holdAllRequests) heldListResponse = null;
         held.startedResolve();
         await held.gate;
       }
@@ -369,8 +370,31 @@ async function mockRoutineApis(
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      heldListResponse = { started, release, startedResolve, gate };
+      heldListResponse = { started, release, startedResolve, gate, holdAllRequests: false };
       return { started, release };
+    },
+    holdAllListResponses: () => {
+      let startedResolve!: () => void;
+      let releaseGate!: () => void;
+      const started = new Promise<void>((resolve) => {
+        startedResolve = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      // Keep both the old identity's refetch and the new identity's list pending through the switch.
+      const held = {
+        started,
+        release: () => {
+          if (heldListResponse === held) heldListResponse = null;
+          releaseGate();
+        },
+        startedResolve,
+        gate,
+        holdAllRequests: true,
+      };
+      heldListResponse = held;
+      return { started, release: held.release };
     },
     holdNextInstanceMutation: () => {
       let startedResolve!: () => void;
@@ -393,6 +417,20 @@ async function mockRoutineApis(
 async function openRoutinePage(page: import('@playwright/test').Page) {
   await page.goto('/routines');
   await expect(page.getByTestId('routines-screen')).toBeVisible();
+}
+
+async function mockTasksList(page: import('@playwright/test').Page) {
+  let calls = 0;
+  await page.route(`**/api/families/${FAMILY_ID}/tasks`, (route) =>
+    route.fulfill(jsonResponse(200, { tasks: [] })).then(() => {
+      calls += 1;
+    }),
+  );
+  return {
+    get calls() {
+      return calls;
+    },
+  };
 }
 
 async function triggerVisibilityCycle(page: import('@playwright/test').Page) {
@@ -865,6 +903,151 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.instanceMutations.at(-1)).toMatchObject({ action: 'restore', body: {} });
   });
 
+  test('shows the absence task notice after a successful lesson skip and clears it after restore or move', async ({
+    page,
+  }) => {
+    const tasksList = await mockTasksList(page);
+    const api = await mockRoutineApis(page, {
+      routines: [routine({ id: 'routine-lesson-absence', title: 'ピアノ' })],
+    });
+    await page.goto('/tasks');
+    await expect(page.getByTestId('tasks-screen')).toBeVisible();
+    await expect.poll(() => tasksList.calls).toBe(1);
+    await page
+      .getByRole('navigation', { name: 'メインナビゲーション' })
+      .getByRole('link', { name: '繰り返し', exact: true })
+      .click();
+    await expect(page.getByTestId('routines-screen')).toBeVisible();
+    const card = page.getByTestId('routine-card').filter({ hasText: 'ピアノ' });
+    const instanceChip = card.getByTestId(
+      'routine-instance-chip-instance-routine-lesson-absence-1',
+    );
+
+    await instanceChip.click();
+    const heldMutation = api.holdNextInstanceMutation();
+    await card
+      .getByTestId('routine-instance-actions-instance-routine-lesson-absence-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await heldMutation.started;
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+    heldMutation.release();
+    const notice = page.getByTestId('routine-absence-task-notice');
+    await expect(notice).toContainText('「欠席を連絡」をやることに追加しました');
+    await expect.poll(() => tasksList.calls).toBeGreaterThan(1);
+    const tasksLink = notice.getByTestId('routine-absence-task-link');
+    await expect(tasksLink).toHaveAttribute('href', '/tasks');
+    for (const width of [390, 445]) {
+      await page.setViewportSize({ width, height: 844 });
+      const linkBox = await tasksLink.boundingBox();
+      expect(linkBox?.width).toBeGreaterThanOrEqual(44);
+      expect(linkBox?.height).toBeGreaterThanOrEqual(44);
+      expect(
+        await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await tasksLink.click();
+    await expect(page).toHaveURL('/tasks');
+    await expect(page.getByTestId('tasks-screen')).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL('/routines');
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+    await instanceChip.click();
+    await card
+      .getByTestId('routine-instance-actions-instance-routine-lesson-absence-1')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+    await expect(instanceChip).not.toContainText('お休み');
+
+    await instanceChip.click();
+    await card
+      .getByTestId('routine-instance-actions-instance-routine-lesson-absence-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(page.getByTestId('routine-absence-task-notice')).toBeVisible();
+    await instanceChip.click();
+    const actions = card.getByTestId('routine-instance-actions-instance-routine-lesson-absence-1');
+    await actions.getByTestId('routine-instance-set-move').click();
+    await actions.getByTestId('routine-instance-move-date').fill('2026-10-15');
+    await actions.getByTestId('routine-instance-move-start').fill('17:30');
+    await actions.getByTestId('routine-instance-move-end').fill('18:30');
+    await actions.getByTestId('routine-instance-move-save').click();
+    await expect(instanceChip).toContainText('10/15');
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+  });
+
+  test('shows the right notice for housework and other skips and clears both after restore', async ({
+    page,
+  }) => {
+    const api = await mockRoutineApis(page, {
+      routines: [
+        routine({ id: 'routine-failed-lesson', title: '英会話' }),
+        routine({ id: 'routine-housework', title: '掃除', category: 'housework' }),
+        routine({ id: 'routine-other', title: 'その他', category: 'other' }),
+      ],
+    });
+    await openRoutinePage(page);
+
+    const lesson = page.getByTestId('routine-card').filter({ hasText: '英会話' });
+    const lessonInstance = lesson.getByTestId(
+      'routine-instance-chip-instance-routine-failed-lesson-1',
+    );
+    await lessonInstance.click();
+    api.setFailNextInstanceMutation();
+    await lesson
+      .getByTestId('routine-instance-actions-instance-routine-failed-lesson-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(
+      page.getByRole('alert').filter({ hasText: '変更を保存できませんでした' }),
+    ).toBeVisible();
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+    await expect(lessonInstance).not.toContainText('お休み');
+
+    const housework = page.getByTestId('routine-card').filter({ hasText: '掃除' });
+    const houseworkInstance = housework.getByTestId(
+      'routine-instance-chip-instance-routine-housework-1',
+    );
+    await houseworkInstance.click();
+    await housework
+      .getByTestId('routine-instance-actions-instance-routine-housework-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(houseworkInstance).toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toContainText(
+      '「お休みを連絡」をやることに追加しました',
+    );
+    await houseworkInstance.click();
+    await housework
+      .getByTestId('routine-instance-actions-instance-routine-housework-1')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(houseworkInstance).not.toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+
+    const other = page.getByTestId('routine-card').filter({ hasText: 'その他' });
+    const otherInstance = other.getByTestId('routine-instance-chip-instance-routine-other-1');
+    await otherInstance.click();
+    await other
+      .getByTestId('routine-instance-actions-instance-routine-other-1')
+      .getByTestId('routine-instance-skip')
+      .click();
+    await expect(otherInstance).toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toContainText(
+      '「お休みを連絡」をやることに追加しました',
+    );
+    await otherInstance.click();
+    await other
+      .getByTestId('routine-instance-actions-instance-routine-other-1')
+      .getByTestId('routine-instance-restore')
+      .click();
+    await expect(otherInstance).not.toContainText('お休み');
+    await expect(page.getByTestId('routine-absence-task-notice')).toHaveCount(0);
+  });
+
   test('shows an optimistic skip while saving, locks its series, and keeps another series usable', async ({
     page,
   }) => {
@@ -1212,7 +1395,7 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(page.getByTestId('routine-card')).toContainText('アカウントAの予定');
     api.setRoutines([routine({ id: 'routine-account-b', title: 'アカウントBの予定' })]);
     api.setAccountUserId('usr_routine_partner');
-    const delayedList = api.holdNextListResponse();
+    const delayedList = api.holdAllListResponses();
     await Promise.all([
       page.waitForResponse(
         (response) => response.url().includes('/api/auth/me') && response.status() === 200,

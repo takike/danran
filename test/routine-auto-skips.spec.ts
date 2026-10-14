@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:test';
+import { createAbsenceTaskSourceRef } from '@shared/domain/absenceTask';
 import { SESSION_COOKIE_NAME } from '@worker/auth/config';
 import { encryptAesGcm } from '@worker/auth/crypto';
 import { createSession } from '@worker/auth/session';
@@ -10,6 +11,7 @@ import {
   routineAutoSkips,
   routineSettings,
   sessions,
+  tasks,
   users,
 } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
@@ -69,6 +71,7 @@ describe('Task 3-3 routine automatic skip API', () => {
     hideCancelledFromRange = false;
     googleFetchCount = 0;
     await db.delete(routineAutoSkips);
+    await db.delete(tasks);
     await db.delete(routineSettings);
     await db.delete(members);
     await db.delete(families);
@@ -435,6 +438,35 @@ describe('Task 3-3 routine automatic skip API', () => {
     expect((await db.select().from(routineAutoSkips)).map(({ id }) => id)).toEqual([]);
   });
 
+  it('does not create or remove conflict tasks when applying or restoring automatic skips', async () => {
+    const { cookie } = await fixture({ skipHolidays: true, skipNewYear: true });
+    addInstance('automatic_task_isolation', '2026-11-03');
+    addInstance('automatic_new_year_task_isolation', '2026-12-29');
+    const applied = await apiRequest('POST', `${API_BASE}/auto-skips/apply`, cookie, {});
+    expect(applied.status).toBe(200);
+    expect(await db.select().from(tasks)).toHaveLength(0);
+
+    await db.insert(tasks).values({
+      id: 'automatic_skip_sentinel_task',
+      familyId: FAMILY_ID,
+      title: '欠席を連絡',
+      dueAt: '2026-11-02',
+      dueKind: 'date',
+      source: 'conflict',
+      sourceRef: createAbsenceTaskSourceRef({
+        routineSettingsId: ROUTINE_ID,
+        originalStart: '2026-11-03T17:00:00+09:00',
+      }),
+    });
+    const restored = await setSettings(cookie, false, false);
+    expect(restored.status).toBe(200);
+    expect(await db.select().from(tasks)).toMatchObject([
+      { id: 'automatic_skip_sentinel_task', source: 'conflict' },
+    ]);
+    expect(events.get('automatic_task_isolation')?.status).toBe('confirmed');
+    expect(events.get('automatic_new_year_task_isolation')?.status).toBe('confirmed');
+  });
+
   it('updates the January 1 reason without repatching, then preserves manual restore and move overrides', async () => {
     const { cookie } = await fixture({ skipHolidays: true, skipNewYear: true });
     addInstance('jan1', '2027-01-01', { status: 'cancelled' });
@@ -489,6 +521,21 @@ describe('Task 3-3 routine automatic skip API', () => {
       start: { dateTime: '2026-11-24T18:00:00+09:00' },
       end: { dateTime: '2026-11-24T19:00:00+09:00' },
     });
+    const manuallySkippedAfterRestore = await apiRequest(
+      'POST',
+      `${API_BASE}/instances/manual_restore/skip`,
+      cookie,
+      {},
+    );
+    expect(manuallySkippedAfterRestore.status).toBe(200);
+    expect(await db.select().from(tasks)).toMatchObject([
+      {
+        familyId: FAMILY_ID,
+        title: '欠席を連絡',
+        source: 'conflict',
+        dueKind: 'date',
+      },
+    ]);
   });
 
   it('limits combined restores and cancellations to twenty changes and continues idempotently', async () => {

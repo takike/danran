@@ -1,3 +1,4 @@
+import { getAbsenceTaskDisplayTitle, parseAbsenceTaskSourceRef } from '@shared/domain/absenceTask';
 import { getItemsTaskDue } from '@shared/domain/taskGeneration';
 import { familyIdSchema } from '@shared/schemas/family';
 import type { GoogleEvent } from '@shared/schemas/google-calendar';
@@ -25,7 +26,7 @@ import { parseIsoInstantMilliseconds } from '@shared/time/interval';
 import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
-import { eventMeta, families, members, tasks } from '@worker/db/schema';
+import { eventMeta, families, members, routineSettings, tasks } from '@worker/db/schema';
 import type { WorkerEnv } from '@worker/env';
 import {
   GoogleCalendarError,
@@ -205,11 +206,13 @@ function mapTask(
   meta: typeof eventMeta.$inferSelect | undefined,
   unavailable: boolean,
   activeMemberIds: Set<string>,
+  displayTitle?: string,
 ): Task {
+  const title = displayTitle ?? row.title;
   if (!row.eventMetaId) {
     return {
       id: row.id,
-      title: row.title,
+      title,
       due:
         row.source === 'items'
           ? { kind: 'unknown' }
@@ -226,7 +229,7 @@ function mapTask(
   if (unavailable) {
     return {
       id: row.id,
-      title: row.title,
+      title,
       due:
         row.source === 'items'
           ? { kind: 'unknown' }
@@ -242,7 +245,7 @@ function mapTask(
   if (!linkedEvent) {
     return {
       id: row.id,
-      title: row.title,
+      title,
       due:
         row.source === 'items'
           ? { kind: 'unknown' }
@@ -259,7 +262,7 @@ function mapTask(
   if (!time) {
     return {
       id: row.id,
-      title: row.title,
+      title,
       due:
         row.source === 'items'
           ? { kind: 'unknown' }
@@ -277,7 +280,7 @@ function mapTask(
     row.source === 'items' ? { dueKind: 'datetime' as const, dueAt: getItemsTaskDue(time) } : null;
   return {
     id: row.id,
-    title: row.title,
+    title,
     due: due
       ? { kind: due.dueKind, dueAt: due.dueAt }
       : row.dueKind === 'none'
@@ -534,9 +537,49 @@ tasksRoute.get('/:id/tasks', async (c) => {
         }),
       ),
     ];
+    const absenceRows = rows.flatMap((row) => {
+      if (row.source !== 'conflict') return [];
+      const sourceRef = parseAbsenceTaskSourceRef(row.sourceRef);
+      return sourceRef ? [{ row, sourceRef }] : [];
+    });
+    const absenceByTaskId = new Map(absenceRows.map((item) => [item.row.id, item]));
+    const routineIds = [
+      ...new Set(absenceRows.map(({ sourceRef }) => sourceRef.routineSettingsId)),
+    ];
+    const routines: {
+      id: string;
+      recurringEventId: string;
+      category: 'lesson' | 'housework' | 'other';
+    }[] = [];
+    for (let offset = 0; offset < routineIds.length; offset += 80) {
+      routines.push(
+        ...(await access.db
+          .select({
+            id: routineSettings.id,
+            recurringEventId: routineSettings.recurringEventId,
+            category: routineSettings.category,
+          })
+          .from(routineSettings)
+          .where(
+            and(
+              eq(routineSettings.familyId, access.family.id),
+              eq(routineSettings.calendarId, access.calendarId),
+              inArray(routineSettings.id, routineIds.slice(offset, offset + 80)),
+            ),
+          )),
+      );
+    }
+    const routineById = new Map(routines.map((routine) => [routine.id, routine]));
+    const seriesIds = new Set(
+      absenceRows.flatMap(({ sourceRef }) => {
+        const routine = routineById.get(sourceRef.routineSettingsId);
+        return routine ? [routine.recurringEventId] : [];
+      }),
+    );
     const eventsById = new Map<string, GoogleEvent>();
+    const routineTitles = new Map<string, string>();
     let lookupUnavailable = false;
-    if (eventIds.length > 0) {
+    if (eventIds.length > 0 || seriesIds.size > 0) {
       if (eventIds.length > MAX_LINKED_EVENTS) {
         lookupUnavailable = true;
       } else {
@@ -554,8 +597,16 @@ tasksRoute.get('/:id/tasks', async (c) => {
               timeZone: 'Asia/Tokyo',
             });
             for (const event of page.items) {
-              if (event.status !== 'cancelled' && eventIds.includes(event.id))
-                eventsById.set(event.id, event);
+              if (event.status === 'cancelled') continue;
+              if (eventIds.includes(event.id)) eventsById.set(event.id, event);
+              if (
+                event.recurringEventId &&
+                seriesIds.has(event.recurringEventId) &&
+                !routineTitles.has(event.recurringEventId) &&
+                event.summary
+              ) {
+                routineTitles.set(event.recurringEventId, event.summary);
+              }
             }
             if (eventIds.every((id) => eventsById.has(id))) {
               complete = true;
@@ -570,9 +621,9 @@ tasksRoute.get('/:id/tasks', async (c) => {
             if (pageNo === MAX_EVENT_PAGES - 1) break;
             pageToken = page.nextPageToken;
           }
-          if (!complete) lookupUnavailable = true;
+          if (!complete && !eventIds.every((id) => eventsById.has(id))) lookupUnavailable = true;
         } catch {
-          lookupUnavailable = true;
+          if (!eventIds.every((id) => eventsById.has(id))) lookupUnavailable = true;
         }
       }
     }
@@ -581,12 +632,24 @@ tasksRoute.get('/:id/tasks', async (c) => {
       taskListResponseSchema.parse({
         tasks: rows.map((row) => {
           const meta = row.eventMetaId ? metadata.get(row.eventMetaId) : undefined;
+          const absence = absenceByTaskId.get(row.id);
+          const routine = absence
+            ? routineById.get(absence.sourceRef.routineSettingsId)
+            : undefined;
+          const displayTitle = absence
+            ? getAbsenceTaskDisplayTitle({
+                originalStart: absence.sourceRef.originalStart,
+                routineTitle: routine ? routineTitles.get(routine.recurringEventId) : undefined,
+                category: routine?.category,
+              })
+            : undefined;
           return mapTask(
             row,
             meta ? eventsById.get(meta.eventId) : undefined,
             meta,
             lookupUnavailable,
             activeMemberIds,
+            displayTitle,
           );
         }),
       }),

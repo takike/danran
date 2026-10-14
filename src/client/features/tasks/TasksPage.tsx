@@ -394,7 +394,11 @@ export default function TasksPage(): React.ReactElement {
       const result = await updateTask(family.id, taskId, patch);
       if (!mountedRef.current || identityRef.current !== mutationIdentity) return false;
       queryClient.setQueryData<Task[]>(key, (rows) =>
-        rows?.map((task) => (task.id === taskId ? result : task)),
+        rows?.map((task) =>
+          task.id === taskId
+            ? { ...result, title: task.source === 'conflict' ? task.title : result.title }
+            : task,
+        ),
       );
       succeeded = true;
     } catch (error: unknown) {

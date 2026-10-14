@@ -41,6 +41,7 @@ import { type AuthConfig, getAuthConfig } from '@worker/auth/config';
 import { getSessionUser } from '@worker/auth/session';
 import { createDb } from '@worker/db';
 import { families, members, routineAutoSkips, routineSettings } from '@worker/db/schema';
+import { deleteAbsenceTasksForRoutine, reconcileAbsenceTask } from '@worker/db/tasks';
 import type { WorkerEnv } from '@worker/env';
 import {
   type GoogleCalendarClient,
@@ -751,6 +752,17 @@ async function mutateRoutineInstance(c: RouteContext, action: InstanceMutation):
     instance: { id: rawInstanceId, ...original, ...resulting, autoSkipReason: null },
   });
   if (!parsedResponse.success) return errorResponse(c, 502, 'GOOGLE_ERROR');
+  try {
+    await reconcileAbsenceTask(access.db, {
+      familyId: access.family.id,
+      routineSettingsId: row.id,
+      originalStart: original.originalStart,
+      action,
+    });
+  } catch {
+    // Google is the source of truth; the next operation on this occurrence repairs the task.
+    console.error('Absence task reconciliation failed');
+  }
   return c.json(parsedResponse.data, 200);
 }
 
@@ -1689,6 +1701,14 @@ routinesRoute.delete('/:id/routines/:routineId', async (c) => {
       await client.events.delete(access.calendarId, row.recurringEventId, { sendUpdates: 'none' });
     } catch (err) {
       if (!isGoogleMissing(err)) return responseForGoogleFailure(c, err);
+    }
+    try {
+      await deleteAbsenceTasksForRoutine(access.db, {
+        familyId: access.family.id,
+        routineSettingsId: row.id,
+      });
+    } catch {
+      console.error('Absence task reconciliation failed');
     }
     try {
       await access.db

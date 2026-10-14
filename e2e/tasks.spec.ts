@@ -485,6 +485,11 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
       due: { kind: 'datetime', dueAt: '2026-10-09T20:00:00+09:00' },
       linkedEvent: { ...ready, items: ['水筒', '敷物'] },
     }),
+    task('task-absence-screenshot', {
+      title: '「ピアノ」（10/17（土））に欠席を連絡',
+      due: { kind: 'date', dueAt: '2026-10-16' },
+      source: 'conflict',
+    }),
     task('task-manual', {
       title: '参加票を出す',
       due: { kind: 'datetime', dueAt: '2026-10-09T20:00:00+09:00' },
@@ -511,6 +516,8 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
   await expect(page.getByText('水筒、敷物', { exact: true })).toBeVisible();
   await expect(page.getByTestId('task-edit-task-auto')).toHaveCount(0);
   await page.getByText(/予定に紐づかないやること/).click();
+  await expect(page.getByText('お休みから自動')).toBeVisible();
+  await expect(page.getByText('「ピアノ」（10/17（土））に欠席を連絡')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 1100 });
   if (process.env.DANRAN_SCREENSHOTS === '1') {
     await page.screenshot({ path: 'docs/screenshots/s5-tasks.png' });
@@ -551,6 +558,53 @@ test('task list, datetime form, and inline assignee picker at 390px', async ({ p
   await expect(page.getByTestId('tasks-due-view')).toBeVisible();
   await selectView(page, '自分の担当');
   await expect(page.getByTestId('tasks-mine-view').getByText('自分が担当')).toBeVisible();
+});
+
+test('absence tasks show their source without title editing and allow completion and assignment', async ({
+  page,
+}) => {
+  await freezeClock(page);
+  const absenceTitle = '「ピアノ」（10/17（土））に欠席を連絡';
+  const harness = await installTaskHarness(page, [
+    task('task-absence', {
+      title: absenceTitle,
+      due: { kind: 'date', dueAt: '2026-10-16' },
+      source: 'conflict',
+    }),
+  ]);
+  await page.goto('/tasks');
+
+  await page.getByText(/予定に紐づかないやること/).click();
+  const title = page.getByText(absenceTitle, { exact: true });
+  await expect(title).toBeVisible();
+  await expect(page.getByText('お休みから自動', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('task-edit-task-absence')).toHaveCount(0);
+  await title.click();
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0);
+
+  await page.getByRole('checkbox', { name: `${absenceTitle}を完了にする` }).click();
+  await expect(page.getByRole('checkbox', { name: `${absenceTitle}を未完了に戻す` })).toBeChecked();
+  await page.getByTestId('task-assignee-task-absence').click();
+  await page
+    .getByRole('group', { name: '担当を選択' })
+    .getByRole('button', { name: 'あおい' })
+    .click();
+  await expect(page.getByTestId('task-assignee-task-absence')).toHaveAttribute(
+    'aria-label',
+    '担当を変更: あおい',
+  );
+  expect(harness.patchRequests).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ done: true }),
+      expect.objectContaining({ assigneeMemberId: 'mem_adult_a' }),
+    ]),
+  );
+  for (const width of [390, 445]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  }
 });
 
 test('manual and automatic task titles update strikethrough with completion state', async ({

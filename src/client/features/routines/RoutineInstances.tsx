@@ -12,7 +12,8 @@ import { formatEventTime } from '@shared/time/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { CircleAlert } from 'lucide-react';
 import type React from 'react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 const buttonBaseClass =
   'inline-flex min-h-[var(--tap-target-min)] items-center justify-center gap-[var(--spacing-xs)] rounded-[var(--radius-md)] border px-[var(--spacing-sm)] text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50';
@@ -65,6 +66,7 @@ export function RoutineInstances({
   familyId,
   userId,
   routineId,
+  category,
   upcoming,
   isIdentityCurrent,
   onUnauthorized,
@@ -77,6 +79,7 @@ export function RoutineInstances({
   familyId: string;
   userId: string;
   routineId: string;
+  category: 'lesson' | 'housework' | 'other';
   upcoming: RoutineUpcoming;
   isIdentityCurrent: () => boolean;
   onUnauthorized: () => void;
@@ -98,10 +101,14 @@ export function RoutineInstances({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [operationError, setOperationError] = useState(false);
+  const [absenceTaskNotice, setAbsenceTaskNotice] = useState(false);
   const [pendingInstanceId, setPendingInstanceId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const controlsDisabled = pending || isSeriesDeleting || isRoutineBusy;
   useReloadProtection((moveFormOpen && dirty) || pending, pending);
+  useEffect(() => {
+    if (isRoutineBusy || isSeriesDeleting) setAbsenceTaskNotice(false);
+  }, [isRoutineBusy, isSeriesDeleting]);
 
   async function perform(
     action: 'skip' | 'restore' | 'move',
@@ -127,6 +134,7 @@ export function RoutineInstances({
     onPendingChange(true);
     setError('');
     setOperationError(false);
+    setAbsenceTaskNotice(false);
     setSelected(null);
     setMoveFormOpen(false);
     if (action !== 'move') setDirty(false);
@@ -198,11 +206,16 @@ export function RoutineInstances({
       );
       if (!isIdentityCurrent() || identity !== `${userId}:${familyId}`) return;
       onChanged(response.instance, true, operationId);
+      if (action === 'skip') setAbsenceTaskNotice(true);
       setDirty(false);
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['routines', userId, familyId] }),
         queryClient.invalidateQueries({ queryKey: ['week', userId, familyId] }),
         queryClient.invalidateQueries({ queryKey: ['week-busy', userId, familyId] }),
+        queryClient.invalidateQueries({
+          queryKey: ['tasks', userId, familyId],
+          refetchType: 'all',
+        }),
       ]).then(() => {
         if (isIdentityCurrent()) onMutationSettled(target.id, operationId);
       });
@@ -307,6 +320,7 @@ export function RoutineInstances({
             }
             disabled={controlsDisabled}
             onClick={() => {
+              setAbsenceTaskNotice(false);
               setSelected(selected?.id === instance.id ? null : instance);
               setMoveFormOpen(false);
               setDirty(false);
@@ -335,6 +349,24 @@ export function RoutineInstances({
         <p role="alert" className="mt-[var(--spacing-sm)] mb-0 text-sm text-accent">
           {OPERATION_ERROR}
         </p>
+      )}
+      {absenceTaskNotice && (
+        <output
+          aria-live="polite"
+          data-testid="routine-absence-task-notice"
+          className="mt-[var(--spacing-sm)] mb-0 flex min-h-[var(--tap-target-min)] flex-wrap items-center gap-x-[var(--spacing-xs)] text-sm text-muted"
+        >
+          <span>
+            「{category === 'lesson' ? '欠席を連絡' : 'お休みを連絡'}」をやることに追加しました
+          </span>
+          <Link
+            to="/tasks"
+            data-testid="routine-absence-task-link"
+            className="inline-flex min-h-[var(--tap-target-min)] items-center underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            やることを見る
+          </Link>
+        </output>
       )}
       {upcoming.conflictsStatus === 'unavailable' && (
         <p className="mt-[var(--spacing-sm)] mb-0 text-sm text-muted">
@@ -366,6 +398,7 @@ export function RoutineInstances({
                     data-testid={`routine-conflict-skip-${instance.id}`}
                     disabled={controlsDisabled}
                     onClick={() => {
+                      setAbsenceTaskNotice(false);
                       setSelected(instance);
                       setMoveFormOpen(false);
                       setError('');
@@ -381,6 +414,7 @@ export function RoutineInstances({
                   data-testid={`routine-conflict-move-${instance.id}`}
                   disabled={controlsDisabled}
                   onClick={() => {
+                    setAbsenceTaskNotice(false);
                     setSelected(instance);
                     setMoveValue(initialMoveValue(instance));
                     setMoveFormOpen(true);
@@ -492,6 +526,7 @@ export function RoutineInstances({
                   data-testid="routine-instance-move-cancel"
                   disabled={controlsDisabled}
                   onClick={() => {
+                    setAbsenceTaskNotice(false);
                     setMoveFormOpen(false);
                     setDirty(false);
                     setError('');
@@ -546,6 +581,7 @@ export function RoutineInstances({
                 }
                 disabled={controlsDisabled}
                 onClick={() => {
+                  setAbsenceTaskNotice(false);
                   setMoveValue(initialMoveValue(selected));
                   setMoveFormOpen(true);
                   setDirty(false);
