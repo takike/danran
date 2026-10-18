@@ -68,5 +68,5 @@ Codex に渡す前に、次のアカウント作業を済ませておく（Codex
 2. D1 データベース（`danran-staging`、`danran-prod`）と R2 バケット（`danran-photos-staging`、`danran-photos-prod`）を作成し、ID を控える
 3. Google Cloud プロジェクト作成 → Calendar API を有効化 → OAuth 同意画面（外部、スコープ登録）→ OAuth クライアント（ウェブ）を local / staging / prod のリダイレクト URI で作成
 4. **OAuth 同意画面の公開ステータスを「本番」に切り替える**（テストのままだと7日でトークンが失効する。未確認アプリの警告は家族利用なら許容）
-5. Anthropic API キーを発行する
+5. Task 4-1 では LLM キーは不要。Task 4-2 で、データが製品改善に使われない有料区分の Google Gemini API キーを発行する（無料枠は使わない）
 6. `wrangler secret put` で各 Secret を登録する（[03-architecture.md](03-architecture.md#セキュリティ) の一覧）

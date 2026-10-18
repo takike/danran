@@ -14,7 +14,7 @@
 │ Hono API（/api/*）── ドメインロジック（src/shared）               │
 │ Cron Triggers（週1まとめ・公開コピー同期）                       │
 └──┬──────────────┬──────────────┬──────────────┬─────────────────┘
-   │ D1           │ R2           │ Google APIs   │ LLM API（Claude）
+   │ D1           │ R2           │ Google APIs   │ LLM API（Gemini）
    │ 付加情報・   │ プリント写真 │ Calendar /    │ プリント画像から
    │ トークン等   │              │ OAuth         │ 予定を抽出
 ```
@@ -145,10 +145,13 @@ routine_settings id PK, family_id FK families CASCADE, calendar_id, recurring_ev
 routine_auto_skips id PK, routine_settings_id FK routine_settings CASCADE, original_start,
                  reason CHECK holiday|new_year, status CHECK applied|overridden, created_at,
                  UNIQUE(routine_settings_id, original_start), routine_settings_id/status index
-attachments      id, family_id, r2_key, content_type, width, height, created_by, created_at
+attachments      id, family_id FK families CASCADE, r2_key UNIQUE, content_type CHECK image/jpeg,
+                 width, height, byte_size, created_by FK members RESTRICT, created_at
 event_attachments event_meta_id, attachment_id
-import_jobs      id, family_id, attachment_id, status(pending|extracted|failed|committed),
-                 extracted_json, error, model, created_by, created_at
+import_jobs      id, family_id FK families CASCADE, attachment_id FK attachments CASCADE,
+                 status CHECK pending|extracted|failed|committed DEFAULT pending, result_json NULL,
+                 error_code NULL, model NULL, created_by FK members RESTRICT, client_request_id,
+                 created_at; UNIQUE(family_id, created_by, client_request_id)
 tasks            id, family_id FK families CASCADE, title, due_at NULL, due_kind(date|datetime|none),
                  done_at NULL (epoch seconds), assignee_member_id NULL FK members SET NULL,
                  event_meta_id NULL FK event_meta SET NULL, source(import|items|conflict|manual),
@@ -258,9 +261,8 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 
 ## プリント取り込み
 
-1. **撮影**：`<input type="file" accept="image/*" capture="environment">`。クライアントで長辺2000px程度にリサイズし、JPEG 品質0.8でアップロードする（Worker の CPU を使わないため）。
-2. **保存**：`POST /api/imports` → R2（`families/{familyId}/imports/{jobId}.jpg`）に保存し、`attachments` と `import_jobs(pending)` を作る。
-3. **抽出**：Worker から LLM（Claude の画像入力対応モデル。モデル名は環境変数 `LLM_MODEL`）を呼ぶ。
+1. **撮影・保存（Task 4-1）**：`<input type="file" accept="image/*" capture="environment">`。クライアントで向きを補正して長辺2000px以内に縮小し、JPEG 品質0.8で再エンコードする。3 MB 以下で EXIF APP1 を含まない JPEG のみを受け付ける。API は `POST /api/families/:id/imports`（`X-Client-Request-Id` に UUID、生の JPEG 本文）、`GET /api/families/:id/imports`、`GET /api/families/:id/attachments/:attachmentId`、`DELETE /api/families/:id/imports/:importId`。R2 キー `families/{familyId}/imports/{jobId}.jpg` はサーバーが決め、API 応答と URL に含めない。`pending` は家族ごとに20件まで。詳細と手動確認は [22-print-import.md](22-print-import.md)。
+2. **抽出（Task 4-2）**：Worker から Gemini API（画像入力対応モデル。モデル名は環境変数 `LLM_MODEL`）を呼ぶ。
    - 入力：画像、今日の日付、タイムゾーン、家族の子どもの名前（クラス名があれば）、既存の繰り返し予定の概要
    - 出力：JSON スキーマで強制する（tool use / structured output）
 
@@ -325,7 +327,7 @@ Google の `busy` 区間は表示週で切り取り、重複または端点が�
 - リフレッシュトークンは AES-GCM で暗号化する（鍵は secret の `TOKEN_ENC_KEY`）。
 - R2 の写真は公開しない。Worker 経由で認可したうえで配信する。
 - アプリが出すエラーログは `console.error('worker_error', { method, routePath, errorName, googleStatus?, errorCode? })` とし、メソッドは許可リスト外なら `UNKNOWN`、routePath は `c.req.routePath` が安全なルート型でなければ `unknown`、エラー名は許可リスト外なら `Error` とする。Google Calendar エラーだけ、明示された有効な HTTP ステータスと許可リスト内のプロジェクトエラーコードを記録してよい。メッセージ、スタック、本文、ヘッダー、実値を含む URL、ID、予定内容、トークンはアプリログに出さない。Cloudflare の自動 invocation logs は別の記録で、メソッド・URL/パス・ステータスなどを含み、パスに家族 ID・予定 ID が残り得る。これはアプリログの保証対象外であり、予定の内容やトークンがアプリの `console` ログに出ることはない。Workers Logs は staging だけ有効にし、標本率を1にする。production/local のログ設定は変更しない。詳細は [Cloudflare Workers Logs: invocation logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs) を参照。
-- Secrets：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`SESSION_SECRET`、`TOKEN_ENC_KEY`、`ANTHROPIC_API_KEY`、`VAPID_PUBLIC_KEY`、`VAPID_PRIVATE_KEY`、`LLM_MODEL`（var）
+- Secrets：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`SESSION_SECRET`、`TOKEN_ENC_KEY`、`GEMINI_API_KEY`、`VAPID_PUBLIC_KEY`、`VAPID_PRIVATE_KEY`、`LLM_MODEL`（var）。Gemini の呼び出しは Task 4-2 から追加する。Task 4-1 ではキーを使わない。
 
 ## 環境
 

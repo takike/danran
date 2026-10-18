@@ -41,6 +41,14 @@ export function formatWeekPeriod(start: DateKey, endInclusive: DateKey): string 
   return `${formatShortDate(start)} – ${formatShortDate(endInclusive)}`;
 }
 
+/** Format a Unix timestamp in seconds for compact Japanese UI labels. */
+export function formatTokyoDateTimeSeconds(timestampSeconds: number): string {
+  if (!Number.isFinite(timestampSeconds)) throw new RangeError('Timestamp must be finite');
+  return toTokyoIsoString(timestampSeconds * 1000)
+    .slice(0, 16)
+    .replace('T', ' ');
+}
+
 export function formatDayNumber(date: DateKey): string {
   return String(dateParts(date).day);
 }
