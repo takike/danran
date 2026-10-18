@@ -1,5 +1,6 @@
 import { apiErrorResponseSchema } from '@shared/schemas/errors';
 import type { WorkerEnv } from '@worker/env';
+import { logSafeError } from '@worker/logging/safeError';
 import { authRoute } from '@worker/routes/auth';
 import { busyRoute } from '@worker/routes/busy';
 import { eventsRoute } from '@worker/routes/events';
@@ -33,7 +34,8 @@ export function createApp() {
   application.route('/api/invites', invitesRoute);
 
   // Global sanitized error handler ensuring sensitive payloads/tokens are never leaked
-  application.onError((_err, c) => {
+  application.onError((err, c) => {
+    logSafeError(c, err);
     const data = apiErrorResponseSchema.parse({ error: 'Internal Server Error' });
     return c.json(data, 500);
   });
