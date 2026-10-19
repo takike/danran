@@ -42,7 +42,7 @@
 | 25 | [5-2-followup-task-event-picker.md](5-2-followup-task-event-picker.md) | 「やること」の画面から、予定を選んでやることを足す（実機確認の要望）。スクリーンショットの書き出しの修正を含む | 完了（PR #39）。実機確認済み |
 | 26 | [5-3-week-tasks.md](5-3-week-tasks.md) | 週ビューに、やることの締切のチップと、予定ごとの残りの数を出す | 完了（PR #40。[5-3-review-fixes.md](5-3-review-fixes.md) 反映済み）。実機確認済み |
 | 27 | [5-4-absence-tasks.md](5-4-absence-tasks.md) | 習い事の回を休みにしたら、「欠席を連絡」のやることを作る | 完了（PR #41。[5-4-review-fixes.md](5-4-review-fixes.md) 反映済み）。実機確認済み |
-| 28 | [4-1-print-upload.md](4-1-print-upload.md) | プリントの撮影とアップロード（写真の保存・一覧・表示・削除。読み取りの手前まで）。**人間の確認が必要** | PR #44。レビュー済み・人間のマージ待ち |
+| 28 | [4-1-print-upload.md](4-1-print-upload.md) | プリントの撮影とアップロード（写真の保存・一覧・表示・削除。読み取りの手前まで）。**人間の確認が必要** | 完了（PR #44。人間の依頼でマージ）。実機確認待ち |
 | 29 | [5-2-followup-hide-done-tasks.md](5-2-followup-hide-done-tasks.md) | 完了したやることを、ふだんは隠す（実機確認の指摘） | 完了（PR #42）。実機確認済み |
 | 30 | [perf-event-save.md](perf-event-save.md) | 予定の保存を速くし、失敗の原因を追えるようにする（実機確認の指摘）。staging の Workers Logs を有効にする。**人間の確認が必要**（デプロイ設定） | 完了（PR #43。人間の了承でマージ）。実機確認待ち |
 
