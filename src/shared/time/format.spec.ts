@@ -5,11 +5,18 @@ import {
   formatFullDateLabel,
   formatMonthHeading,
   formatShortDate,
+  formatTokyoDateTimeSeconds,
   formatWeekPeriod,
   formatWeekday,
 } from './format';
 
 describe('week presentation date formatting', () => {
+  it('formats Unix seconds in Tokyo time', () => {
+    expect(formatTokyoDateTimeSeconds(Date.parse('2026-10-18T00:30:00Z') / 1000)).toBe(
+      '2026-10-18 09:30',
+    );
+  });
+
   it('omits the repeated year for month ranges within the same year', () => {
     expect(formatMonthHeading('2026-09-28', '2026-10-04')).toBe('2026年9月〜10月');
     expect(formatMonthHeading('2026-10-05', '2026-10-11')).toBe('2026年10月');

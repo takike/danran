@@ -1,5 +1,6 @@
 import { OfflineFallback } from '@client/components/OfflineFallback';
 import { useSessionQuery } from '@client/features/auth/useSession';
+import ImportPage from '@client/features/import/ImportPage';
 import { PwaUpdateBanner } from '@client/features/pwa/PwaUpdateBanner';
 import RoutinesPage from '@client/features/routines/RoutinesPage';
 import TasksPage from '@client/features/tasks/TasksPage';
@@ -45,6 +46,7 @@ function PrivateCacheGuard(): null {
         await queryClient.cancelQueries({ queryKey: ['families', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['routines', oldUserId] });
         await queryClient.cancelQueries({ queryKey: ['tasks', oldUserId] });
+        await queryClient.cancelQueries({ queryKey: ['imports', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week', oldUserId] });
         queryClient.removeQueries({ queryKey: ['week-busy', oldUserId] });
         queryClient.removeQueries({ queryKey: ['personal-week', oldUserId] });
@@ -52,6 +54,7 @@ function PrivateCacheGuard(): null {
         queryClient.removeQueries({ queryKey: ['families', oldUserId] });
         queryClient.removeQueries({ queryKey: ['routines', oldUserId] });
         queryClient.removeQueries({ queryKey: ['tasks', oldUserId] });
+        queryClient.removeQueries({ queryKey: ['imports', oldUserId] });
       })();
     }
   }, [isError, queryClient, userId]);
@@ -86,7 +89,7 @@ export function App() {
               <Route path="/family" element={<FamilyPage />} />
               <Route path="/day/:date" element={<HomePage />} />
               <Route path="/coming-soon" element={<ComingSoonPage feature="capture" />} />
-              <Route path="/import" element={<ComingSoonPage feature="capture" />} />
+              <Route path="/import" element={<ImportPage />} />
               <Route path="/routines" element={<RoutinesPage />} />
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/onboarding" element={<OnboardingPage />} />

@@ -2076,7 +2076,7 @@ test.describe('Task 3-1: recurring routines', () => {
     expect(api.autoSkipMutations).toEqual(['routine-mount-retry', 'routine-mount-retry']);
   });
 
-  test('fits 390px and 445px, keeps controls at least 44px, and only the routine tab is ready', async ({
+  test('fits 390px and 445px, keeps controls at least 44px, and keeps the routine tab ready', async ({
     page,
   }) => {
     await mockRoutineApis(page, {
@@ -2101,6 +2101,6 @@ test.describe('Task 3-1: recurring routines', () => {
     await expect(navigation.getByRole('link', { name: /繰り返し/ })).toBeVisible();
     await expect(navigation.getByRole('link', { name: /繰り返し/ })).not.toContainText('準備中');
     await expect(navigation.getByRole('link', { name: /やること/ })).not.toContainText('準備中');
-    await expect(navigation.getByText('準備中', { exact: true })).toHaveCount(1);
+    await expect(navigation.getByText('準備中', { exact: true })).toHaveCount(0);
   });
 });

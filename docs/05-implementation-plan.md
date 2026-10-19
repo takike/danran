@@ -75,8 +75,8 @@
 
 | ID | タスク | AC |
 |---|---|---|
-| 4-1 | **撮影・アップロード**：クライアントでリサイズ（長辺2000px・JPEG 0.8）→ `POST /api/imports` → R2 ＋ `attachments` ＋ `import_jobs`。写真は認可つきのエンドポイント `GET /api/attachments/:id` で配信 | 他の家族の写真に 403 が返る |
-| 4-2 | **抽出モジュール**（`src/worker/llm/`）：プロンプト、JSON スキーマ（[03](03-architecture.md#プリント取り込み)）、Anthropic API 呼び出し（モデルは `LLM_MODEL`）、zod 検証、`shared/domain/importPostprocess`（年の補完、曜日の整合性チェック、`low` 判定、重複検出）。手動確認用スクリプト `pnpm extract:try <画像パス>` | 後処理のユニットテスト（LLM はモック、ゴールデン JSON で）。実画像で試した結果を PR に記載する |
+| 4-1 | **撮影・アップロード**：クライアントで向きを補正して長辺2000px・JPEG 0.8・3 MB以下に再エンコードし、`POST /api/families/:id/imports` から R2 ＋ `attachments` ＋ `import_jobs` に保存。認可付き一覧・写真取得・削除を実装 | 他の家族の写真・取り込みは 404。縮小 JPEG のみを保存し、表示・削除できる。API 契約と staging 手順は [22-print-import.md](22-print-import.md) |
+| 4-2 | **抽出モジュール**（`src/worker/llm/`）：プロンプト、JSON スキーマ（[03](03-architecture.md#プリント取り込み)）、Gemini API 呼び出し（モデルは `LLM_MODEL`）、zod 検証、`shared/domain/importPostprocess`（年の補完、曜日の整合性チェック、`low` 判定、重複検出）。手動確認用スクリプト `pnpm extract:try <画像パス>` | 後処理のユニットテスト（LLM はモック、ゴールデン JSON で）。実画像で試した結果を PR に記載する |
 | 4-3 | **S3 確認画面**：種類別の件数、チェック、編集、日付の候補ボタン、「写真で確認」（拡大表示）、重複の警告、週末の強調 | [S3](02-screens.md#s3-プリント取り込み) のとおりに動作する。`low` の項目は既定でオフ |
 | 4-4 | **確定**：家族カレンダーへの一括作成、`event_meta` と添付の紐づけ、説明欄への写真リンク、締切と持ち物からの TODO 生成（Phase 5 のテーブルを先に作る） | 確定後、週ビューの予定に添付アイコンが付き、写真を開ける |
 | 4-5 | **失敗・再試行**：抽出失敗時の表示と再試行。抽出結果の再利用 | 失敗したジョブを再試行できる |

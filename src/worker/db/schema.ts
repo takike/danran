@@ -396,3 +396,73 @@ export const routineAutoSkips = sqliteTable(
 
 export type RoutineAutoSkip = typeof routineAutoSkips.$inferSelect;
 export type NewRoutineAutoSkip = typeof routineAutoSkips.$inferInsert;
+
+/** A private JPEG stored in the family's R2 namespace. */
+export const attachments = sqliteTable(
+  'attachments',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id')
+      .notNull()
+      .references(() => families.id, { onDelete: 'cascade' }),
+    r2Key: text('r2_key').notNull().unique(),
+    contentType: text('content_type', { enum: ['image/jpeg'] }).notNull(),
+    width: integer('width', { mode: 'number' }).notNull(),
+    height: integer('height', { mode: 'number' }).notNull(),
+    byteSize: integer('byte_size', { mode: 'number' }).notNull(),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => members.id, { onDelete: 'restrict' }),
+    createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('attachments_family_created_idx').on(table.familyId, table.createdAt),
+    check('attachments_content_type_check', sql`content_type = 'image/jpeg'`),
+    check('attachments_dimensions_check', sql`width > 0 AND height > 0`),
+    check('attachments_byte_size_check', sql`byte_size > 0`),
+  ],
+);
+
+export type Attachment = typeof attachments.$inferSelect;
+export type NewAttachment = typeof attachments.$inferInsert;
+
+/** Import lifecycle and idempotency record for a family attachment. */
+export const importJobs = sqliteTable(
+  'import_jobs',
+  {
+    id: text('id').primaryKey().notNull(),
+    familyId: text('family_id')
+      .notNull()
+      .references(() => families.id, { onDelete: 'cascade' }),
+    attachmentId: text('attachment_id')
+      .notNull()
+      .references(() => attachments.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['pending', 'extracted', 'failed', 'committed'] })
+      .notNull()
+      .default('pending'),
+    resultJson: text('result_json'),
+    errorCode: text('error_code'),
+    model: text('model'),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => members.id, { onDelete: 'restrict' }),
+    clientRequestId: text('client_request_id').notNull(),
+    createdAt: integer('created_at', { mode: 'number' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('import_jobs_family_created_idx').on(table.familyId, table.createdAt),
+    index('import_jobs_family_status_idx').on(table.familyId, table.status),
+    uniqueIndex('import_jobs_family_creator_request_unique').on(
+      table.familyId,
+      table.createdBy,
+      table.clientRequestId,
+    ),
+    check(
+      'import_jobs_status_check',
+      sql`status IN ('pending', 'extracted', 'failed', 'committed')`,
+    ),
+  ],
+);
+
+export type ImportJobRecord = typeof importJobs.$inferSelect;
+export type NewImportJobRecord = typeof importJobs.$inferInsert;

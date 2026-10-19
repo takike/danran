@@ -3,7 +3,7 @@ import type React from 'react';
 
 interface AuthenticatedShellProps {
   children: React.ReactNode;
-  activeTab: TabId;
+  activeTab?: TabId;
   onCapture: () => void;
   className?: string;
   mainTestId?: string;
@@ -28,7 +28,6 @@ export function AuthenticatedShell({
       <TabBar
         activeTab={activeTab}
         onCapture={onCapture}
-        showPreparingLabels
         links={{
           week: '/',
           routines: '/routines',

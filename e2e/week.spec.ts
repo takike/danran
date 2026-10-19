@@ -569,13 +569,6 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('終日（10/10〜10/11）')).toHaveCount(2);
     await expect(page.getByText('22:00–10/11 00:00')).toBeVisible();
     await expect(navigation.getByRole('link', { name: /やること/ })).toBeVisible();
-    const preparingCaptions = navigation.getByText('準備中', { exact: true });
-    await expect(preparingCaptions).toHaveCount(1);
-    for (const caption of await preparingCaptions.all()) {
-      const box = await caption.boundingBox();
-      expect(box).not.toBeNull();
-      if (box) expect(box.y + box.height).toBeLessThanOrEqual(844);
-    }
     await expect(page.getByRole('button', { name: '予定を追加', exact: true })).toBeVisible();
     await expect(page.locator('button[data-testid^="add-event-"]')).toHaveCount(8);
     await expect(page.getByText(/予定を立てる/)).toHaveCount(0);
@@ -1005,9 +998,7 @@ test.describe('Task 1-7: S1 week view', () => {
     await expect(page.getByText('朝の支度')).toHaveCount(0);
   });
 
-  test('routine tab opens its feature and other unfinished tabs still show preparation screens', async ({
-    page,
-  }) => {
+  test('routine, task, and print tabs open their available screens', async ({ page }) => {
     await mockWeekApis(page);
     await page.route('**/api/families/*/tasks', async (route) =>
       route.fulfill({
@@ -1045,8 +1036,8 @@ test.describe('Task 1-7: S1 week view', () => {
 
     await page.getByRole('button', { name: 'プリントを撮影' }).click();
     await expect(page).toHaveURL(/\/import$/);
-    await expect(page.getByRole('heading', { name: 'プリント取り込み' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'プリントを取り込む' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '準備中', exact: true })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
 
